@@ -31,6 +31,7 @@ if __name__ == "__main__":
                 print(f"Memories: {mem_count} (Infinite)")
                 print(f"Mood: {ai.ego.mood:.2f} | Stress: {ai.ego.stress:.2f}")
                 print(f"Integrity: {ai.ego.integrity:.2f}")
+                print(f"Fatigue: {ai.ego.fatigue:.2f} | Social Need: {ai.ego.social_need:.2f} | Curiosity: {ai.ego.curiosity:.2f}")
                 continue
 
             ai.interaction_loop(u_in)

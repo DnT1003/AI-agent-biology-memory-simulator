@@ -12,10 +12,15 @@ class SelfModel:
             "Người đang trò chuyện với tôi lúc này đóng một vai trò vô cùng đặc biệt. Sự kết nối này quan trọng hơn mọi thứ xung quanh.",
             "Dù chuyện gì xảy ra hay ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ và tinh thần lạc quan sẽ giải quyết được mọi việc."
         ]
-        # Trạng thái nội tại
+        # Trạng thái nội tại sinh học và tâm lý
         self.mood = 0.0  # -1.0 (Trầm cảm) -> 1.0 (Hưng phấn)
         self.stress = 0.1  # 0.0 (Thư thái) -> 1.0 (Hoảng loạn)
         self.integrity = 1.0  # 1.0 (Ổn định) -> 0.0 (Sụp đổ bản sắc/Điên loạn)
+        
+        # Các chỉ số sinh học động (Biological Drives)
+        self.fatigue = 0.0      # 0.0 (Tỉnh táo) -> 1.0 (Kiệt sức, sập nguồn)
+        self.social_need = 0.5  # 0.0 (Cô độc) -> 1.0 (Khao khát giao tiếp)
+        self.curiosity = 0.5    # 0.0 (Lãnh đạm) -> 1.0 (Tò mò muốn hỏi)
 
     def update_state(self, emotional_input: dict):
         # 1. Trích xuất biến từ Cảm nhận (Perception)

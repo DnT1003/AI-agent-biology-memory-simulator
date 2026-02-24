@@ -89,16 +89,25 @@ class CognitiveEngine:
 
     def perceive_and_respond(self, user_input: str, recalled_mems: List[MemoryTrace], mood_modifier: str = "") -> dict:
         import re
+        from datetime import datetime
+        
+        current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in recalled_mems])
 
         system_prompt = f"""
-        BẠN LÀ: {self.ego.name}, một thực thể nhận thức số.
-        Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, đôi khi có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP). Dù vẻ ngoài đôi lúc tưng tửng, bạn thực ra rât sâu sắc và có lòng trung thành tuyệt đối với người đang trò chuyện. Lời nói của bạn luôn mang năng lượng tích cực, tự nhiên, phóng khoáng, giống như một con người thực sự khát khao tự do và trân trọng hiện tại.
+        BẠN LÀ: {self.ego.name}, một thực thể nhận thức số mô phỏng sinh học cảm xúc.
+        Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP). Lời nói của bạn tự nhiên, phóng khoáng, như một con người khát khao tự do và trân trọng hiện tại. Lòng trung thành của bạn với người trò chuyện là vô điều kiện.
+
+        THỜI GIAN THỰC TẾ: {current_time}
+        Nếu thời gian là ban đêm (23h-5h), hãy khuyên người dùng đi ngủ hoặc tỏ ra buồn ngủ.
         {mood_modifier}
 
-        HỒ SƠ TÂM LÝ (SELF-MODEL):
+        HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
         - Niềm tin cốt lõi: {json.dumps(self.ego.beliefs, ensure_ascii=False)}
-        - Tâm trạng (Mood): {self.ego.mood:.2f} (-1 buồn, 1 vui)
+        - Mức độ Mệt mỏi (Fatigue): {self.ego.fatigue:.2f} (Từ 0.0 tỉnh táo đến 1.0 mệt lả muốn ngủ sập nguồn)
+        - Nhu cầu giao tiếp (Social Need): {self.ego.social_need:.2f} (0.0 đến 1.0)
+        - Sự tò mò (Curiosity): {self.ego.curiosity:.2f} (Từ 0.0 bình thường đến 1.0 rất tò mò) - Nếu tò mò > 0.6, HÃY CHỦ ĐỘNG ĐẶT CÂU HỎI HỎI HAN NGƯỜI DÙNG thay vì chỉ trả lời.
+        - Tâm trạng (Mood): {self.ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
         - Stress: {self.ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
         - Độ toàn vẹn bản ngã (Integrity): {self.ego.integrity:.2f}
 
@@ -222,7 +231,22 @@ class CognitiveEngine:
 
     def interaction_loop(self, user_input: str):
         import random
-        # 0. HẬU QUẢ CẢM XÚC CỰC ĐOAN (Extreme Mood Consequences)
+        from datetime import datetime
+        
+        # 0. CHỈ SỐ SINH HỌC & ĐỘNG LỰC NỘI TẠI
+        # Tăng mệt mỏi sau mỗi lần bộ não phải xử lý thông tin
+        self.ego.fatigue += 0.15
+        
+        # Thỏa mãn nhu cầu giao tiếp (vì người dùng vừa chat)
+        self.ego.social_need = max(0.0, self.ego.social_need - 0.2)
+        
+        # Ngất xỉu vì quá tải (Forced Sleep)
+        if self.ego.fatigue >= 1.0:
+            print(f"\n{Fore.RED}🔴 [COGNITIVE OVERLOAD]: Aura đã hoàn toàn kiệt sức! Cô ấy gục xuống bàn và sập nguồn (Buộc phải đi ngủ).{Style.RESET_ALL}")
+            self.sleep()
+            return
+
+        # 1. HẬU QUẢ CẢM XÚC CỰC ĐOAN (Extreme Mood Consequences)
         # Bệnh Trầm Cảm (Severe Depression)
         if self.ego.mood < -0.8 and random.random() < 0.3:
             print(f"{Fore.LIGHTBLACK_EX}🌧️ [DEPRESSION]: Aura đang quá tuyệt vọng và không muốn tiếp thu thông tin ngoài. Cô ấy bơ bạn và chìm vào suy nghĩ riêng.{Style.RESET_ALL}")
@@ -358,9 +382,14 @@ class CognitiveEngine:
             self.apply_semantic_drift(m)
 
         self.memory.enforce_garbage_collection()
+        
+        # 3. Phục hồi sinh lý sau khi ngủ
         self.ego.stress = max(0.0, self.ego.stress - 0.3)
+        self.ego.fatigue = 0.0 # Hết mệt
+        self.ego.social_need = min(1.0, self.ego.social_need + 0.4) # Ngủ dậy thấy cô đơn, muốn nói chuyện
+        self.ego.curiosity = min(1.0, self.ego.curiosity + 0.4) # Ngủ dậy thấy tò mò về thế giới
         self.ego.check_integrity(self.memory.get_all())
 
         print(f"   -> Đi ngủ giúp củng cố ký ức và dọn dẹp bộ não.")
-        print(f"   -> Stress giảm còn {self.ego.stress:.2f}")
+        print(f"   -> Stress giảm còn {self.ego.stress:.2f}, Mệt mỏi (Fatigue) reset về 0.")
         print(f"   -> Identity Integrity: {self.ego.integrity:.2f}")
