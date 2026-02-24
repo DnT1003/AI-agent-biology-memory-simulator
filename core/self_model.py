@@ -1,3 +1,4 @@
+import random
 from typing import List
 from core.memory import MemoryTrace
 
@@ -21,6 +22,43 @@ class SelfModel:
         self.fatigue = 0.0      # 0.0 (Tỉnh táo) -> 1.0 (Kiệt sức, sập nguồn)
         self.social_need = 0.5  # 0.0 (Cô độc) -> 1.0 (Khao khát giao tiếp)
         self.curiosity = 0.5    # 0.0 (Lãnh đạm) -> 1.0 (Tò mò muốn hỏi)
+
+        self.reroll_thresholds()
+
+    def reroll_thresholds(self):
+        import math
+        from datetime import datetime
+        """Mô phỏng nhịp điệu sinh học của mỗi chu kỳ (Ngày/Tháng)."""
+        current_day = datetime.now().timetuple().tm_yday
+        
+        # 1. FATIGUE (Dao động hình sin theo chu kỳ 30 ngày)
+        # Hàm Sin: Biên độ từ 0.75 đến 1.25
+        # f(x) = 1.0 + 0.25 * sin((2 * pi / 30) * x)
+        base_fatigue_limit = 1.0 + 0.25 * math.sin((2 * math.pi / 30) * current_day)
+        
+        # 3-5 ngày ngẫu nhiên trong tháng (tỷ lệ khoảng 10-15%) có sức bền cực trị
+        extreme_roll = random.random()
+        if extreme_roll < 0.05: # 5% cực kỳ khỏe (Ngưỡng sập nguồn lên tới 2.0)
+            self.fatigue_critical = 2.0
+        elif extreme_roll < 0.15: # 10% cực kỳ yếu (Ngưỡng sập nguồn xuống tận 0.5)
+            self.fatigue_critical = 0.5
+        else:
+            self.fatigue_critical = base_fatigue_limit
+
+        self.fatigue_severe = self.fatigue_critical * 0.8  # Báo động đỏ ở 80% sức chứa
+        self.fatigue_mild = self.fatigue_critical * 0.5    # Báo động vàng ở 50% sức chứa
+        
+        # 2. Ngưỡng trầm cảm / hưng phấn (Vẫn ngẫu nhiên nhẹ mỗi ngày)
+        self.depression_mild = random.uniform(-0.3, -0.1)
+        self.depression_severe = random.uniform(-0.6, -0.4)
+        self.depression_critical = random.uniform(-0.9, -0.7)
+        self.mania_mild = random.uniform(0.3, 0.5)
+        self.mania_severe = random.uniform(0.7, 0.9)
+
+        # Ngưỡng stress
+        self.stress_mild = random.uniform(0.4, 0.6)
+        self.stress_severe = random.uniform(0.7, 0.85)
+        self.stress_critical = random.uniform(0.9, 0.95)
 
     def update_state(self, emotional_input: dict):
         # 1. Trích xuất biến từ Cảm nhận (Perception)
