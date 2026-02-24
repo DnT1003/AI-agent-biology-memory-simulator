@@ -9,7 +9,7 @@ __pycache__/
 # Logs and databases
 *.log
 error.log
-test_moods_output.txt
+outputs/
 data/
 
 # IDEs
