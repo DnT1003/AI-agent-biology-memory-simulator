@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+
+# Logs and databases
+*.log
+error.log
+test_moods_output.txt
+data/
+
+# IDEs
+.vscode/
+.idea/
