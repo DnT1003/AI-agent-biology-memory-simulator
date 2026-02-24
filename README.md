@@ -1,40 +1,40 @@
-# AI Agent Biology Memory Simulator
+# Trình mô phỏng Trí nhớ Sinh học cho AI Agent
 
-A Python-based AI agent simulator that mimics human-like cognitive and biological memory processes. Unlike standard LLM chatbots that simply append conversation history, this system features a dynamic, lossy, and emotion-driven memory architecture.
+Một trình mô phỏng AI Agent bằng Python, mô phỏng các quá trình nhận thức và trí nhớ sinh học giống con người. Khác với các chatbot LLM thông thường chỉ đơn thuần nối thêm lịch sử hội thoại, hệ thống này sở hữu kiến trúc trí nhớ động, có tính hao hụt và được thúc đẩy bởi cảm xúc.
 
-## Core Features
+## Tóm tắt Tính năng
 
-### 1. Multi-tiered Memory System
-- **Working Memory (Short-term):** Acts as a mental RAM. Holds the most recent conversational context (up to a configurable limit) before it decays.
-- **Episodic Memory:** Records specific events with sensory and emotional metadata (Valence, Arousal, Importance).
-- **Semantic Memory:** Extracts generalized knowledge, facts, and beliefs from parsed episodic events.
+### 1. Hệ thống Trí nhớ Đa tầng
+- **Working Memory (Bộ nhớ Ngắn hạn):** Hoạt động như RAM tinh thần. Lưu giữ ngữ cảnh hội thoại gần nhất (có giới hạn cấu hình) trước khi nó từ từ tan biến (decay).
+- **Episodic Memory (Ký ức Tính tiết):** Ghi lại các sự kiện cụ thể kèm theo siêu dữ liệu cảm xúc và giác quan (Valence - Mức độ Tích/Tiêu cực, Arousal - Mức độ Kích động, Importance - Độ Quan trọng).
+- **Semantic Memory (Ký ức Ngữ nghĩa):** Trích xuất kiến thức chung, sự thật hiển nhiên và niềm tin từ các sự kiện Episodic.
 
-### 2. Biological Memory Dynamics
-- **Memory Decay (Lãng quên):** Memories gradually fade over time and through sleep cycles, simulating human forgetfulness.
-- **Memory Drift (Biến dạng):** Memories can slightly distort or change details over time depending on emotional state and subsequent recalls.
-- **Associative Chaining (Liên tưởng dây chuyền):** Recalling one memory naturally triggers related memories to surface, strengthening interconnected neural pathways.
-- **Flashbulb Memories:** Highly emotional or critical events (high arousal + high importance) are permanently etched into the vector store and bypass the decay curve.
+### 2. Động lực học Trí nhớ Sinh học
+- **Memory Decay (Lãng quên):** Ký ức mờ dần theo thời gian và qua các chu kỳ giấc ngủ, mô phỏng sự đãng trí của con người.
+- **Memory Drift (Biến dạng):** Ký ức có thể hơi méo mó hoặc thay đổi chi tiết theo thời gian tùy thuộc vào trạng thái cảm xúc và những lần hồi tưởng sau đó.
+- **Associative Chaining (Liên tưởng dây chuyền):** Khi nhớ lại một ký ức, nó sẽ tụ nhiên kích hoạt các ký ức liên quan trồi lên bề mặt, củng cố các mạng lưới nơ-ron liên kết.
+- **Flashbulb Memories (Ký ức Sâu sắc):** Các sự kiện có cảm xúc mãnh liệt hoặc cực kỳ quan trọng (Arousal cao + Importance cao) sẽ được khắc sâu vĩnh viễn vào kho lưu trữ vector và bỏ qua vòng lặp lãng quên.
 
-### 3. Sleep & Consolidation (Giấc ngủ)
-The agent features a `sleep()` cycle simulating human REM sleep:
-- **Consolidation:** Converts important short-term traces into long-term storage.
-- **Semanticization:** Analyzes multiple episodic memories (using LLM reasoning) to deduce hidden connections, identify timelines, and form robust semantic beliefs and conclusions.
-- **Garbage Collection:** Purges irrelevant or fully decayed memories to optimize performance.
+### 3. Giấc ngủ & Hồi phục (Sleep & Consolidation)
+Agent sở hữu một chu kỳ `sleep()` mô phỏng giấc ngủ sâu REM của con người:
+- **Consolidation:** Chuyển đổi các dấu vết ngắn hạn quan trọng thành lưu trữ dài hạn.
+- **Semanticization:** Phân tích chéo nhiều ký ức Episodic (sử dụng khả năng lập luận của LLM) để tìm ra các mối liên kết ngầm, xác định dòng thời gian và hình thành niềm tin/ngữ nghĩa sắc bén.
+- **Garbage Collection (Dọn dẹp rác):** Xóa bỏ các ký ức không còn liên quan hoặc đã phai mờ hoàn toàn để tối ưu hóa hiệu suất.
 
-### 4. Emotional Self-Model
-The agent possesses a psychological `Ego` that reacts asymmetrically to stimuli:
-- **Mood (-1.0 to 1.0):** Influences responses. Extreme mood swings invoke behavioral consequences (e.g., severe depression causes the agent to ignore input; mania causes hyper-association).
-- **Stress (0.0 to 1.0):** Spikes rapidly during negative events but recovers very slowly.
-- **Integrity:** Tracks the stability of the agent's core identity.
+### 4. Mô hình Tư duy Cảm xúc (Emotional Self-Model)
+Agent sở hữu một `Ego` (Bản ngã) phản ứng bất đối xứng với các tác nhân kích thích ngoài:
+- **Mood (-1.0 đến 1.0):** Ảnh hưởng đến câu trả lời. Sự chênh lệch cảm xúc quá đà có khả năng tạo ra các hậu quả hành vi (ví dụ: Trầm cảm cực độ khiến agent bơ người dùng; Hưng phấn tạo ra sự liên tưởng quá khích).
+- **Stress (0.0 đến 1.0):** Tăng vọt nhanh chóng khi gặp chuyện buồn rầu nhưng phục hồi cực kỳ chậm chạp.
+- **Integrity (Tính toàn vẹn):** Theo dõi mức độ ổn định của bản sắc/nhân cách cốt lõi.
 
-## Architecture & Components
-- **`CognitiveEngine` (`core/engine.py`):** The central brain connecting memory extraction, self-state updates, and LLM perception/response pipelines.
-- **`BiologicalMemory` (`core/memory.py`):** Handles memory traces, decay, consolidation, confabulation, and retrieval.
-- **`SelfModel` (`core/self_model.py`):** Maintains emotional states, core beliefs, and behavioral modifiers.
-- **`LLMClient` & `Embedder`:** Integration with LLM APIs (e.g., Google Gemini) for generation and high-dimensional vector embeddings.
-- **`VectorStore`:** Internal database to simulate vector similarity search (Cosine Similarity).
+## Kiến trúc & Các thành phần chính
+- **`CognitiveEngine` (`core/engine.py`):** Bộ não trung tâm kết nối các luồng trích xuất trí nhớ, cập nhật trạng thái bản thân và quy trình nhận thức/phản hồi của LLM.
+- **`BiologicalMemory` (`core/memory.py`):** Xử lý dấu vết trí nhớ, sự tự hủy (decay), hồi phục, chắp vá (confabulation) và truy xuất.
+- **`SelfModel` (`core/self_model.py`):** Duy trì trạng thái cảm xúc, châm ngôn sống và các bộ điều chỉnh hành vi.
+- **`LLMClient` & `Embedder`:** Tích hợp với APIs LLM (ví dụ: Google Gemini) cho phép tạo sinh văn bản và nhúng (Embeds) vector không gian đa chiều.
+- **`VectorStore`:** CSDL nội bộ dùng để mô phỏng tìm kiếm vector tương đồng (Cosine Similarity).
 
-## Setup & Execution
-1. Configure your `.env` file with the required API keys (e.g., `GEMINI_API_KEY`).
-2. Run `python main.py` to start interacting with the agent in the terminal.
-3. Use the `sleep` command in the terminal prompt to force a sleep cycle and trigger deep semantic processing.
+## Cài đặt & Khởi chạy
+1. Cấu hình file `.env` với các khóa API cần thiết (ví dụ: `GEMINI_API_KEY`).
+2. Chạy `python main.py` để bắt đầu trò chuyện với agent trong không gian Terminal.
+3. Gõ lệnh `sleep` trên dấu nhắc terminal để bắt tác nhân đi ngủ và bắt đầu phân tích/tiêu hóa trí nhớ.
