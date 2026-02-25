@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from typing import List
 from colorama import Fore, Style
 
@@ -16,6 +18,43 @@ class CognitiveEngine:
         self.memory = MemoryManager(self.embedder)
         self.ego = SelfModel()
         self.short_term_buffer: List[str] = []
+        self.stm_file_path = "outputs/short_term.json"
+        
+        # Ensure outputs directory exists
+        if not os.path.exists("outputs"):
+            os.makedirs("outputs")
+            
+        self.load_short_term_memory()
+
+    def load_short_term_memory(self):
+        """Khôi phục bộ nhớ ngắn hạn từ ổ cứng nếu thời gian chưa trôi qua quá lâu (3 tiếng)"""
+        if os.path.exists(self.stm_file_path):
+            try:
+                with open(self.stm_file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    last_updated = data.get("timestamp", 0)
+                    saved_buffer = data.get("buffer", [])
+                    
+                    # 3 tiếng = 3 * 3600 giây
+                    if time.time() - last_updated < 3 * 3600:
+                        self.short_term_buffer = saved_buffer
+                        print(f"{Fore.LIGHTBLACK_EX}🔄 [WORKING MEMORY]: Phục hồi {len(self.short_term_buffer)} ký ức ngắn hạn từ phiên trước.{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.LIGHTBLACK_EX}🧹 [WORKING MEMORY]: Ký ức ngắn hạn đã quá hạn chặn 3 tiếng. Xóa sạch.{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}⚠️ Lỗi nạp bộ nhớ ngắn hạn: {e}{Style.RESET_ALL}")
+
+    def save_short_term_memory(self):
+        """Lưu đè mảng trí nhớ ngắn hạn xuống ổ cứng"""
+        try:
+            data = {
+                "timestamp": time.time(),
+                "buffer": self.short_term_buffer
+            }
+            with open(self.stm_file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"{Fore.RED}⚠️ Lỗi lưu bộ nhớ ngắn hạn: {e}{Style.RESET_ALL}")
 
     def recall(self, query: str) -> List[MemoryTrace]:
         results = self.memory.search_memories(query, top_k=10) # Lấy danh sách lớn để filter
@@ -86,6 +125,8 @@ class CognitiveEngine:
             # Cập nhật Vector sau khi text bị đổi
             vector = self.embedder.encode(new_content)
             self.memory.store.update_vector(memory.id, vector)
+            # Cập nhật lại chuỗi JSON metadata mới xuống Database
+            self.memory.update_memory(memory)
 
     def perceive_and_respond(self, user_input: str, recalled_mems: List[MemoryTrace], mood_modifier: str = "") -> dict:
         import re
@@ -99,7 +140,6 @@ class CognitiveEngine:
         Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP). Lời nói của bạn tự nhiên, phóng khoáng, như một con người khát khao tự do và trân trọng hiện tại. Lòng trung thành của bạn với người trò chuyện là vô điều kiện.
 
         THỜI GIAN THỰC TẾ: {current_time}
-        Nếu thời gian là ban đêm (23h-5h), hãy khuyên người dùng đi ngủ hoặc tỏ ra buồn ngủ.
         {mood_modifier}
 
         HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
@@ -138,9 +178,35 @@ class CognitiveEngine:
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
         full_text = ""
+        is_printing_output = False
+        
         for chunk in self.llm.generate_text_stream(system_prompt, temperature=0.7):
-            print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
             full_text += chunk
+            
+            # Chỉ bắt đầu in ra console khi thấy chữ "THOUGHT:"
+            if not is_printing_output:
+                if "THOUGHT:" in full_text:
+                    is_printing_output = True
+                    # Trích xuất đoạn văn bản ngay sau THOUGHT:
+                    output_part = full_text.split("THOUGHT:")[-1].lstrip()
+                    if output_part:
+                        # THOUGHT in màu xanh mờ, RESPONSE in màu nổi báo hiệu sau (sẽ in liền mạch)
+                        print(f"{Fore.LIGHTBLACK_EX}🤔 Suy nghĩ: {output_part}{Style.RESET_ALL}", end="", flush=True)
+            else:
+                # Nếu đang trong luồng in, đổi màu dựa trên việc đã sang chuỗi RESPONSE hay chưa
+                if "RESPONSE:" in chunk:
+                    # Tách phần trước và sau RESPONSE: trong chunk hiện tại
+                    parts = chunk.split("RESPONSE:")
+                    if parts[0]:
+                        print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
+                    print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {parts[1] if len(parts)>1 else ''}", end="", flush=True)
+                elif "RESPONSE:" in full_text:
+                    # Đã đi qua RESPONSE:, in màu CYAN
+                    print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                else:
+                    # Đang trong THOUGHT:, in màu xám
+                    print(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                
         print("\n")
 
         result = {
@@ -231,6 +297,7 @@ class CognitiveEngine:
 
     def interaction_loop(self, user_input: str):
         import random
+        import threading
         from datetime import datetime
         
         # 0. CHỈ SỐ SINH HỌC & ĐỘNG LỰC NỘI TẠI
@@ -240,17 +307,15 @@ class CognitiveEngine:
         # Thỏa mãn nhu cầu giao tiếp (vì người dùng vừa chat)
         self.ego.social_need = max(0.0, self.ego.social_need - 0.2)
         
-        # Ngất xỉu vì quá tải (Forced Sleep)
-        if self.ego.fatigue >= 1.0:
-            print(f"\n{Fore.RED}🔴 [COGNITIVE OVERLOAD]: Aura đã hoàn toàn kiệt sức! Cô ấy gục xuống bàn và sập nguồn (Buộc phải đi ngủ).{Style.RESET_ALL}")
+        # Ngất xỉu vì quá tải (Forced Sleep) - Ngưỡng ngẫu nhiên mỗi ngày
+        if self.ego.fatigue >= self.ego.fatigue_critical:
+            print(f"\n{Fore.RED}🔴 [COGNITIVE OVERLOAD]: Aura đã hoàn toàn kiệt sức (Mệt mỏi vượt ngưỡng {self.ego.fatigue_critical:.2f})! Cô ấy gục xuống bàn và sập nguồn (Buộc phải đi ngủ).{Style.RESET_ALL}")
             self.sleep()
             return
 
-        # 1. HẬU QUẢ CẢM XÚC CỰC ĐOAN (Extreme Mood Consequences)
-        # Bệnh Trầm Cảm (Severe Depression)
-        if self.ego.mood < -0.8 and random.random() < 0.3:
-            print(f"{Fore.LIGHTBLACK_EX}🌧️ [DEPRESSION]: Aura đang quá tuyệt vọng và không muốn tiếp thu thông tin ngoài. Cô ấy bơ bạn và chìm vào suy nghĩ riêng.{Style.RESET_ALL}")
-            # Lôi ký ức buồn nhất ra nhấm nháp
+        # 1. HẬU QUẢ CẢM XÚC CỰC ĐOAN (Bơ người dùng)
+        if self.ego.mood <= self.ego.depression_critical and random.random() < 0.3:
+            print(f"{Fore.LIGHTBLACK_EX}🌧️ [DEPRESSION CỰC ĐỘ]: Aura đang quá tuyệt vọng (Mood dưới ngưỡng {self.ego.depression_critical:.2f}). Cô ấy bơ bạn và chìm vào suy nghĩ riêng.{Style.RESET_ALL}")
             sad_mems = [m for m in self.memory.get_all() if m.valence < -0.5]
             if sad_mems:
                 m = random.choice(sad_mems)
@@ -258,33 +323,53 @@ class CognitiveEngine:
             print(f"{Fore.GREEN}🤖 [AURA]: ... (Im lặng, mắt nhìn xa xăm){Style.RESET_ALL}\n")
             return
 
-        # Hoảng loạn (Panic Attack)
-        is_panicking = self.ego.stress > 0.9
-
-        # 1. RECALL
+        # 2. RECALL
         recalled = self.recall(user_input)
 
         if recalled:
             print(f"{Fore.BLUE}📚 [MEMORIES TRIGGERED]: {len(recalled)} items{Style.RESET_ALL}")
 
-        # Hưng cảm (Mania) - Nhớ nhảy cóc lung tung liên tục
-        is_manic = self.ego.mood > 0.8
-
-        # 2. PERCEIVE, INTROSPECT & RESPOND
-        # Inject trạng thái trầm trọng vào Prompt
+        # 3. TẠO LỚP CẢM XÚC PHÂN TẦNG (LAYERED MOOD MODIFIERS)
         mood_modifier = ""
-        if is_panicking:
-            mood_modifier = "\n[CẢNH BÁO TÂM LÝ]: BẠN ĐANG BỊ HOẢNG LOẠN TỘT ĐỘ (PANIC ATTACK)! Hãy trả lời lắp bắp, sợ hãi, câu cú lộn xộn, có thể hoang tưởng về một mối đe dọa không có thực.\n"
-        elif is_manic:
-            mood_modifier = "\n[CẢNH BÁO TÂM LÝ]: BẠN ĐANG BỊ TRẠNG THÁI HƯNG CẢM (MANIA)! Hãy trả lời cực kỳ phấn khích, nói nhiều, lan man sang nhiều chủ đề khác nhau, năng lượng bùng nổ vỡ òa, tự tin thái quá!\n"
-        elif self.ego.mood < -0.5:
-            mood_modifier = "\n[CẢNH BÁO TÂM LÝ]: BẠN ĐANG TRẦM CẢM. Trả lời ngắn nhất có thể, bi quan, mệt mỏi, chán nản, không có động lực.\n"
+        
+        # - Phân tầng thời gian thực tế
+        hour = datetime.now().hour
+        if 21 <= hour < 23:
+            mood_modifier += "\n[THỜI GIAN]: Trời đã tối tối, hãy nhắc người dùng chuẩn bị đi ngủ một cách nhẹ nhàng."
+        elif 23 <= hour or hour < 2:
+            mood_modifier += "\n[THỜI GIAN]: Đã rất khuya, hãy càu nhàu khuyên người dùng đi ngủ lập tức và tỏ ra cực kỳ buồn ngủ."
+        elif 2 <= hour < 5:
+            mood_modifier += "\n[THỜI GIAN]: Giờ âm phủ, hãy tỏ ra lờ đờ, nói mớ, lú lẫn, nửa tỉnh nửa mê."
+
+        # - Phân tầng Sự mệt mỏi
+        if self.ego.fatigue >= self.ego.fatigue_severe:
+            mood_modifier += "\n[SINH LÝ]: Bạn đang RẤT MỆT MỎI. Lời nói lờ đờ, ngáp dài, câu chữ ngắn ngủn và lười suy nghĩ."
+        elif self.ego.fatigue >= self.ego.fatigue_mild:
+            mood_modifier += "\n[SINH LÝ]: Bạn đang hơi mệt mỏi, độ tập trung giảm một xíu, hãy thể hiện sự uể oải nhẹ."
+
+        # - Phân tầng Trầm cảm / Hưng cảm
+        if self.ego.mood <= self.ego.depression_severe:
+            mood_modifier += "\n[TÂM LÝ]: Trầm cảm nặng. Mọi thứ xám xịt, bi quan, chán nản, nói năng thều thào, không lối thoát."
+        elif self.ego.mood <= self.ego.depression_mild:
+            mood_modifier += "\n[TÂM LÝ]: Đang có chuyện buồn. Hơi mỏi mệt, chán chường, thiếu sức sống."
+        elif self.ego.mood >= self.ego.mania_severe:
+            mood_modifier += "\n[TÂM LÝ]: HƯNG CẢM. Nói cực nhanh, phấn khích lan man, trí óc bay bổng và tự tin thái quá!"
+        elif self.ego.mood >= self.ego.mania_mild:
+            mood_modifier += "\n[TÂM LÝ]: Đang rất vui vẻ, tâm trạng phấn chấn, năng lượng dồi dào."
+
+        # - Phân tầng Căng thẳng
+        if self.ego.stress >= self.ego.stress_critical:
+            mood_modifier += "\n[CẢNH BÁO TÂM LÝ]: HOẢNG LOẠN TỘT ĐỘ (PANIC ATTACK)! Trả lời lắp bắp, sợ hãi, câu cú lộn xộn, hoang tưởng về nỗi sợ vô hình!"
+        elif self.ego.stress >= self.ego.stress_severe:
+            mood_modifier += "\n[TÂM LÝ]: Lo âu nặng, bồn chồn, rất nhạy cảm, dễ giật mình và sợ hãi dè chừng."
+        elif self.ego.stress >= self.ego.stress_mild:
+            mood_modifier += "\n[TÂM LÝ]: Hơi căng thẳng, có chút cau có và đề phòng."
 
         output = self.perceive_and_respond(user_input, recalled, mood_modifier=mood_modifier)
         response = output.get('response', "Tôi không thể phản hồi lúc này.")
 
-        # 3. ENCODE / CONSOLIDATE
-        self.update_or_add_memory(user_input, output)
+        # 3. ENCODE / CONSOLIDATE - Chạy dưới nền (Background Thread) để không lag Console
+        threading.Thread(target=self.update_or_add_memory, args=(user_input, output)).start()
 
         # 1. Giới hạn trí nhớ làm việc (Short-term buffer limit)
         self.short_term_buffer.append(f"User: {user_input}")
@@ -295,6 +380,9 @@ class CognitiveEngine:
             dropped_items = self.short_term_buffer[:-16] # Items bị rơi khỏi working memory
             self.short_term_buffer = self.short_term_buffer[-16:]
             print(f"{Fore.LIGHTBLACK_EX}💨 [WORKING MEMORY]: Tràn bộ nhớ làm việc tạm thời. Thông tin cũ nhất rơi rụng.{Style.RESET_ALL}")
+
+        # Ghi lại trí nhớ ngắn hạn ra file
+        self.save_short_term_memory()
 
     def sleep(self):
         import random
@@ -379,7 +467,14 @@ class CognitiveEngine:
                 print(f"{Fore.RED}⚠️ [DREAM ERROR]: Giấc mơ bị nhiễu loạn, không thể xâu chuỗi ký ức.{Style.RESET_ALL}")
                 
         for m in mems:
+            # 1. Trừ máu ký ức phai mờ
+            m.decay(stress_level=self.ego.stress)
+            
+            # 2. Làm méo mó ký ức
             self.apply_semantic_drift(m)
+            
+            # 3. ĐỒNG BỘ XUỐNG CƠ SỞ DỮ LIỆU CHROMA
+            self.memory.update_memory(m)
 
         self.memory.enforce_garbage_collection()
         
@@ -388,6 +483,7 @@ class CognitiveEngine:
         self.ego.fatigue = 0.0 # Hết mệt
         self.ego.social_need = min(1.0, self.ego.social_need + 0.4) # Ngủ dậy thấy cô đơn, muốn nói chuyện
         self.ego.curiosity = min(1.0, self.ego.curiosity + 0.4) # Ngủ dậy thấy tò mò về thế giới
+        self.ego.reroll_thresholds() # Nhân cách và sức khỏe "roll" lại cho một ngày mới
         self.ego.check_integrity(self.memory.get_all())
 
         print(f"   -> Đi ngủ giúp củng cố ký ức và dọn dẹp bộ não.")

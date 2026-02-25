@@ -1,57 +1,105 @@
+import os
+import chromadb
+import json
+from chromadb.config import Settings
 import numpy as np
-from typing import List, Dict, Tuple, Any
+from typing import List, Tuple, Any
 
 class VectorStore:
-    """Kho lưu trữ vector nội bộ mô phỏng hệ thống vector DB như mem0"""
+    """Kho lưu trữ vector nội bộ sử dụng ChromaDB cho khả năng Scale lớn và Persistence"""
     def __init__(self):
-        self.vectors: Dict[str, np.ndarray] = {}  # id -> vector
-        self.metadata: Dict[str, Any] = {}        # id -> meta obj
+        # Đảm bảo thư mục tồn tại
+        if not os.path.exists("outputs/chroma_db"):
+            os.makedirs("outputs/chroma_db")
+            
+        # Khởi tạo Chroma Client lưu trữ Persistent trên ổ cứng
+        self.client = chromadb.PersistentClient(path="outputs/chroma_db")
+        
+        # Tạo hoặc lấy Collection (Bảng dữ liệu) mang tên "aura_long_term_memory"
+        # Khoảng cách cosine similarity (cosine) được bật mặc định
+        self.collection = self.client.get_or_create_collection(
+            name="aura_long_term_memory",
+            metadata={"hnsw:space": "cosine"}
+        )
+
+    def _obj_to_dict(self, obj: Any) -> dict:
+        """Helper chuyển Object sang chuỗi JSON để lưu vào metadata của Chroma"""
+        return {"data": json.dumps(obj.__dict__, ensure_ascii=False)}
+
+    def _dict_to_obj(self, metadata_dict: dict) -> Any:
+        """Helper phục hồi lại Object từ JSON"""
+        # Lazy import để tránh Circular Dependency với MemoryManager
+        from core.memory import MemoryTrace
+        data = json.loads(metadata_dict["data"])
+        return MemoryTrace(**data)
 
     def add(self, record_id: str, vector: np.ndarray, meta: Any):
-        self.vectors[record_id] = vector
-        self.metadata[record_id] = meta
-
-    def clear_all(self):
-        self.vectors.clear()
-        self.metadata.clear()
-
-    def remove(self, record_id: str):
-        if record_id in self.vectors:
-            del self.vectors[record_id]
-        if record_id in self.metadata:
-            del self.metadata[record_id]
+        # Chroma yêu cầu nhét vector dưới dạng list python
+        self.collection.add(
+            ids=[record_id],
+            embeddings=[vector.tolist()],
+            metadatas=[self._obj_to_dict(meta)]
+        )
 
     def update_meta(self, record_id: str, meta: Any):
-        if record_id in self.metadata:
-            self.metadata[record_id] = meta
+        self.collection.update(
+            ids=[record_id],
+            metadatas=[self._obj_to_dict(meta)]
+        )
 
     def update_vector(self, record_id: str, vector: np.ndarray):
-        if record_id in self.vectors:
-            self.vectors[record_id] = vector
+        self.collection.update(
+            ids=[record_id],
+            embeddings=[vector.tolist()]
+        )
+
+    def remove(self, record_id: str):
+        self.collection.delete(ids=[record_id])
+
+    def clear_all(self):
+        # Xóa theo collection có sẵn
+        try:
+            self.client.delete_collection(name="aura_long_term_memory")
+            self.collection = self.client.get_or_create_collection(
+                name="aura_long_term_memory",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except Exception:
+            pass
 
     def get_all_metadata(self) -> List[Any]:
-        return list(self.metadata.values())
+        results = self.collection.get()
+        if not results or not results['metadatas']:
+            return []
+        
+        objs = []
+        for meta_dict in results['metadatas']:
+             objs.append(self._dict_to_obj(meta_dict))
+        return objs
 
     def search(self, query_vec: np.ndarray, top_k: int = 5) -> List[Tuple[float, Any]]:
-        if not self.vectors:
+        count = self.collection.count()
+        if count == 0:
+            return []
+            
+        # Truy vấn vào Chroma. Chroma sẽ trả về cosine distance.
+        # Lưu ý: distance = 1 - similarity. Score cao = distance thấp.
+        results = self.collection.query(
+            query_embeddings=[query_vec.tolist()],
+            n_results=min(top_k, count),
+            include=["metadatas", "distances"]
+        )
+        
+        if not results['ids'] or len(results['ids'][0]) == 0:
             return []
 
-        ids = list(self.vectors.keys())
-        matrix = np.array([self.vectors[i] for i in ids])
-        
-        norms_matrix = np.linalg.norm(matrix, axis=1)
-        norm_query = np.linalg.norm(query_vec)
-        
-        # Chống chia 0
-        norms_matrix[norms_matrix == 0] = 1e-9
-        if norm_query == 0:
-            norm_query = 1e-9
+        formatted_results = []
+        for i in range(len(results['ids'][0])):
+            distance = results['distances'][0][i]
+            # Chroma dùng cosine distance: sim = 1.0 - distance
+            similarity = 1.0 - distance 
+            meta_obj = self._dict_to_obj(results['metadatas'][0][i])
+            formatted_results.append((similarity, meta_obj))
 
-        similarities = np.dot(matrix, query_vec) / (norms_matrix * norm_query)
-
-        results = []
-        for idx, sim in enumerate(similarities):
-            results.append((sim, self.metadata[ids[idx]]))
-
-        results.sort(key=lambda x: x[0], reverse=True)
-        return results[:top_k]
+        # Đã được Chroma sort sẵn theo distance từ nhỏ đến lớn (sim từ cao xuống thấp)
+        return formatted_results

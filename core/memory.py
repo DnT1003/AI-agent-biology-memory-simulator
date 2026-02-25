@@ -75,6 +75,10 @@ class MemoryManager:
         vector = self.embedder.encode(trace.content)
         self.store.add(trace.id, vector, trace)
 
+    def update_memory(self, trace: MemoryTrace):
+        """Cập nhật đè lại Metadata vào Vector Store"""
+        self.store.update_meta(trace.id, trace)
+
     def search_memories(self, query: str, top_k: int = 5) -> List[tuple[float, MemoryTrace]]:
         # Gọi Vector Store để tìm kiếm
         query_vec = self.embedder.encode(query)
