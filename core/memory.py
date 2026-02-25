@@ -85,6 +85,9 @@ class MemoryManager:
         # Kết quả trả về là list of tuples (score, MemoryTrace)
         return self.store.search(query_vec, top_k=top_k)
 
+    def chronological_recall(self, start_time: float, end_time: float, limit: int = 10) -> List[MemoryTrace]:
+        return self.store.get_by_time_range(start_time, end_time, limit)
+
     def get_all(self) -> List[MemoryTrace]:
         return self.store.get_all_metadata()
     

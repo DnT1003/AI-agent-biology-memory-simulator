@@ -24,7 +24,11 @@ class VectorStore:
 
     def _obj_to_dict(self, obj: Any) -> dict:
         """Helper chuyển Object sang chuỗi JSON để lưu vào metadata của Chroma"""
-        return {"data": json.dumps(obj.__dict__, ensure_ascii=False)}
+        return {
+            "data": json.dumps(obj.__dict__, ensure_ascii=False),
+            # Thêm timestamp độc lập để có thể filter bằng vòng lặp ChromaDB where
+            "timestamp": float(getattr(obj, 'created_at', 0.0))
+        }
 
     def _dict_to_obj(self, metadata_dict: dict) -> Any:
         """Helper phục hồi lại Object từ JSON"""
@@ -75,6 +79,26 @@ class VectorStore:
         objs = []
         for meta_dict in results['metadatas']:
              objs.append(self._dict_to_obj(meta_dict))
+        return objs
+
+    def get_by_time_range(self, start_time: float, end_time: float, limit: int = 10) -> List[Any]:
+        """Truy xuất các vector theo dòng thời gian (chronological recall)"""
+        results = self.collection.get(
+            where={"$and": [
+                {"timestamp": {"$gte": float(start_time)}},
+                {"timestamp": {"$lte": float(end_time)}}
+            ]},
+            limit=limit
+        )
+        if not results or not results['metadatas']:
+            return []
+            
+        objs = []
+        for meta_dict in results['metadatas']:
+             objs.append(self._dict_to_obj(meta_dict))
+             
+        # Sắp xếp lại theo thời gian giảm dần (mới nhất trước)
+        objs.sort(key=lambda x: getattr(x, 'created_at', 0.0), reverse=True)
         return objs
 
     def search(self, query_vec: np.ndarray, top_k: int = 5) -> List[Tuple[float, Any]]:

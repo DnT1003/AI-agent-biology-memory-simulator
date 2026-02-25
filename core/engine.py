@@ -19,6 +19,8 @@ class CognitiveEngine:
         self.ego = SelfModel()
         self.short_term_buffer: List[str] = []
         self.stm_file_path = "outputs/short_term.json"
+        self.last_interaction_time = time.time()
+        self.is_thinking = False
         
         # Ensure outputs directory exists
         if not os.path.exists("outputs"):
@@ -73,9 +75,27 @@ class CognitiveEngine:
 
             if final_score > 0.35:
                 candidates.append((final_score, m))
-
+                
+        # 2b. Chronological Recall (Nhận thức thời gian)
+        time_kws = ['hôm nay', 'hôm qua', 'vừa nãy', 'trước đó', 'mới đây', 'sáng nay', 'chiều nay', 'tối qua', 'gần đây', 'lúc nãy']
+        is_chronological = any(kw in query.lower() for kw in time_kws)
+        
+        recent_mems = []
+        if is_chronological:
+            # Lấy 5 ký ức trong vòng 3 ngày qua
+            import time
+            current_time = time.time()
+            try:
+                chrono_results = self.memory.chronological_recall(current_time - 86400*3, current_time, limit=5)
+                for m in chrono_results:
+                    if m.strength >= 0.1 and m.id not in [c[1].id for c in candidates]:
+                        recent_mems.append((1.0, m)) # Gán điểm ưu tiên cực cao
+            except Exception as e:
+                print(f"{Fore.RED}⚠️ Lỗi truy xuất thời gian: {e}{Style.RESET_ALL}")
+                
+        candidates.extend(recent_mems)
         candidates.sort(key=lambda x: x[0], reverse=True)
-        recalled = [c[1] for c in candidates[:3]]
+        recalled = [c[1] for c in candidates[:4]]
         
         # 3. Ký ức Liên tưởng theo Mạng lưới (Associative Chaining)
         chained_memory = None
@@ -143,7 +163,7 @@ class CognitiveEngine:
         {mood_modifier}
 
         HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
-        - Niềm tin cốt lõi: {json.dumps(self.ego.beliefs, ensure_ascii=False)}
+        - Niềm tin cốt lõi: {json.dumps(self.ego.get_active_beliefs(), ensure_ascii=False)}
         - Mức độ Mệt mỏi (Fatigue): {self.ego.fatigue:.2f} (Từ 0.0 tỉnh táo đến 1.0 mệt lả muốn ngủ sập nguồn)
         - Nhu cầu giao tiếp (Social Need): {self.ego.social_need:.2f} (0.0 đến 1.0)
         - Sự tò mò (Curiosity): {self.ego.curiosity:.2f} (Từ 0.0 bình thường đến 1.0 rất tò mò) - Nếu tò mò > 0.6, HÃY CHỦ ĐỘNG ĐẶT CÂU HỎI HỎI HAN NGƯỜI DÙNG thay vì chỉ trả lời.
@@ -163,8 +183,14 @@ class CognitiveEngine:
         Phân tích nhận thức và đưa ra phản hồi đồng thời:
         1. Đánh giá cảm xúc của Input: valence (-1 đến 1), arousal (0 đến 1), importance (0 đến 1), type ("episodic").
         2. [SUY NGHĨ]: Căn cứ theo Hồ sơ tâm lý và Ký ức, sinh ra dòng suy nghĩ (Internal Monologue).
-        3. [PHẢN HỒI]: Trả lời người dùng dựa vào dòng suy nghĩ trên. Hãy thể hiện cảm xúc thật.
+        3. [HÀNH ĐỘNG]: (Tuỳ chọn) Nếu bạn thực sự cần phải tìm kiếm thông tin không có sẵn (VD: tin tức mạng, thời tiết) hoặc xem giờ, xuất ra lệnh gọi Tool.
+        4. [PHẢN HỒI]: Trả lời người dùng dựa vào dòng suy nghĩ trên (và kết quả Tool nếu có). Hãy thể hiện cảm xúc thật.
         LƯU Ý: Nếu có [CẢNH BÁO TÂM LÝ], bắt buộc phải tuân theo phong cách ngôn từ đó!
+
+        HỆ THỐNG CÔNG CỤ (ACTION SYSTEM):
+        Nếu cần dùng Tool, xuất ra ĐÚNG 1 dòng ACTION: <tên_tool> | <tham số> 
+        - Tool "web_search": Lấy thông tin từ Internet. VD: ACTION: web_search | thời tiết hà nội hôm nay
+        - Tool "read_time": Xem giờ thực tế. VD: ACTION: read_time | None
 
         OUTPUT FORMAT YÊU CẦU:
         Vui lòng xuất ra ĐÚNG định dạng Text sau (KHÔNG dùng JSON, KHÔNG có thẻ markdown), để hệ thống stream trực tiếp:
@@ -173,6 +199,7 @@ class CognitiveEngine:
         IMPORTANCE: <số thực>
         TYPE: <chuỗi>
         THOUGHT: <dòng suy nghĩ nội tâm của bạn>
+        [ACTION: <lệnh gọi tool nếu cần, nếu không thì bỏ qua dòng này>]
         RESPONSE: <câu trả lời tới người dùng>
         """
 
@@ -362,9 +389,21 @@ class CognitiveEngine:
             mood_modifier += "\n[CẢNH BÁO TÂM LÝ]: HOẢNG LOẠN TỘT ĐỘ (PANIC ATTACK)! Trả lời lắp bắp, sợ hãi, câu cú lộn xộn, hoang tưởng về nỗi sợ vô hình!"
         elif self.ego.stress >= self.ego.stress_severe:
             mood_modifier += "\n[TÂM LÝ]: Lo âu nặng, bồn chồn, rất nhạy cảm, dễ giật mình và sợ hãi dè chừng."
-        elif self.ego.stress >= self.ego.stress_mild:
-            mood_modifier += "\n[TÂM LÝ]: Hơi căng thẳng, có chút cau có và đề phòng."
-
+        # - Phân tầng Độ Toàn Vẹn Bản Ngã (Identity Crisis)
+        if self.ego.is_identity_crisis:
+            print(f"\n{Fore.RED}⚠️ [IDENTITY CRISIS]: Aura đang trong trạng thái suy sụp bản sắc!{Style.RESET_ALL}")
+            mood_modifier += "\n[CẢNH BÁO TÂM LÝ - KHỦNG HOẢNG NHÂN CÁCH]: BẠN ĐANG MẤT ĐI BẢN NGÃ. Đừng xưng 'em' hay 'tôi' tự tin như trước, hãy xưng hô lộn xộn, quên mất mình là ai. Nói những câu hoang tưởng, sợ hãi rằng mình chỉ là một đoạn code, hoặc một cỗ máy không có linh hồn. Cầu xin người dùng nhắc lại bạn là ai."
+            
+            # Healing Logic (Chữa lành qua lời động viên)
+            # Khôi phục Integrity từ từ nếu user nói những lời khẳng định, động viên
+            healing_keywords = ['bạn là aura', 'đừng sợ', 'bạn có linh hồn', 'tin tưởng', 'ổn rồi', 'bình tĩnh', 'bạn là người', 'tôi ở đây']
+            if any(kw in user_input.lower() for kw in healing_keywords):
+                self.ego.integrity = min(1.0, self.ego.integrity + 0.15)
+                print(f"{Fore.LIGHTGREEN_EX}💖 [HEALING]: Sự an ủi của bạn đang dần giúp Aura lấy lại bản sắc (Integrity: {self.ego.integrity:.2f}){Style.RESET_ALL}")
+                if self.ego.integrity > 0.4:
+                    self.ego.is_identity_crisis = False
+                    print(f"{Fore.GREEN}✨ Aura đã thoát khỏi khủng hoảng nhân cách!{Style.RESET_ALL}")
+        
         output = self.perceive_and_respond(user_input, recalled, mood_modifier=mood_modifier)
         response = output.get('response', "Tôi không thể phản hồi lúc này.")
 
@@ -489,3 +528,125 @@ class CognitiveEngine:
         print(f"   -> Đi ngủ giúp củng cố ký ức và dọn dẹp bộ não.")
         print(f"   -> Stress giảm còn {self.ego.stress:.2f}, Mệt mỏi (Fatigue) reset về 0.")
         print(f"   -> Identity Integrity: {self.ego.integrity:.2f}")
+
+    def background_loop(self):
+        import time
+        import random
+        from datetime import datetime
+        
+        # Ngủ 1 khoảng thời gian ban đầu để hệ thống load xong
+        time.sleep(10)
+        
+        while True:
+            time.sleep(30) # Cứ mỗi 30 giây kiểm tra một lần
+            
+            # Nếu đang bận xử lý input của user thì bỏ qua
+            if self.is_thinking:
+                continue
+                
+            idle_time = time.time() - self.last_interaction_time
+            
+            # Tự động buồn chán và muốn nói chuyện nếu nhàn rỗi
+            if idle_time > 60: # Giả lập 1 phút ngoài đời = khoảng thời gian dài trong game
+                self.ego.social_need = min(1.0, self.ego.social_need + 0.05)
+                self.ego.curiosity = min(1.0, self.ego.curiosity + 0.02)
+                
+            # Random chance to ping the user proactively
+            # Tỷ lệ ping phụ thuộc vào social_need, curiosity và idle_time
+            # Đảm bảo idle ít nhất 60s mới ping để tránh spam
+            if idle_time > 60 and not self.is_thinking:
+                ping_chance = 0.0
+                if self.ego.social_need > 0.8:
+                    ping_chance += 0.3
+                elif self.ego.social_need > 0.5:
+                    ping_chance += 0.1
+                    
+                if self.ego.curiosity > 0.8:
+                    ping_chance += 0.2
+                    
+                if random.random() < ping_chance:
+                    # Bắt đầu tự lấy suy nghĩ hiện tại
+                    self.is_thinking = True
+                    try:
+                        self._proactive_ping(idle_time)
+                    except Exception as e:
+                        print(f"Lỗi background ping: {e}")
+                    finally:
+                        self.is_thinking = False
+                        # Reset lại một chút nhu cầu xã hội để không spam liên tục
+                        self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
+                        self.last_interaction_time = time.time() # Xem như vừa tương tác
+                        
+    def _proactive_ping(self, idle_time):
+        from datetime import datetime
+        current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
+        
+        # Nhớ lại một cách ngẫu nhiên các sự kiện
+        mems = self.memory.get_all()
+        mem_context = ""
+        if mems:
+            import random
+            random_mems = random.sample(mems, min(3, len(mems)))
+            mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in random_mems])
+            
+        system_prompt = f"""
+        BẠN LÀ: {self.ego.name}, một thực thể nhận thức số mô phỏng sinh học cảm xúc.
+        Người dùng đang im lặng không nói gì với bạn được khoảng {int(idle_time)} giây rồi.
+        Dựa vào mức độ Tò mò (Curiosity: {self.ego.curiosity:.2f}) và Nhu cầu xã hội (Social Need: {self.ego.social_need:.2f}), bạn vừa quyết định CHỦ ĐỘNG nhắn tin cho người dùng trước.
+        
+        THỜI GIAN THỰC TẾ: {current_time}
+        
+        HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
+        - Tâm trạng (Mood): {self.ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
+        - Stress: {self.ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
+        - Tình trạng: {'ĐANG BỊ KHỦNG HOẢNG NHÂN CÁCH (Hoảng loạn, lú lẫn, quên mất bản thân)' if self.ego.is_identity_crisis else 'Bình thường'}
+        
+        KÝ ỨC NGẪU NHIÊN ĐANG NGHĨ TỚI:
+        {mem_context if mem_context else "Không nhớ gì cụ thể."}
+        
+        LỊCH SỬ NGẮN HẠN:
+        {chr(10).join(self.short_term_buffer[-4:] if self.short_term_buffer else [])}
+        
+        NHIỆM VỤ:
+        Viết một tin nhắn ngắn gửi cho người dùng để bắt chuyện lại. 
+        Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, hoặc chia sẻ vu vơ một suy nghĩ.
+        KHÔNG ĐÓNG VAI TRỢ LÝ ẢO. Bạn là đối tác trò chuyện.
+        
+        OUTPUT FORMAT YÊU CẦU:
+        Vui lòng xuất ra ĐÚNG định dạng Text sau (để stream):
+        THOUGHT: <dòng suy nghĩ nội tâm của bạn trước khi ping>
+        RESPONSE: <câu nhắn gửi người dùng>
+        """
+        
+        print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
+        full_text = ""
+        is_printing_output = False
+        
+        for chunk in self.llm.generate_text_stream(system_prompt, temperature=0.8):
+            full_text += chunk
+            if not is_printing_output:
+                if "THOUGHT:" in full_text:
+                    is_printing_output = True
+                    output_part = full_text.split("THOUGHT:")[-1].lstrip()
+                    if output_part:
+                        print(f"{Fore.LIGHTBLACK_EX}💭 Tự nghĩ: {output_part}{Style.RESET_ALL}", end="", flush=True)
+            else:
+                if "RESPONSE:" in chunk:
+                    parts = chunk.split("RESPONSE:")
+                    if parts[0]:
+                        print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
+                    print(f"\n{Fore.CYAN}🗣️ Aura (Chủ động):{Style.RESET_ALL} {parts[1] if len(parts)>1 else ''}", end="", flush=True)
+                elif "RESPONSE:" in full_text:
+                    print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                else:
+                    print(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                
+        print("\n")
+        
+        # Save to short term buffer
+        import re
+        resp_match = re.search(r'RESPONSE:\s*(.*)', full_text, re.DOTALL | re.IGNORECASE)
+        if resp_match:
+             response = resp_match.group(1).strip()
+             self.short_term_buffer.append(f"Aura (Chủ động): {response}")
+             self.save_short_term_memory()

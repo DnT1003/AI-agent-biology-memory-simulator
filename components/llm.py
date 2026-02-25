@@ -40,12 +40,16 @@ class LLM:
             print(f"⚠️ Lỗi LLM Text: {e}")
             return ""
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7):
+    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None):
         try:
+            config_params = {"temperature": temperature}
+            if tools:
+                config_params["tools"] = tools
+                
             responses = self.client.models.generate_content_stream(
                 model=Config.MODEL_NAME, 
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=temperature)
+                config=types.GenerateContentConfig(**config_params)
             )
             for chunk in responses:
                 if chunk.text:

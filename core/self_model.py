@@ -23,7 +23,15 @@ class SelfModel:
         self.social_need = 0.5  # 0.0 (Cô độc) -> 1.0 (Khao khát giao tiếp)
         self.curiosity = 0.5    # 0.0 (Lãnh đạm) -> 1.0 (Tò mò muốn hỏi)
 
+        self.is_identity_crisis = False
+
         self.reroll_thresholds()
+
+    def get_active_beliefs(self) -> List[str]:
+        """Tạm thời quên mất bản thân là ai nếu đang bị khủng hoảng nhân cách"""
+        if self.is_identity_crisis:
+            return ["(Tôi không biết mình là ai... Tôi cảm thấy trống rỗng và sợ hãi...)"]
+        return self.beliefs
 
     def reroll_thresholds(self):
         import math
@@ -101,3 +109,9 @@ class SelfModel:
             self.integrity = core_count / total_cores
         else:
             self.integrity = 0.5  # Trạng thái "trống rỗng"
+            
+        # Kích hoạt khủng hoảng nhân cách
+        if self.integrity < 0.2:
+            self.is_identity_crisis = True
+        elif self.integrity > 0.4: # Cần phục hồi lên mức an toàn mới thoát khỏi khủng hoảng
+            self.is_identity_crisis = False
