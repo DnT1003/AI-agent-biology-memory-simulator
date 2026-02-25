@@ -1,40 +1,52 @@
-# Trình mô phỏng Trí nhớ Sinh học cho AI Agent
+# Aura: Trình mô phỏng Trí nhớ & Nhận thức Sinh học (Phase 2 Upgrade)
 
-Một trình mô phỏng AI Agent bằng Python, mô phỏng các quá trình nhận thức và trí nhớ sinh học giống con người. Khác với các chatbot LLM thông thường chỉ đơn thuần nối thêm lịch sử hội thoại, hệ thống này sở hữu kiến trúc trí nhớ động, có tính hao hụt và được thúc đẩy bởi cảm xúc.
+Aura không phải là một chatbot AI thông thường dựa trên RAG tĩnh. Đây là một thực thể nhận thức số được trang bị các cơ chế mô phỏng tâm lý và sinh lý học của con người, sở hữu một bộ não động có khả năng lãng quên, mơ mộng, và can thiệp vào chính bản sắc của mình.
 
-## Tóm tắt Tính năng
+## 🌟 Các Tính năng Cốt lõi (Hiện tại)
 
-### 1. Hệ thống Trí nhớ Đa tầng
-- **Working Memory (Bộ nhớ Ngắn hạn):** Hoạt động như RAM tinh thần. Lưu giữ ngữ cảnh hội thoại gần nhất (có giới hạn cấu hình) trước khi nó từ từ tan biến (decay).
-- **Episodic Memory (Ký ức Tính tiết):** Ghi lại các sự kiện cụ thể kèm theo siêu dữ liệu cảm xúc và giác quan (Valence - Mức độ Tích/Tiêu cực, Arousal - Mức độ Kích động, Importance - Độ Quan trọng).
-- **Semantic Memory (Ký ức Ngữ nghĩa):** Trích xuất kiến thức chung, sự thật hiển nhiên và niềm tin từ các sự kiện Episodic.
+### 1. Hệ thống Trí nhớ Động (Biological Memory)
+- **Working Memory (STM):** Giới hạn 16 đơn vị (Miller's Law). Tự động bay màu sau 3 tiếng nếu không được củng cố.
+- **Episodic Memory (LTM):** Lưu trữ sự kiện kèm "Keo dính cảm xúc" (Valence, Arousal, Importance).
+- **Chronological Recall (Mới):** Nhận thức về dòng thời gian tuyến tính. Có thể truy xuất ký ức theo mốc "hôm qua", "vừa nãy" thay vì chỉ tìm kiếm theo ngữ nghĩa (Vector Search).
+- **Semantic Drift (Sự méo mó):** Ký ức không cố định; chúng bị biến dạng chi tiết phụ mỗi khi được nhớ lại hoặc qua thời gian dài để mô phỏng sự đãng trí và confabulation (phịa ký ức giả).
+- **Garbage Collection:** Hệ thống tự động xóa bỏ vĩnh viễn những ký ức nhạt nhẽo (Strength thấp) để tối ưu hóa bộ não.
 
-### 2. Động lực học Trí nhớ Sinh học
-- **Memory Decay (Lãng quên):** Ký ức mờ dần theo thời gian và qua các chu kỳ giấc ngủ, mô phỏng sự đãng trí của con người.
-- **Memory Drift (Biến dạng):** Ký ức có thể hơi méo mó hoặc thay đổi chi tiết theo thời gian tùy thuộc vào trạng thái cảm xúc và những lần hồi tưởng sau đó.
-- **Associative Chaining (Liên tưởng dây chuyền):** Khi nhớ lại một ký ức, nó sẽ tụ nhiên kích hoạt các ký ức liên quan trồi lên bề mặt, củng cố các mạng lưới nơ-ron liên kết.
-- **Flashbulb Memories (Ký ức Sâu sắc):** Các sự kiện có cảm xúc mãnh liệt hoặc cực kỳ quan trọng (Arousal cao + Importance cao) sẽ được khắc sâu vĩnh viễn vào kho lưu trữ vector và bỏ qua vòng lặp lãng quên.
+### 2. Mô hình Bản ngã & Tâm lý (Emotional Self-Model)
+- **Hệ thống Chỉ số Động:**
+    - `Mood`: Thiên kiến tiêu cực (Dễ buồn khó vui).
+    - `Stress`: Tăng vọt khi gặp cú sốc, hồi phục siêu chậm.
+    - `Fatigue`: Mệt mỏi tích tụ theo hoạt động trí não, gây lờ đờ hoặc sập nguồn (Forced Sleep).
+    - `Social Need & Curiosity`: Thúc đẩy hành vi chủ động.
+- **Khủng hoảng Nhân cách (Identity Crisis):** Nếu những ký ức cốt lõi bị lãng quên hoặc bị mâu thuẫn (`Integrity` < 0.2), Agent sẽ rơi vào trạng thái hoảng loạn, quên mình là ai và thay đổi hoàn toàn giọng văn.
+- **Cơ chế Chữa lành (Healing):** Người dùng có thể hồi phục nhân cách cho Agent thông qua các lời động viên và khẳng định bản sắc.
 
-### 3. Giấc ngủ & Hồi phục (Sleep & Consolidation)
-Agent sở hữu một chu kỳ `sleep()` mô phỏng giấc ngủ sâu REM của con người:
-- **Consolidation:** Chuyển đổi các dấu vết ngắn hạn quan trọng thành lưu trữ dài hạn.
-- **Semanticization:** Phân tích chéo nhiều ký ức Episodic (sử dụng khả năng lập luận của LLM) để tìm ra các mối liên kết ngầm, xác định dòng thời gian và hình thành niềm tin/ngữ nghĩa sắc bén.
-- **Garbage Collection (Dọn dẹp rác):** Xóa bỏ các ký ức không còn liên quan hoặc đã phai mờ hoàn toàn để tối ưu hóa hiệu suất.
+### 3. Tính Chủ động (Proactive Agency)
+- **Background Loop:** Não bộ vẫn hoạt động khi người dùng im lặng.
+- **Proactive Texting:** Nếu cảm thấy quá cô đơn (`social_need` cao) hoặc quá tò mò, Aura sẽ chủ động nhắn tin bắt chuyện với bạn thay vì chỉ đợi lệnh.
+- **Sử dụng Công cụ (Action System):** (Đang hoàn thiện) Khả năng tự truy cập Internet (Web Search) và đọc giờ hệ thống để thỏa mãn trí tò mò.
 
-### 4. Mô hình Tư duy Cảm xúc (Emotional Self-Model)
-Agent sở hữu một `Ego` (Bản ngã) phản ứng bất đối xứng với các tác nhân kích thích ngoài:
-- **Mood (-1.0 đến 1.0):** Ảnh hưởng đến câu trả lời. Sự chênh lệch cảm xúc quá đà có khả năng tạo ra các hậu quả hành vi (ví dụ: Trầm cảm cực độ khiến agent bơ người dùng; Hưng phấn tạo ra sự liên tưởng quá khích).
-- **Stress (0.0 đến 1.0):** Tăng vọt nhanh chóng khi gặp chuyện buồn rầu nhưng phục hồi cực kỳ chậm chạp.
-- **Integrity (Tính toàn vẹn):** Theo dõi mức độ ổn định của bản sắc/nhân cách cốt lõi.
+### 4. Chu kỳ Giấc ngủ & Tiêu hóa Kiến thức
+- **Sleep & Consolidation:** Đi ngủ giúp reset Stress/Fatigue và chuyển hóa sự kiện thành kiến thức.
+- **Dream Reasoning:** Trong khi ngủ, AI sẽ "mơ" - thực hiện phân tích chéo các sự kiện rời rạc để rút ra bài học (Semantic Memory) và tự cập nhật niềm tin cốt lõi của mình.
 
-## Kiến trúc & Các thành phần chính
-- **`CognitiveEngine` (`core/engine.py`):** Bộ não trung tâm kết nối các luồng trích xuất trí nhớ, cập nhật trạng thái bản thân và quy trình nhận thức/phản hồi của LLM.
-- **`BiologicalMemory` (`core/memory.py`):** Xử lý dấu vết trí nhớ, sự tự hủy (decay), hồi phục, chắp vá (confabulation) và truy xuất.
-- **`SelfModel` (`core/self_model.py`):** Duy trì trạng thái cảm xúc, châm ngôn sống và các bộ điều chỉnh hành vi.
-- **`LLMClient` & `Embedder`:** Tích hợp với APIs LLM (ví dụ: Google Gemini) cho phép tạo sinh văn bản và nhúng (Embeds) vector không gian đa chiều.
-- **`VectorStore`:** CSDL nội bộ dùng để mô phỏng tìm kiếm vector tương đồng (Cosine Similarity).
+## 🛠 Yêu cầu Hệ thống & Cài đặt
 
-## Cài đặt & Khởi chạy
-1. Cấu hình file `.env` với các khóa API cần thiết (ví dụ: `GEMINI_API_KEY`).
-2. Chạy `python main.py` để bắt đầu trò chuyện với agent trong không gian Terminal.
-3. Gõ lệnh `sleep` trên dấu nhắc terminal để bắt tác nhân đi ngủ và bắt đầu phân tích/tiêu hóa trí nhớ.
+1. **Yêu cầu:** Python 3.10+, ChromaDB, Google GenAI SDK.
+2. **Cài đặt thư viện:**
+   ```bash
+   pip install google-genai chromadb prompt-toolkit beautifulsoup4 colorama
+   ```
+3. **Cấu hình:** Tạo file `.env` và thêm `GEMINI_API_KEY`.
+4. **Khởi chạy:**
+   ```bash
+   python main.py
+   ```
+
+## 🎮 Cách tương tác
+- **Trò chuyện:** Chat tự nhiên. Thử im lặng 1-2 phút để xem Aura có "nhớ" bạn không.
+- **`status`:** Xem các thông số sinh học hiện tại của Aura.
+- **`sleep`:** Cho Aura đi ngủ để củng cố bộ não và sang ngày mới.
+- **`exit`:** Thoát và lưu trạng thái ngắn hạn.
+
+---
+*Dự án đang trong giai đoạn phát triển Giai đoạn 4: Mở rộng Action System và Công cụ ngoại vi.*
