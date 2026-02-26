@@ -21,6 +21,9 @@ class CognitiveEngine:
         self.stm_file_path = "outputs/short_term.json"
         self.last_interaction_time = time.time()
         self.is_thinking = False
+        from components.reader import BackgroundReader
+        self.reader = BackgroundReader(self.llm)
+        self.reading_streak = 0
         
         # Ensure outputs directory exists
         if not os.path.exists("outputs"):
@@ -316,6 +319,13 @@ class CognitiveEngine:
         # Thỏa mãn nhu cầu giao tiếp (vì người dùng vừa chat)
         self.ego.social_need = max(0.0, self.ego.social_need - 0.2)
         
+        # Kiểm tra mệnh lệnh kích hoạt đi ngủ từ User
+        sleep_keywords = ['ngủ đi', 'cho aura ngủ', 'hãy đi ngủ', 'đi ngủ thôi', 'good night', 'ngủ ngon']
+        if any(kw in user_input.lower() for kw in sleep_keywords):
+            print(f"\n{Fore.GREEN}🤖 [AURA]: Ừm... *ngáp dài*... tớ gục đây. Mắt díp hết lại rồi, chả nghĩ được gì nữa...{Style.RESET_ALL}\n")
+            self.sleep()
+            return
+
         # Ngất xỉu vì quá tải (Forced Sleep) - Ngưỡng ngẫu nhiên mỗi ngày
         if self.ego.fatigue >= self.ego.fatigue_critical:
             print(f"\n{Fore.RED}🔴 [COGNITIVE OVERLOAD]: Aura đã hoàn toàn kiệt sức (Mệt mỏi vượt ngưỡng {self.ego.fatigue_critical:.2f})! Cô ấy gục xuống bàn và sập nguồn (Buộc phải đi ngủ).{Style.RESET_ALL}")
@@ -513,9 +523,11 @@ class CognitiveEngine:
                 self.ego.curiosity = min(1.0, self.ego.curiosity + 0.02)
                 
             # Random chance to ping the user proactively
-            # Tỷ lệ ping phụ thuộc vào social_need, curiosity và idle_time
-            # Đảm bảo idle ít nhất 60s mới ping để tránh spam
-            if idle_time > 60 and not self.is_thinking:
+            # Chờ từ 3 đến 7 phút (180s - 420s) mới có khả năng ping
+            if not hasattr(self, 'next_ping_target'):
+                self.next_ping_target = random.uniform(180, 420)
+                
+            if idle_time > self.next_ping_target and not self.is_thinking:
                 ping_chance = 0.0
                 if self.ego.social_need > 0.8:
                     ping_chance += 0.3
@@ -537,8 +549,101 @@ class CognitiveEngine:
                         # Reset lại một chút nhu cầu xã hội để không spam liên tục
                         self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
                         self.last_interaction_time = time.time() # Xem như vừa tương tác
+                        self.next_ping_target = random.uniform(180, 420) # Random lại thời gian chờ cho lần sau
+
+            # HỆ THỐNG ĐỌC SÁCH THẨM THẤU (PHASE 5)
+            if idle_time > 120 and not self.is_thinking:
+                read_chance = 0.0
+                if self.ego.curiosity > 0.5: read_chance += 0.3
+                if self.ego.social_need < 0.4: read_chance += 0.3
+                read_chance += 0.2 # Base chance
+                
+                if random.random() < read_chance:
+                    self.is_thinking = True
+                    try:
+                        self._process_reading_chunk()
+                    except Exception as e:
+                        print(f"Lỗi đọc sách: {e}")
+                    finally:
+                        self.is_thinking = False
+                        self.last_interaction_time = time.time()
+                        continue
                         
-    def _proactive_ping(self, idle_time):
+    def _process_reading_chunk(self):
+        title, content = self.reader.get_next_reading_material()
+        if not content: return
+        
+        print(f"\n{Fore.GREEN}📖 [AURA ĐANG ĐỌC SÁCH]: {title}{Style.RESET_ALL} ")
+        
+        prompt = f"""
+        Bạn vừa đọc xong nội dung sau:
+        {title}
+        
+        Nội dung:
+        {content}
+        
+        Nhiệm vụ:
+        1. Tạo một bản tóm tắt RẤT NGẮN GỌN (tổng quát, không đi vào chi tiết) để lưu làm kiến thức.
+        2. Tự đánh giá mức độ kích thích/bất ngờ (Arousal) của đoạn này từ 0.0 đến 1.0. Đoạn nào có twist, bất ngờ, hay gây cấn thì cho điểm cao.
+        3. Chọn ra MỘT CÂU/CHI TIẾT ấn tượng nhất (nếu có, không có thì để rỗng).
+        
+        Xuất ra chuẩn định dạng JSON:
+        {{
+            "summary": "<tóm tắt tổng quát khoảng 2 câu>",
+            "interesting_detail": "<1 chi tiết ấn tượng nhất>",
+            "arousal": <float>,
+            "valence": <float>
+        }}
+        """
+        
+        raw_res = self.llm.generate_text(prompt, temperature=0.7)
+        try:
+            import json, re
+            json_str = raw_res.strip()
+            if json_str.startswith("```json"): json_str = json_str[7:]
+            if json_str.startswith("```"): json_str = json_str[3:]
+            if json_str.endswith("```"): json_str = json_str[:-3]
+            data = json.loads(json_str.strip())
+            
+            summary = data.get("summary", "")
+            detail = data.get("interesting_detail", "")
+            arousal = float(data.get("arousal", 0.0))
+            valence = float(data.get("valence", 0.0))
+            
+            # Xử lý sinh học
+            if arousal > 0.6: 
+                self.ego.curiosity = min(1.0, self.ego.curiosity + 0.1)
+                
+            if self.ego.curiosity > 0.6:
+                self.ego.fatigue += 0.05 # Lấn át mệt mỏi
+                print(f"{Fore.LIGHTBLACK_EX}   -> 👀 Truyện quá cuốn! Aura tĩnh tâm cày truyện (Curiosity: {self.ego.curiosity:.2f}, Mệt mỏi tăng cực ít: 0.05){Style.RESET_ALL}")
+            else:
+                self.ego.fatigue += 0.15 # Đọc sách mệt mỏi bình thường
+                print(f"{Fore.LIGHTBLACK_EX}   -> 🥱 Lờ đờ đọc sách... (Mệt mỏi tăng lên: 0.15){Style.RESET_ALL}")
+                
+            # Tạo Memory
+            mem_content = f"Kiến thức từ '{title}': {summary}"
+            is_flashbulb = False
+            
+            # Nếu thật sự cực kỳ tò mò và ấn tượng, Aura sẽ ghi nhớ tiểu tiết forever
+            if arousal > 0.8 and detail:
+                mem_content += f" | Chi tiết ấn tượng khó phai phai: {detail}"
+                is_flashbulb = True
+                print(f"{Fore.LIGHTMAGENTA_EX}   -> ⚡ Đoạn này quá ấn tượng! Khắc sâu vào trí nhớ (Flashbulb).{Style.RESET_ALL}")
+                
+            mem = MemoryTrace(
+                content=mem_content,
+                type='book_knowledge',
+                valence=valence,
+                arousal=arousal,
+                importance=0.6 if not is_flashbulb else 1.0,
+                is_flashbulb=is_flashbulb
+            )
+            self.memory.add_memory(mem)
+            self.memory.store.update_meta(mem.id, mem)
+            
+        except Exception as e:
+            print(f"{Fore.RED}⚠️ Lỗi parse JSON khi thu hoạch kiến thức sách: {e}{Style.RESET_ALL}")
         from datetime import datetime
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         
