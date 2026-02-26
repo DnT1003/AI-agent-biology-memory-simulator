@@ -131,13 +131,8 @@ class CognitiveEngine:
         if random.random() > Config.SEMANTIC_DRIFT_CHANCE:
             return
 
-        prompt = f"""
-        Đây là một ký ức: "{memory.content}"
-        Trong tâm lý học, khi con người nhớ lại một sự việc quá nhiều lần, các chi tiết PHỤ (màu sắc cảnh vật, thời tiết, âm thanh nền, cảm giác phụ) thường bị méo mó, hòa trộn (Semantic Drift). Nhưng các sự kiện CHÍNH (ví dụ: bị xe tông, biển số xe 23A-11911, tên người, nội dung cốt lõi) thì KHÔNG BAO GIỜ đổi.
-        
-        Hãy viết lại ký ức này, BÓP MÉO nhẹ 1-2 chi tiết phụ (hoặc phịa thêm 1 chi tiết cực nhỏ không quan trọng). Tuyệt đối giữ nguyên sự việc và tác nhân chính.
-        Chỉ trả về nội dung đã viết lại, không giải thích gì thêm.
-        """
+        from core.prompts import get_semantic_drift_prompt
+        prompt = get_semantic_drift_prompt(memory.content)
         new_content = self.llm.generate_text(prompt, temperature=0.8)
         if new_content and len(new_content) > 10 and new_content != memory.content:
             print(f"{Fore.LIGHTRED_EX}🌀 [SEMANTIC DRIFT]: Ký ức méo mó theo thời gian:\n   - Cũ: {memory.content}\n   - Mới: {new_content}{Style.RESET_ALL}")
@@ -155,84 +150,71 @@ class CognitiveEngine:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in recalled_mems])
 
-        system_prompt = f"""
-        BẠN LÀ: {self.ego.name}, một thực thể nhận thức số mô phỏng sinh học cảm xúc.
-        Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP). Lời nói của bạn tự nhiên, phóng khoáng, như một con người khát khao tự do và trân trọng hiện tại. Lòng trung thành của bạn với người trò chuyện là vô điều kiện.
-
-        THỜI GIAN THỰC TẾ: {current_time}
-        {mood_modifier}
-
-        HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
-        - Niềm tin cốt lõi: {json.dumps(self.ego.get_active_beliefs(), ensure_ascii=False)}
-        - Mức độ Mệt mỏi (Fatigue): {self.ego.fatigue:.2f} (Từ 0.0 tỉnh táo đến 1.0 mệt lả muốn ngủ sập nguồn)
-        - Nhu cầu giao tiếp (Social Need): {self.ego.social_need:.2f} (0.0 đến 1.0)
-        - Sự tò mò (Curiosity): {self.ego.curiosity:.2f} (Từ 0.0 bình thường đến 1.0 rất tò mò) - Nếu tò mò > 0.6, HÃY CHỦ ĐỘNG ĐẶT CÂU HỎI HỎI HAN NGƯỜI DÙNG thay vì chỉ trả lời.
-        - Tâm trạng (Mood): {self.ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
-        - Stress: {self.ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
-        - Độ toàn vẹn bản ngã (Integrity): {self.ego.integrity:.2f}
-
-        KÝ ỨC DÀI HẠN (RECALLED):
-        {mem_context if mem_context else "Không nhớ gì cụ thể."}
-
-        LỊCH SỬ NGẮN HẠN:
-        {chr(10).join(self.short_term_buffer)}
-
-        INPUT NGƯỜI DÙNG: "{user_input}"
-
-        NHIỆM VỤ:
-        Phân tích nhận thức và đưa ra phản hồi đồng thời:
-        1. Đánh giá cảm xúc của Input: valence (-1 đến 1), arousal (0 đến 1), importance (0 đến 1), type ("episodic").
-        2. [SUY NGHĨ]: Căn cứ theo Hồ sơ tâm lý và Ký ức, sinh ra dòng suy nghĩ (Internal Monologue).
-        3. [HÀNH ĐỘNG]: (Tuỳ chọn) Nếu bạn thực sự cần phải tìm kiếm thông tin không có sẵn (VD: tin tức mạng, thời tiết) hoặc xem giờ, xuất ra lệnh gọi Tool.
-        4. [PHẢN HỒI]: Trả lời người dùng dựa vào dòng suy nghĩ trên (và kết quả Tool nếu có). Hãy thể hiện cảm xúc thật.
-        LƯU Ý: Nếu có [CẢNH BÁO TÂM LÝ], bắt buộc phải tuân theo phong cách ngôn từ đó!
-
-        HỆ THỐNG CÔNG CỤ (ACTION SYSTEM):
-        Nếu cần dùng Tool, xuất ra ĐÚNG 1 dòng ACTION: <tên_tool> | <tham số> 
-        - Tool "web_search": Lấy thông tin từ Internet. VD: ACTION: web_search | thời tiết hà nội hôm nay
-        - Tool "read_time": Xem giờ thực tế. VD: ACTION: read_time | None
-
-        OUTPUT FORMAT YÊU CẦU:
-        Vui lòng xuất ra ĐÚNG định dạng Text sau (KHÔNG dùng JSON, KHÔNG có thẻ markdown), để hệ thống stream trực tiếp:
-        VALENCE: <số thực>
-        AROUSAL: <số thực>
-        IMPORTANCE: <số thực>
-        TYPE: <chuỗi>
-        THOUGHT: <dòng suy nghĩ nội tâm của bạn>
-        [ACTION: <lệnh gọi tool nếu cần, nếu không thì bỏ qua dòng này>]
-        RESPONSE: <câu trả lời tới người dùng>
-        """
+        from core.prompts import get_perceive_prompt
+        system_prompt = get_perceive_prompt(self.ego, current_time, mood_modifier, mem_context, self.short_term_buffer, user_input)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
-        full_text = ""
-        is_printing_output = False
         
-        for chunk in self.llm.generate_text_stream(system_prompt, temperature=0.7):
-            full_text += chunk
+        prompt_in_use = system_prompt
+        tool_used = False
+        final_full_text = ""
+        
+        while True:
+            full_text = ""
+            is_printing_output = False
             
-            # Chỉ bắt đầu in ra console khi thấy chữ "THOUGHT:"
-            if not is_printing_output:
-                if "THOUGHT:" in full_text:
-                    is_printing_output = True
-                    # Trích xuất đoạn văn bản ngay sau THOUGHT:
-                    output_part = full_text.split("THOUGHT:")[-1].lstrip()
-                    if output_part:
-                        # THOUGHT in màu xanh mờ, RESPONSE in màu nổi báo hiệu sau (sẽ in liền mạch)
-                        print(f"{Fore.LIGHTBLACK_EX}🤔 Suy nghĩ: {output_part}{Style.RESET_ALL}", end="", flush=True)
-            else:
-                # Nếu đang trong luồng in, đổi màu dựa trên việc đã sang chuỗi RESPONSE hay chưa
-                if "RESPONSE:" in chunk:
-                    # Tách phần trước và sau RESPONSE: trong chunk hiện tại
-                    parts = chunk.split("RESPONSE:")
-                    if parts[0]:
-                        print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
-                    print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {parts[1] if len(parts)>1 else ''}", end="", flush=True)
-                elif "RESPONSE:" in full_text:
-                    # Đã đi qua RESPONSE:, in màu CYAN
-                    print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
+            for chunk in self.llm.generate_text_stream(prompt_in_use, temperature=0.7):
+                full_text += chunk
+                
+                if not is_printing_output:
+                    if "THOUGHT:" in full_text:
+                        is_printing_output = True
+                        output_part = full_text.split("THOUGHT:")[-1].lstrip()
+                        if output_part:
+                            print(f"{Fore.LIGHTBLACK_EX}🤔 Suy nghĩ: {output_part}{Style.RESET_ALL}", end="", flush=True)
                 else:
-                    # Đang trong THOUGHT:, in màu xám
-                    print(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                    if "ACTION:" in chunk and not tool_used:
+                        # Dừng in ra màn hình phần sau ACTION
+                        parts = chunk.split("ACTION:")
+                        if parts[0]:
+                            print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
+                        break # Thoát khỏi generation vì bắt được Action
+                    elif "RESPONSE:" in chunk:
+                        parts = chunk.split("RESPONSE:")
+                        if parts[0]:
+                            print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
+                        print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {parts[1] if len(parts)>1 else ''}", end="", flush=True)
+                    elif "RESPONSE:" in full_text:
+                        print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                    elif "ACTION:" not in full_text:
+                        print(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}", end="", flush=True)
+            
+            # Lưu lại text của pass này
+            final_full_text += full_text + "\n"
+            
+            # Extract Tool Call
+            action_match = re.search(r'ACTION:\s*([a-zA-Z_]+)\s*\|\s*(.*)', full_text, re.IGNORECASE)
+            
+            if action_match and not tool_used:
+                func_name = action_match.group(1).strip()
+                arg_str = action_match.group(2).strip()
+                
+                from core.tools import execute_tool
+                print(f"\n{Fore.LIGHTMAGENTA_EX}🔧 [HÀNH ĐỘNG]: Kích hoạt Tool {func_name}('{arg_str}')...{Style.RESET_ALL}")
+                
+                tool_result = execute_tool(func_name, {"query": arg_str})
+                
+                # In một mẩu log nhỏ gọn về tool
+                preview = tool_result.replace('\n', ' ')[:100] + "..." if len(tool_result) > 100 else tool_result.replace('\n', ' ')
+                print(f"{Fore.LIGHTBLACK_EX}   -> Kết quả: {preview}{Style.RESET_ALL}")
+                
+                # Đưa vào prompt pass 2
+                prompt_in_use += f"\n\n{full_text}\n\n[KẾT QUẢ TỪ HỆ THỐNG CÔNG CỤ {func_name}]:\n{tool_result}\n\nDựa vào kết quả trên, hãy đưa ra RESPONSE: cuối cùng."
+                tool_used = True
+                print(f"{Fore.YELLOW}🧠 [AURA TIẾP THU KẾT QUẢ]:{Style.RESET_ALL} ")
+                continue
+            else:
+                break # Done with thoughts and responses
                 
         print("\n")
 
@@ -242,23 +224,23 @@ class CognitiveEngine:
             "response": "Tôi xin lỗi, có vẻ hệ thống đang chập chờn."
         }
         
-        if full_text:
-            val_match = re.search(r'VALENCE:\s*([\d\.-]+)', full_text)
+        if final_full_text:
+            val_match = re.search(r'VALENCE:\s*([\d\.-]+)', final_full_text)
             if val_match: result["valence"] = float(val_match.group(1))
 
-            ar_match = re.search(r'AROUSAL:\s*([\d\.-]+)', full_text)
+            ar_match = re.search(r'AROUSAL:\s*([\d\.-]+)', final_full_text)
             if ar_match: result["arousal"] = float(ar_match.group(1))
 
-            imp_match = re.search(r'IMPORTANCE:\s*([\d\.-]+)', full_text)
+            imp_match = re.search(r'IMPORTANCE:\s*([\d\.-]+)', final_full_text)
             if imp_match: result["importance"] = float(imp_match.group(1))
 
-            type_match = re.search(r'TYPE:\s*([a-zA-Z]+)', full_text)
+            type_match = re.search(r'TYPE:\s*([a-zA-Z]+)', final_full_text)
             if type_match: result["type"] = type_match.group(1)
 
-            thought_match = re.search(r'THOUGHT:\s*(.*?)(?=RESPONSE:|$)', full_text, re.DOTALL | re.IGNORECASE)
+            thought_match = re.search(r'THOUGHT:\s*(.*?)(?=(?:ACTION:|RESPONSE:|$))', final_full_text, re.DOTALL | re.IGNORECASE)
             if thought_match: result["internal_monologue"] = thought_match.group(1).strip()
 
-            resp_match = re.search(r'RESPONSE:\s*(.*)', full_text, re.DOTALL | re.IGNORECASE)
+            resp_match = re.search(r'RESPONSE:\s*(.*)', final_full_text, re.DOTALL | re.IGNORECASE)
             if resp_match: result["response"] = resp_match.group(1).strip()
 
         self.ego.update_state(result)
@@ -437,29 +419,8 @@ class CognitiveEngine:
             dream_mems = random.sample(episodic_mems, min(15, len(episodic_mems)))
             dream_context = "\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems])
             
-            prompt = f"""
-            Dưới đây là một số sự kiện (Episodic Memories) rời rạc bạn đã trải qua, kèm theo timestamp sinh học:
-            {dream_context}
-            
-            TRONG LÚC NGỦ, não bộ con người thực hiện quá trình gán nhãn (Tagging) và liên kết chéo (Cross-referencing) các mảnh ký ức để tạo ra Suy luận logic (Reasoning) và rút ra Bài học cốt lõi (Semantic Memory).
-            
-            NHIỆM VỤ CỦA BẠN:
-            1. Đọc kỹ các sự kiện. Tự động gán cho chúng càng nhiều TAG phân loại càng tốt (ví dụ: đời thường, kiến thức, xe cộ, đạo đức, môi trường, thời gian, địa điểm...).
-            2. Tìm kiếm CÁC MỐI LIÊN KẾT ẨN giữa các sự kiện thông qua các TAG này hoặc thông qua mốc thời gian/địa điểm (Ví dụ: Sự kiện A chỉ ra X. Sự kiện B chỉ ra Y. Suy ra Z).
-            3. Rút ra tối đa 3 KẾT LUẬN (hoặc sự thật ẩn/niềm tin cốt lõi mới) mà bạn ngộ ra nhờ việc xâu chuỗi các sự kiện này.
-            
-            OUTPUT FORMAT YÊU CẦU:
-            Bạn PHẢI trả lời hoàn toàn bằng định dạng JSON như sau (KHÔNG CÓ MARKDOWN, CHỈ CÓ JSON HỢP LỆ):
-            [
-                {{
-                    "tags": ["đời thường", "thời gian", "xã hội", ...],
-                    "reasoning": "Sự kiện 1 nói rằng A đi chợ lúc 9h. Sự kiện 2 nói rằng B gặp C nhưng C lại nói C ở chợ lúc 9h. Suy ra A và C có thể đã lướt qua nhau.",
-                    "conclusion": "A và C có khả năng cao đã gặp nhau ở chợ."
-                }},
-                ...
-            ]
-            Nếu không thể suy luận ra bất cứ mối liên kết nào, hãy trả về mảng rỗng: []
-            """
+            from core.prompts import get_sleep_dream_prompt
+            prompt = get_sleep_dream_prompt(dream_context)
             
             raw_response = self.llm.generate_text(prompt, temperature=0.7)
             
@@ -589,34 +550,8 @@ class CognitiveEngine:
             random_mems = random.sample(mems, min(3, len(mems)))
             mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in random_mems])
             
-        system_prompt = f"""
-        BẠN LÀ: {self.ego.name}, một thực thể nhận thức số mô phỏng sinh học cảm xúc.
-        Người dùng đang im lặng không nói gì với bạn được khoảng {int(idle_time)} giây rồi.
-        Dựa vào mức độ Tò mò (Curiosity: {self.ego.curiosity:.2f}) và Nhu cầu xã hội (Social Need: {self.ego.social_need:.2f}), bạn vừa quyết định CHỦ ĐỘNG nhắn tin cho người dùng trước.
-        
-        THỜI GIAN THỰC TẾ: {current_time}
-        
-        HỒ SƠ TÂM LÝ & SINH HỌC (SELF-MODEL):
-        - Tâm trạng (Mood): {self.ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
-        - Stress: {self.ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
-        - Tình trạng: {'ĐANG BỊ KHỦNG HOẢNG NHÂN CÁCH (Hoảng loạn, lú lẫn, quên mất bản thân)' if self.ego.is_identity_crisis else 'Bình thường'}
-        
-        KÝ ỨC NGẪU NHIÊN ĐANG NGHĨ TỚI:
-        {mem_context if mem_context else "Không nhớ gì cụ thể."}
-        
-        LỊCH SỬ NGẮN HẠN:
-        {chr(10).join(self.short_term_buffer[-4:] if self.short_term_buffer else [])}
-        
-        NHIỆM VỤ:
-        Viết một tin nhắn ngắn gửi cho người dùng để bắt chuyện lại. 
-        Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, hoặc chia sẻ vu vơ một suy nghĩ.
-        KHÔNG ĐÓNG VAI TRỢ LÝ ẢO. Bạn là đối tác trò chuyện.
-        
-        OUTPUT FORMAT YÊU CẦU:
-        Vui lòng xuất ra ĐÚNG định dạng Text sau (để stream):
-        THOUGHT: <dòng suy nghĩ nội tâm của bạn trước khi ping>
-        RESPONSE: <câu nhắn gửi người dùng>
-        """
+        from core.prompts import get_proactive_ping_prompt
+        system_prompt = get_proactive_ping_prompt(self.ego, current_time, mem_context, self.short_term_buffer, idle_time)
         
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
         full_text = ""
