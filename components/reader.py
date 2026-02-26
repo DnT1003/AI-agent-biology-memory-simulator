@@ -1,6 +1,5 @@
 import random
 import time
-from bs4 import BeautifulSoup
 from DrissionPage import ChromiumPage, ChromiumOptions
 
 class DoclnReader:
@@ -35,17 +34,17 @@ class DoclnReader:
             # Cần chờ 1 xíu để JS tải danh sách truyện
             time.sleep(3)
             
-            html = self.page.html
-            soup = BeautifulSoup(html, 'html.parser')
-            novel_links = soup.select('.thumb-wrapper a')
-            if novel_links:
-                chosen = random.choice(novel_links)
-                href = chosen['href']
-                import re
-                match = re.search(r'(/truyen/[^/]+)', href)
-                if match:
-                    return self.base_url + match.group(1)
-                return self.base_url + href
+            first_element = self.page.ele('.thumb-wrapper a', timeout=10)
+            if first_element:
+                links = self.page.eles('.thumb-wrapper a')
+                if links:
+                    chosen = random.choice(links)
+                    href = chosen.attr('href')
+                    import re
+                    match = re.search(r'(/truyen/[^/]+)', href)
+                    if match:
+                        return self.base_url + match.group(1)
+                    return href
         except Exception as e:
             print(f"[Reader] Lỗi lấy truyện ngẫu nhiên: {e}")
         return None
@@ -56,16 +55,14 @@ class DoclnReader:
             self.page.get(novel_url)
             time.sleep(2)
             
-            html = self.page.html
-            soup = BeautifulSoup(html, 'html.parser')
-            title_tag = soup.select_one('.series-name a')
+            title_tag = self.page.ele('.series-name a', timeout=10)
             novel_title = title_tag.text.strip() if title_tag else "Unknown Novel"
             
             chapters = []
-            for a in soup.select('.chapter-name a'):
+            for a in self.page.eles('.chapter-name a'):
                 chapters.append({
                     "title": a.text.strip(),
-                    "url": self.base_url + a['href']
+                    "url": a.attr('href')
                 })
             return novel_title, chapters
         except Exception as e:
@@ -78,14 +75,12 @@ class DoclnReader:
             self.page.get(chapter_url)
             time.sleep(2)
             
-            html = self.page.html
-            soup = BeautifulSoup(html, 'html.parser')
-            content_div = soup.select_one('#chapter-content')
+            content_div = self.page.ele('#chapter-content', timeout=20)
             if content_div:
-                for tag in content_div(['script', 'style', 'iframe']):
-                    tag.decompose()
-                paragraphs = [p.text.strip() for p in content_div.find_all('p') if p.text.strip()]
-                return "\n\n".join(paragraphs) if paragraphs else content_div.text.strip()
+                raw_text = content_div.text
+                if raw_text:
+                    paragraphs = [p.strip() for p in raw_text.split('\n') if p.strip()]
+                    return "\n\n".join(paragraphs)
                     
         except Exception as e:
              print(f"[Reader] Lỗi tải nội dung chương: {e}")
