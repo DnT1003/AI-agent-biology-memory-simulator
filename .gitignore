@@ -11,6 +11,18 @@ __pycache__/
 error.log
 outputs/
 data/
+gitlog.txt
+tmp_git_log.txt
+test_moods_output.txt
+
+# Tests and Output files
+tests/
+output*.txt
+test_output.txt
+*.in
+test_*.py
+test.py
+simulate_aura.py
 
 # IDEs
 .vscode/
