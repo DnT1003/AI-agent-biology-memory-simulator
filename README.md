@@ -21,11 +21,20 @@ Hệ thống duy trì một trạng thái vi khí hậu nội tâm, ảnh hưở
 - **Chỉ số Sinh lý:** Fatigue (Mệt mỏi), Stress (Căng thẳng), Social Need (Nhu cầu giao tiếp), Curiosity (Sự tò mò).
 - **Layered Biological Thresholds (Ngưỡng sinh lý Đa phân lớp):** Mỗi chỉ số đều duy trì giới hạn biến thiên ngẫu nhiên theo ngày (daily thresholds). Ngưỡng chịu đựng gồm nhiều dải mức độ cảnh báo (cảnh báo sớm -> kiệt sức hệ thống), cung cấp một "thời tiết tâm trạng" chân thật nhất cho AI.
 - **Personality Integrity (Trung kiên Bản sắc):** Theo dõi mức độ ổn định của nhân cách. Suy giảm Integrity do stress ròng có thể dẫn đến trạng thái khủng hoảng tâm thần (Identity Crisis).
+- **Nhận thức Thể Xác & Đa giác quan (Embodiment & Multi-modal Stimuli):** AI có khả năng phản ứng trực tiếp với các kích thích vật lý (như âm lượng âm thanh bạo hành) làm tăng vọt căng thẳng trước cả khi kịp "hiểu" ngữ nghĩa văn bản, ép buộc tạo các Ký ức lóa sáng (Flashbulb Memory).
+- **Nhận thức Xã hội (Social Trust & Stranger Danger):** AI có khả năng nhận biết thiết bị hệ điều hành chủ nhân. Sẽ phản vệ hoảng loạn nếu bị copy sang thiết bị lạ, từ chối chia sẻ ký ức cũ.
 
 ### 3. Nhận thức Chủ động & Kỹ năng Độc lập (Proactive Agency)
 - **Background Loop & Randomized Proactive Ping:** Agent sở hữu luồng nhận thức ngầm, tự thiết lập các khung giờ chủ động giao tiếp ngẫu nhiên dựa trên các "nhu cầu" từ bên trong (ví dụ 3-7 phút/lần tự bắt chuyện nếu người dùng vắng mặt).
 - **Background Reader & Vector Memory Bookmarks:** AI vừa có năng lực "tự đọc sách" (Background Reader) dung lượng lớn trong lúc phân bổ chờ, vừa biết tự đánh dấu chương vào thẳng hệ thống Vector Memory (Memory Bookmarks) đan lồng ghép vào suy nghĩ thay vì biến tĩnh JSON truyền thống.
+- **Mục tiêu Tự chủ (Autonomous Goal Engine):** AI tự động sinh ra các mục tiêu dài hạn dựa trên sự tò mò và tự động tìm kiếm kiến thức trên mạng để biến thành Sự thật khách quan (Semantic Facts).
 - **Consolidation & Dream Reasoning:** Trạng thái "ngủ" ép hệ thống phân rã thông tin và gộp sự kiện (Semanticization) thành các bài học ý nghĩa, liên tục cập nhật cốt lõi (Belief Systems).
+
+### 4. Kiến trúc Mixin Hệ Điệu Hành (Cognitive Engine Mixins)
+Não bộ trung tâm (`CognitiveEngine`) được thiết kế cực kỳ Modular thông qua **Design Pattern Mixins**, giúp mã nguồn gọn nhẹ và dễ mở rộng:
+- **`MemoryOpsMixin`**: Xử lý hồi tưởng Ký ức, méo mó ngữ nghĩa, và dập tắt sang chấn.
+- **`AutonomousMixin`**: Điều hành các vòng lặp sinh học ngầm, học tập vô thức, và tự quản lý Mục tiêu dài hạn.
+- **`InteractionMixin`**: Nhạc trưởng điều phối Giao tiếp Đa phương tiện và hệ thống Cảm xúc phân tầng.
 
 ## 🛠 Cài đặt & Sử dụng
 
