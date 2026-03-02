@@ -21,6 +21,9 @@ class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
         self.last_interaction_time = time.time()
         self.is_thinking = False
         
+        from core.tools import get_skill_registry
+        self.skills = get_skill_registry()
+        
         if not os.path.exists("outputs"):
             os.makedirs("outputs")
         self.load_short_term_memory()

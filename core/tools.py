@@ -2,6 +2,7 @@ import urllib.request
 import urllib.parse
 import json
 from bs4 import BeautifulSoup
+from core.skills import Skill, SkillRegistry
 
 def web_search(query: str) -> str:
     """Tự động tìm kiếm trên DuckDuckGo Lite bằng HTTP truyền thống (không cần API Key)."""
@@ -71,4 +72,23 @@ def execute_tool(func_name: str, args: dict) -> str:
         return web_search(args.get("query", ""))
     elif func_name == "read_time":
         return read_time()
-    return "Lỗi: Không tìm thấy công cụ này."
+
+def get_skill_registry() -> SkillRegistry:
+    """Khởi tạo và trả về SkillRegistry với các kỹ năng mặc định."""
+    registry = SkillRegistry()
+    
+    registry.register(Skill(
+        name="web_search",
+        description="Tìm kiếm thông tin trực tuyến trên Internet. Dùng khi cần tra cứu kiến thức khách quan, tin tức, thời tiết, sự kiện thực tế.",
+        usage_format="ACTION: web_search | <câu truy vấn>",
+        func=web_search
+    ))
+    
+    registry.register(Skill(
+        name="read_time",
+        description="Đọc giờ hệ thống hiện tại.",
+        usage_format="ACTION: read_time | now",
+        func=lambda x: read_time()
+    ))
+    
+    return registry

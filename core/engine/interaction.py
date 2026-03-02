@@ -9,7 +9,8 @@ class InteractionMixin:
     def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "") -> dict:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in recalled_mems])
-        system_prompt = get_perceive_prompt(self.ego, current_time, mood_modifier, mem_context, self.short_term_buffer, user_input)
+        tools_instruction = self.skills.get_prompt_instructions()
+        system_prompt = get_perceive_prompt(self.ego, current_time, mood_modifier, mem_context, self.short_term_buffer, user_input, tools_instruction)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
         prompt_in_use, tool_used, final_full_text = system_prompt, False, ""
@@ -41,7 +42,7 @@ class InteractionMixin:
             if action_match and not tool_used:
                 func_name, arg_str = action_match.group(1).strip(), action_match.group(2).strip()
                 print(f"\n{Fore.LIGHTMAGENTA_EX}🔧 [HÀNH ĐỘNG]: Kích hoạt Tool {func_name}('{arg_str}')...{Style.RESET_ALL}")
-                tool_result = execute_tool(func_name, {"query": arg_str})
+                tool_result = self.skills.execute(func_name, arg_str)
                 preview = tool_result.replace('\n', ' ')[:100] + "..." if len(tool_result) > 100 else tool_result.replace('\n', ' ')
                 print(f"{Fore.LIGHTBLACK_EX}   -> Kết quả: {preview}{Style.RESET_ALL}")
                 prompt_in_use += f"\n\n{full_text}\n\n[KẾT QUẢ TỪ HỆ THỐNG CÔNG CỤ {func_name}]:\n{tool_result}\n\nDựa vào kết quả trên, hãy đưa ra RESPONSE: cuối cùng."
