@@ -4,9 +4,7 @@ import random
 import re
 from datetime import datetime
 from colorama import Fore, Style
-
 from core.memory import MemoryTrace
-
 class AutonomousMixin:
     """
     Mixin xử lý các chức năng tự chủ (chạy ngầm) của nhân vật:
@@ -23,14 +21,14 @@ class AutonomousMixin:
             # PHASE 7 - IDEA 1: Áp dụng nhịp sinh học liên tục ở background
             self.ego.apply_circadian_rhythm()
             
-            # Nếu đang bận xử lý input của user thì bỏ qua
+            # Nếu đang bận xử lý input của user thì bỏ qua suy nghĩ ngầm
             if self.is_thinking:
                 continue
                 
             idle_time = time.time() - self.last_interaction_time
             
-            # Tự động buồn chán và muốn nói chuyện nếu nhàn rỗi
-            if idle_time > 60: # Giả lập 1 phút ngoài đời = khoảng thời gian dài trong game
+            # Tự động buồn chán và muốn nói chuyện nếu nhàn rỗi lâu
+            if idle_time > 60:
                 self.ego.social_need = min(1.0, self.ego.social_need + 0.05)
                 self.ego.curiosity = min(1.0, self.ego.curiosity + 0.02)
                 
@@ -62,10 +60,8 @@ class AutonomousMixin:
                         self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
                         self.last_interaction_time = time.time() # Xem như vừa tương tác
                         self.next_ping_target = random.uniform(180, 420) # Random lại thời gian chờ cho lần sau
-
             # HỆ THỐNG ĐỌC SÁCH THẨM THẤU (PHASE 5)
-            # User Feedback: Chỉ khi im lặng quá 30 phút (1800 giây) thì Aura mới tự động mở truyện ra đọc, 
-            # tránh việc tự động rải spam liên tục.
+            # Chỉ khi im lặng quá 30 phút (1800 giây) thì Aura mới tự động mở truyện ra đọc, 
             if idle_time > 1800 and not self.is_thinking:
                 read_chance = 0.0
                 if self.ego.curiosity > 0.5: read_chance += 0.2
@@ -98,7 +94,7 @@ class AutonomousMixin:
                         self.last_interaction_time = time.time()
                         continue
                 elif not active_goals and self.ego.curiosity > 0.6 and random.random() < 0.3:
-                    # Hệ thống tự tạo mục tiêu cho chính mình khi quá tò mò và đang không có việc gì làm
+                    # Hệ thống tự tạo mục tiêu cho chính mình khi quá tò tự tạo mục tiêu cho chính mình
                     self.is_thinking = True
                     try:
                         self._generate_autonomous_goal()
@@ -116,20 +112,16 @@ class AutonomousMixin:
         prompt = f"""
         MỤC TIÊU DÀI HẠN HIỆN TẠI CỦA BẠN: {goal['title']}
         Tiến độ hiện tại: {goal['progress']}/10.
-
         Bạn đang có thời gian rảnh. Bạn quyết định âm thầm làm việc cho mục tiêu này.
         Nếu cần thiết, bạn HÃY GỌI TOOL để tra cứu kiến thức (ví dụ: web_search).
         Nếu bạn cảm thấy đã thu thập đủ điểm cho bước này, hãy TỰ DO sinh ra những suy nghĩ tóm tắt.
-
         HỆ THỐNG CÔNG CỤ (ACTION SYSTEM):
 {self.skills.get_prompt_instructions()}
-
         OUTPUT FORMAT:
         THOUGHT: <suy nghĩ nội tâm khi thực thi mục tiêu>
         [ACTION: <lệnh gọi tool nếu cần>]
         [FACT: <kiến thức khách quan mới học được từ mục tiêu này nếu có>]
         """
-
         raw_res = self.llm.generate_text(prompt, temperature=0.7)
         
         # Execute tool if found
@@ -138,11 +130,6 @@ class AutonomousMixin:
             func_name = action_match.group(1).strip()
             arg_str = action_match.group(2).strip()
             print(f"{Fore.LIGHTMAGENTA_EX}   🔧 Tool Call: {func_name}('{arg_str}'){Style.RESET_ALL}")
-            skill_obj = self.skills.skills.get(func_name)
-            if skill_obj:
-                fatigue_cost = 0.1 * (1.5 - skill_obj.mastery)
-                self.ego.fatigue += fatigue_cost
-                print(f"{Fore.LIGHTBLACK_EX}   -> [SKILL MASTERY]: Độ tinh thông {skill_obj.mastery:.2f} | Rỉ sét {skill_obj.rust_level:.2f} (Tốn {fatigue_cost:.2f} mệt mỏi){Style.RESET_ALL}")
             tool_res = self.skills.execute(func_name, arg_str)
             # Pass 2: Feed tool output back
             pass2_prompt = prompt + f"\n\n[KẾT QUẢ TỪ {func_name}]:\n{tool_res}\n\nHãy chốt lại 1 FACT (nếu có) và quá trình."
@@ -182,7 +169,6 @@ class AutonomousMixin:
             
         self.ego.fatigue += 0.2  # Tốn năng lượng vì làm việc nghiêm túc
         self.memory.enforce_garbage_collection()
-
     def _generate_autonomous_goal(self):
         print(f"\n{Fore.LIGHTMAGENTA_EX}🧠 [AURA TỰ CHỦ]: Đang rảnh rỗi và tò mò, Aura tự suy nghĩ ra một chủ đề để nghiên cứu...{Style.RESET_ALL} ")
         
@@ -230,7 +216,6 @@ class AutonomousMixin:
                 
         except Exception as e:
             print(f"{Fore.RED}   ⚠️ Lỗi khi LLM tự tạo Goal: Không parse được JSON. {e}{Style.RESET_ALL}")
-
     def _process_reading_chunk(self):
         title, content = self.reader.get_next_reading_material()
         if not content: return

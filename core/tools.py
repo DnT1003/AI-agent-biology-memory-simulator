@@ -1,12 +1,12 @@
 import urllib.request
 import urllib.parse
+import json
 from bs4 import BeautifulSoup
-from core.skills import SkillRegistry, Skill
 
 def web_search(query: str) -> str:
     """Tự động tìm kiếm trên DuckDuckGo Lite bằng HTTP truyền thống (không cần API Key)."""
     try:
-        url = 'https://html.duckduckgo.com/html/?q=' + urllib.parse.quote(query.strip())
+        url = 'https://html.duckduckgo.com/html/?q=' + urllib.parse.quote(query)
         req = urllib.request.Request(
             url, 
             data=None, 
@@ -32,23 +32,43 @@ def web_search(query: str) -> str:
     except Exception as e:
         return f"Lỗi tìm kiếm: {e}"
 
-def read_time(args: str = "") -> str:
+def read_time() -> str:
     """Trả về thời gian hiện tại."""
     from datetime import datetime
     return datetime.now().strftime("%H:%M:%S %A, %d %B %Y")
 
-def get_skill_registry() -> SkillRegistry:
-    registry = SkillRegistry()
-    registry.register(Skill(
-        name="web_search",
-        description="Tìm kiếm mạng lấy sự thật, tin tức",
-        usage_format="ACTION: web_search | thời tiết hà nội hôm nay",
-        func=web_search
-    ))
-    registry.register(Skill(
-        name="read_time",
-        description="Đọc đồng hồ hệ thống",
-        usage_format="ACTION: read_time | None",
-        func=read_time
-    ))
-    return registry
+# Khai báo cấu trúc Function Declaration cho Google GenAI
+TOOLS_DECLARATION = [
+    {
+        "name": "web_search",
+        "description": "Tìm kiếm thông tin trực tuyến trên Internet. Sử dụng công cụ này khi người dùng hỏi các thông tin thực tế, kiến thức khách quan, tình hình thời tiết, sự kiện đang diễn ra hoặc bất kỳ thông tin nào bạn không biết chắc chắn.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Câu truy vấn tìm kiếm ngắn gọn (Ví dụ: 'Thời tiết Hà Nội hôm nay', 'Tỷ giá USD', 'Ai trúng cử tổng thống Mỹ')"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_time",
+        "description": "Đọc đồng hồ hệ thống. Sử dụng khi cần biết chính xác ngày giờ hiện tại, thứ mấy.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+            "required": []
+        }
+    }
+]
+
+def execute_tool(func_name: str, args: dict) -> str:
+    """Thực thi function dựa trên tên"""
+    print(f"\n[HỆ THỐNG]: Đang thực thi Tool {func_name}({args})...")
+    if func_name == "web_search":
+        return web_search(args.get("query", ""))
+    elif func_name == "read_time":
+        return read_time()
+    return "Lỗi: Không tìm thấy công cụ này."

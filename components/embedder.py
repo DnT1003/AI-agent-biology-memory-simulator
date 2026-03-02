@@ -10,47 +10,34 @@ class Embedder:
         self.client = genai.Client(api_key=Config.API_KEY)
         self._cache = {} # Bộ đớ đệm Vector
 
-    def encode(self, text: Union[str, List[str]]) -> Union[np.ndarray, List[np.ndarray]]:
+    def encode(self, text: Union[str, List[str]]) -> np.ndarray:
         try:
+            # Nếu gọi mảng, lấy item đầu tiên để check cache
+            input_text = text if isinstance(text, str) else text[0]
+            
+            if input_text in self._cache:
+                return self._cache[input_text]
+                
+            # Nếu truyền vào là string lẻ, Google GenAI cũng chấp nhận. 
+            # Nhưng để cho chắc chắn mapping sang numpy, ta bọc nó lại thành mảng.
             if isinstance(text, str):
-                if text in self._cache:
-                    return self._cache[text]
-                
-                response = self.client.models.embed_content(
-                    model=Config.EMBEDDING_MODEL,
-                    contents=text
-                )
-                vec = np.array(response.embeddings[0].values)
-                self._cache[text] = vec
-                return vec
+                text_list = [text]
             else:
-                # Handle list of strings
-                results = [None] * len(text)
-                uncached_texts = []
-                uncached_indices = []
+                text_list = text
                 
-                for i, t in enumerate(text):
-                    if t in self._cache:
-                        results[i] = self._cache[t]
-                    else:
-                        uncached_texts.append(t)
-                        uncached_indices.append(i)
-                        
-                if uncached_texts:
-                    response = self.client.models.embed_content(
-                        model=Config.EMBEDDING_MODEL,
-                        contents=uncached_texts
-                    )
-                    for idx, emb in zip(uncached_indices, response.embeddings):
-                        vec = np.array(emb.values)
-                        self._cache[uncached_texts[uncached_indices.index(idx)]] = vec
-                        results[idx] = vec
-                        
-                return np.array(results)
+            response = self.client.models.embed_content(
+                model=Config.EMBEDDING_MODEL,
+                contents=text_list
+            )
+            
+            # response.embeddings là 1 mảng các object. Mỗi object có .values là list float 768 chiều.
+            # Ta lấy mảng đầu tiên nếu input là string đơn (như cách hệ thống đang dùng cho 1 session suy nghĩ).
+            embedding_values = response.embeddings[0].values
+            
+            vec = np.array(embedding_values)
+            self._cache[input_text] = vec
+            return vec
         except Exception as e:
             print(f"{Fore.RED}⚠️ Lỗi Gemini Embedding: {e}{Style.RESET_ALL}")
             # Trả về zero vector 768 chiều để tránh crash hệ thống (fallback)
-            if isinstance(text, str):
-                return np.zeros(768)
-            else:
-                return np.zeros((len(text), 768))
+            return np.zeros(768)

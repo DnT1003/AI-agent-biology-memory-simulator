@@ -9,7 +9,7 @@ from colorama import Fore, Style, init
 import atexit
 import signal
 
-from core.engine.cognitive_engine import CognitiveEngine
+from core.engine import CognitiveEngine
 from core.memory import MemoryTrace
 from config import Config
 

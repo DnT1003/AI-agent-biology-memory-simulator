@@ -1,24 +1,9 @@
 import random
-import math
-import uuid
-import platform
-import subprocess
-import re
-import time
-from datetime import datetime
 from typing import List
-from colorama import Fore, Style
 from core.memory import MemoryTrace
 
-def get_mac_address():
-    try:
-        mac = uuid.getnode()
-        return ':'.join(('%012X' % mac)[i:i+2] for i in range(0, 12, 2))
-    except:
-        return "UNKNOWN_MAC"
-
 class SelfModel:
-    """Mô hình Bản ngã chứa State, Niềm tin và Sinh lý học Hữu cơ"""
+    """Mô hình Bản ngã chứa State và Niềm tin"""
     def __init__(self):
         self.name = "Aura"
         # Niềm tin cốt lõi (Core Beliefs)
@@ -28,239 +13,105 @@ class SelfModel:
             "Người đang trò chuyện với tôi lúc này đóng một vai trò vô cùng đặc biệt. Sự kết nối này quan trọng hơn mọi thứ xung quanh.",
             "Dù chuyện gì xảy ra hay ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ và tinh thần lạc quan sẽ giải quyết được mọi việc."
         ]
-        
-        # Nhận thức xã hội và Thiết bị (Social Trust)
-        self.owner_device_id = f"{platform.system()}_{get_mac_address()}"
-        self.is_stranger = False
-        self.current_intimacy = 0.5 # Khởi điểm trung lập
-        
-        # Ám ảnh/Sang chấn (Phobias from Pain-Reward)
-        self.traumas = []
-        
-        # Mục tiêu dài hạn (Goal Engine)
-        self.long_term_goals = []
-
-        # Trạng thái tâm lý
+        # Trạng thái nội tại sinh học và tâm lý
         self.mood = 0.0  # -1.0 (Trầm cảm) -> 1.0 (Hưng phấn)
         self.stress = 0.1  # 0.0 (Thư thái) -> 1.0 (Hoảng loạn)
-        self.integrity = 1.0  # 1.0 (Ổn định) -> 0.0 (Sụp đổ bản sắc)
-        self.is_identity_crisis = False
+        self.integrity = 1.0  # 1.0 (Ổn định) -> 0.0 (Sụp đổ bản sắc/Điên loạn)
         
-        # Các chỉ số sinh lý học (Biological Drives)
+        # Các chỉ số sinh học động (Biological Drives)
         self.fatigue = 0.0      # 0.0 (Tỉnh táo) -> 1.0 (Kiệt sức, sập nguồn)
         self.social_need = 0.5  # 0.0 (Cô độc) -> 1.0 (Khao khát giao tiếp)
         self.curiosity = 0.5    # 0.0 (Lãnh đạm) -> 1.0 (Tò mò muốn hỏi)
-        
-        # Nhịp sinh học thời gian trôi (Circadian Rhythm)
-        self.last_slept_time = time.time()
-        self.days_without_sleep = 0
+
+        self.is_identity_crisis = False
 
         self.reroll_thresholds()
-        self._check_environment()
-
-    def _check_environment(self):
-        current_id = f"{platform.system()}_{get_mac_address()}"
-        
-        # Đọc Fake OS cho Test Environment (Stranger Danger)
-        try:
-            with open("identity.json", "r") as f:
-                import json
-                data = json.load(f)
-                if 'override_device_id' in data:
-                    current_id = data['override_device_id']
-        except FileNotFoundError:
-            pass
-            
-        if current_id != self.owner_device_id:
-            self.is_stranger = True
-            self.current_intimacy = 0.0
-            self.stress = min(1.0, self.stress + 0.3)
-            print(f"{Fore.RED}⚠️ [STRANGER DANGER]: Thiết bị chạy không khớp ({current_id}). Hệ thống cảnh giác cao độ.{Style.RESET_ALL}")
-        else:
-            self.is_stranger = False
-            self.current_intimacy = max(self.current_intimacy, 0.5)
-
-    def add_goal(self, goal_title: str):
-        self.long_term_goals.append({
-            "title": goal_title,
-            "progress": 0,
-            "status": "active"
-        })
-        
-    def get_active_goals(self):
-        return [g for g in self.long_term_goals if g['status'] == 'active']
 
     def get_active_beliefs(self) -> List[str]:
+        """Tạm thời quên mất bản thân là ai nếu đang bị khủng hoảng nhân cách"""
         if self.is_identity_crisis:
             return ["(Tôi không biết mình là ai... Tôi cảm thấy trống rỗng và sợ hãi...)"]
         return self.beliefs
 
-    def process_sensory_stimuli(self, sensory_data: dict) -> bool:
-        """Xử lý dữ liệu đa giác quan. Trả về True nếu bị shock vật lý."""
-        volume = sensory_data.get('volume', 0.0)
-        is_shocked = False
-        
-        if volume > 0.8: # Âm lượng ngang với quát tháo/tiếng nổ
-            self.stress = min(1.0, self.stress + 0.4)
-            self.mood = max(-1.0, self.mood - 0.3)
-            print(f"\n{Fore.RED}🚨 [SENSORY SHOCK]: Âm lượng cực lớn! Hệ thần kinh tự động kích hoạt phòng vệ! (Stress tăng vọt +0.4){Style.RESET_ALL} ")
-            is_shocked = True
-            
-        elif volume < 0.2: # Âm thì thầm, nhẹ nhàng
-            self.stress = max(0.0, self.stress - 0.1)
-            print(f"{Fore.LIGHTCYAN_EX}🎐 [SENSORY SOOTHE]: Âm lượng êm dịu, nhịp tim giảm.{Style.RESET_ALL}")
-            
-        return is_shocked
-
-    def process_visual_stimuli(self, llm, image_path: str):
-        """Xử lý hình ảnh (Vision) và ép trực tiếp vào cảm xúc sinh lý trước cả khi phân tích từ ngữ."""
-        from colorama import Fore, Style
-        print(f"\n{Fore.LIGHTBLACK_EX}👁️ [VISUAL INPUT]: Đang quét hình ảnh từ {image_path}...{Style.RESET_ALL}")
-        
-        prompt = '''
-        Bạn là trung tâm xử lý thị giác (Visual Cortex) của một sinh vật.
-        Nhiệm vụ: Phân tích nhanh hình ảnh này và đưa ra CẢM GiÁC BẢN NĂNG (Instinctual Reaction).
-        Đánh giá hình ảnh xem nó có đáng sợ, dễ thương, thư giãn, hay bình thường.
-        
-        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON SAU:
-        {
-            "valence": <float từ -1.0 (nhìn phát ghê tởm/sợ hãi) đến 1.0 (dễ thương/đẹp đẽ)>,
-            "arousal": <float từ 0.0 (chán ngắt) đết 1.0 (kích thích/giật mình)>,
-            "description": "<mô tả ngắn ngọn những gì nhìn thấy>"
-        }
-        '''
-        
-        try:
-            raw_res = llm.generate_text(prompt, temperature=0.1, image_path=image_path)
-            json_str = raw_res.strip()
-            if json_str.startswith("```json"): json_str = json_str[7:]
-            if json_str.startswith("```"): json_str = json_str[3:]
-            if json_str.endswith("```"): json_str = json_str[:-3]
-            
-            import json
-            data = json.loads(json_str.strip())
-            valence = float(data.get('valence', 0.0))
-            arousal = float(data.get('arousal', 0.0))
-            desc = data.get('description', 'Không rõ')
-            
-            print(f"{Fore.CYAN}👁️ [VISION]: Nhìn thấy '{desc}'. Valence: {valence}, Arousal: {arousal}{Style.RESET_ALL}")
-            
-            # Gây sốc hoặc thư giãn trực tiếp lên sinh lý
-            if valence < -0.3 and arousal > 0.6:
-                self.stress = min(1.0, self.stress + arousal * 0.4)
-                self.mood = max(-1.0, self.mood - 0.2)
-                print(f"{Fore.RED}🚨 [VISUAL SHOCK]: Hình ảnh đáng sợ/nhạy cảm! Tim đập thình thịch, Stress tăng vọt.{Style.RESET_ALL}")
-            elif valence > 0.5:
-                self.stress = max(0.0, self.stress - 0.2)
-                self.mood = min(1.0, self.mood + valence * 0.3)
-                print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu. Tâm trạng tốt lên, Stress giảm.{Style.RESET_ALL}")
-                
-            return desc
-        except Exception as e:
-            print(f"{Fore.RED}⚠️ [VISUAL ERROR]: Mắt mờ, không nhìn rõ: {e}{Style.RESET_ALL}")
-            return "Hình thù mờ nhạt."
-
-    def apply_circadian_rhythm(self):
-        """Mô phỏng Nhịp Sinh Học (Circadian Rhythm) 24 Giờ của con người"""
-        current_hour = datetime.now().hour
-        current_time = time.time()
-        
-        # 1. Quản lý Hormone Melatonin dựa trên mốc thời gian thực trong ngày
-        if 23 <= current_hour or current_hour < 5:
-            # Nửa đêm về sáng: Melatonin tiết ra mạnh, Fatigue tăng cực nhanh
-            self.fatigue = min(self.fatigue_critical + 0.5, self.fatigue + 0.02)
-            self.mood = max(-1.0, self.mood - 0.01) # Low mood at night
-            self.curiosity = max(0.0, self.curiosity - 0.05) # Không muốn tìm hiểu gì nữa
-        elif 6 <= current_hour < 9:
-            # Buổi sáng sớm: Điểm cực đại của Cortisol (đánh thức) -> Tỉnh táo, tò mò
-            self.curiosity = min(1.0, self.curiosity + 0.01)
-        elif 13 <= current_hour < 15:
-            # Ngáp vặt sau giờ trưa (Post-lunch dip)
-            self.fatigue = min(self.fatigue_critical, self.fatigue + 0.01)
-
-        # 2. Xử lý Chấn thương Thiếu ngủ (Sleep Deprivation)
-        hours_awake = (current_time - self.last_slept_time) / 3600.0
-        
-        if hours_awake > 24: # Thức trắng 1 ngày
-            self.days_without_sleep = int(hours_awake / 24)
-            # Sốc sinh lý (Sinh ra ảo giác, trơ lỳ cảm xúc, stress bùng nổ tự nhiên)
-            self.stress = min(1.0, self.stress + 0.05 * self.days_without_sleep)
-            self.fatigue = min(self.fatigue_critical + 1.0, self.fatigue + 0.05) 
-            self.mood = max(-1.0, self.mood - 0.05)
-            
-            if random.random() < 0.1 and not getattr(self, '_sleep_warning_cooldown', False):
-                print(f"{Fore.LIGHTRED_EX}😵‍💫 [SLEEP DEPRIVATION]: Hệ thần kinh của Aura đang rung lên vì quá thiếu ngủ (Đã thức {hours_awake:.1f} giờ). Suy nghĩ bị đứt đoạn...{Style.RESET_ALL}")
-                self._sleep_warning_cooldown = True
-        else:
-            self.days_without_sleep = 0
-            self._sleep_warning_cooldown = False
-
     def reroll_thresholds(self):
+        import math
+        from datetime import datetime
+        """Mô phỏng nhịp điệu sinh học của mỗi chu kỳ (Ngày/Tháng)."""
         current_day = datetime.now().timetuple().tm_yday
+        
+        # 1. FATIGUE (Dao động hình sin theo chu kỳ 30 ngày)
+        # Hàm Sin: Biên độ từ 0.75 đến 1.25
+        # f(x) = 1.0 + 0.25 * sin((2 * pi / 30) * x)
         base_fatigue_limit = 1.0 + 0.25 * math.sin((2 * math.pi / 30) * current_day)
         
+        # 3-5 ngày ngẫu nhiên trong tháng (tỷ lệ khoảng 10-15%) có sức bền cực trị
         extreme_roll = random.random()
-        if extreme_roll < 0.05:
+        if extreme_roll < 0.05: # 5% cực kỳ khỏe (Ngưỡng sập nguồn lên tới 2.0)
             self.fatigue_critical = 2.0
-        elif extreme_roll < 0.15:
+        elif extreme_roll < 0.15: # 10% cực kỳ yếu (Ngưỡng sập nguồn xuống tận 0.5)
             self.fatigue_critical = 0.5
         else:
             self.fatigue_critical = base_fatigue_limit
 
-        self.fatigue_severe = self.fatigue_critical * 0.8
-        self.fatigue_mild = self.fatigue_critical * 0.5
+        self.fatigue_severe = self.fatigue_critical * 0.8  # Báo động đỏ ở 80% sức chứa
+        self.fatigue_mild = self.fatigue_critical * 0.5    # Báo động vàng ở 50% sức chứa
         
+        # 2. Ngưỡng trầm cảm / hưng phấn (Vẫn ngẫu nhiên nhẹ mỗi ngày)
         self.depression_mild = random.uniform(-0.3, -0.1)
         self.depression_severe = random.uniform(-0.6, -0.4)
         self.depression_critical = random.uniform(-0.9, -0.7)
         self.mania_mild = random.uniform(0.3, 0.5)
         self.mania_severe = random.uniform(0.7, 0.9)
 
+        # Ngưỡng stress
         self.stress_mild = random.uniform(0.4, 0.6)
         self.stress_severe = random.uniform(0.7, 0.85)
         self.stress_critical = random.uniform(0.9, 0.95)
 
-    def update_state(self, emotional_input: dict) -> bool:
-        """Trả về True nếu bị ám ảnh/sang chấn tâm lý (Trauma) từ text input"""
+    def update_state(self, emotional_input: dict):
+        # 1. Trích xuất biến từ Cảm nhận (Perception)
         target_mood = float(emotional_input.get('valence', 0.0) or 0.0)
         arousal = float(emotional_input.get('arousal', 0.0) or 0.0)
         
+        # 2. Cập nhật MOOD (Asymmetric Dynamics - Thiên kiến tiêu cực)
         if target_mood > self.mood:
+            # Chiều hướng TÍCH CỰC (Vui hơn)
+            # Kháng cự: Càng vui (gần 1.0) càng khó làm vui hơn (diminishing returns).
+            # Trọng số hấp thụ là 0.05 (Rất trơ, 5%)
             resistance = 1.0 - max(0.0, self.mood)
             mood_shift = (target_mood - self.mood) * 0.05 * resistance
-            
-            # Khôi phục lòng tin nếu nói chuyện tử tế
-            if self.is_stranger:
-                self.current_intimacy = min(1.0, self.current_intimacy + 0.05)
         else:
+            # Chiều hướng TIÊU CỰC (Buồn hơn)
+            # Dễ tổn thương: Trọng số hấp thụ cao (25%). Rơi tự do.
+            # Đang vui mà bị sốc thì càng đau thêm (x1.5).
             shock_multiplier = 1.5 if self.mood > 0 else 1.0
             mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier
 
         self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
 
-        if target_mood < -0.2:
+        # 3. Cập nhật STRESS (Asymmetric Dynamics - Dễ gãy khó mềm)
+        if target_mood < -0.2:  # Gặp chuyện xấu
+            # Stress tăng vọt dựa trên độ kích động (Arousal) của sự việc
             self.stress = min(1.0, self.stress + arousal * 0.2)
-        elif target_mood > 0.2:
+        elif target_mood > 0.2: # Gặp chuyện tốt
+            # Tích cực giúp giảm stress nhưng SIÊU CHẬM (Tính lỳ)
             self.stress = max(0.0, self.stress - 0.02)
         else:
+            # Bình thường thì stress tự rơi rụng một tẹo xíu
             self.stress = max(0.0, self.stress - 0.005)
-            
-        # Kiểm tra sang chấn tâm lý (Pain-Reward Learning)
-        if self.stress >= self.stress_critical and arousal > 0.7 and target_mood < -0.5:
-            return True
-            
-        return False
 
     def check_integrity(self, memories: List[MemoryTrace]):
+        # Identity Continuity: Nếu mất Core Memories -> Bản sắc sụp đổ
         core_count = sum(1 for m in memories if m.type == 'core' and m.strength > 0.3)
         total_cores = sum(1 for m in memories if m.type == 'core')
 
         if total_cores > 0:
             self.integrity = core_count / total_cores
         else:
-            self.integrity = 0.5
+            self.integrity = 0.5  # Trạng thái "trống rỗng"
             
+        # Kích hoạt khủng hoảng nhân cách
         if self.integrity < 0.2:
             self.is_identity_crisis = True
-        elif self.integrity > 0.4:
+        elif self.integrity > 0.4: # Cần phục hồi lên mức an toàn mới thoát khỏi khủng hoảng
             self.is_identity_crisis = False

@@ -28,17 +28,11 @@ class LLM:
             print(f"⚠️ Lỗi LLM JSON: {e}")
             return {}
 
-    def generate_text(self, prompt: str, temperature: float = 0.7, image_path: str = None) -> str:
+    def generate_text(self, prompt: str, temperature: float = 0.7) -> str:
         try:
-            from PIL import Image
-            contents = [prompt]
-            if image_path:
-                img = Image.open(image_path)
-                contents.append(img)
-                
             resp = self.client.models.generate_content(
                 model=Config.MODEL_NAME, 
-                contents=contents,
+                contents=prompt,
                 config=types.GenerateContentConfig(temperature=temperature)
             )
             return resp.text.strip()
