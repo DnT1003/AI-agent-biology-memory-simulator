@@ -126,14 +126,11 @@ class InteractionMixin:
             user_mood_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", empathy_score_str)[0])
             user_mood_score = max(-1.0, min(1.0, user_mood_score))
             
-            # Lây nhiễm cảm xúc (Phụ thuộc vào mức độ thân thiết)
+            # Lây nhiễm cảm xúc (Kéo Mood của Aura về phía Mood của User 1 đoạn nhỏ)
             if abs(user_mood_score) > 0.3:
-                # Nếu Aura đang buồn quá (Trầm cảm nặng) thì cô ấy có thể vô cảm với nỗi buồn của người khác
-                if self.ego.mood > self.ego.depression_severe:
-                    empathy_factor = 0.15 * max(0.2, getattr(self.ego, 'current_intimacy', 0.5))
-                    drift = (user_mood_score - self.ego.mood) * empathy_factor
-                    self.ego.mood = max(-1.0, min(1.0, self.ego.mood + drift))
-                    print(f"{Fore.LIGHTBLACK_EX}💞 [EMPATHY]: Đồng cảm với User ({empathy_factor:.2f}). Tâm trạng Aura -> {self.ego.mood:.2f}{Style.RESET_ALL}")
+                drift = (user_mood_score - self.ego.mood) * 0.15
+                self.ego.mood = max(-1.0, min(1.0, self.ego.mood + drift))
+                print(f"{Fore.LIGHTBLACK_EX}💞 [EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.ego.mood:.2f}{Style.RESET_ALL}")
         except Exception:
             pass
 
@@ -171,19 +168,17 @@ class InteractionMixin:
         words = re.findall(r'\b\w{3,}\b', user_input.lower())
         for w in words:
             # Loại bỏ các stop words cơ bản của tiếng Việt (có thể mở rộng thêm)
-            if w not in ["của", "và", "các", "có", "để", "cho", "với", "không", "một", "những", "thì", "đang", "là", "rằng", "đã", "được", "nhưng", "rồi", "nào", "như", "này", "khi", "trong"]:
+            if w not in ["của", "và", "các", "có", "để", "cho", "với", "không", "một", "những", "thì", "đang", "là", "rằng", "đã", "được"]:
                 self.ego.vocabulary.append(w)
-                if len(self.ego.vocabulary) > 150:
+                if len(self.ego.vocabulary) > 100:
                     self.ego.vocabulary.pop(0)
                     
         import collections
         word_counts = collections.Counter(self.ego.vocabulary)
-        top_words = [w for w, c in word_counts.most_common(10) if c >= 4] # Chỉ lấy từ xuất hiện >= 4 lần
+        top_words = [w for w, c in word_counts.most_common(5) if c >= 3] # Chỉ lấy từ xuất hiện >= 3 lần
         
-        # Chỉ 40% cơ hội bắt chước để không bị lố
-        if top_words and random.random() < 0.4:
-            picked_words = random.sample(top_words, min(2, len(top_words)))
-            mood_modifier += f"\n[LEXICAL EVOLUTION]: Đây là những từ/cách diễn đạt quen thuộc của User: {', '.join(picked_words)}. Hãy thử lồng ghép 1 từ vào câu trả lời một cách tự nhiên (nếu phù hợp ngữ cảnh), không gượng ép."
+        if top_words:
+            mood_modifier += f"\n[LEXICAL EVOLUTION]: Hãy cố gắng sử dụng mượt mà 1-2 từ vựng sau đây vào câu trả lời của bạn để tạo cảm giác gần gũi (bắt chước User): {', '.join(top_words)}."
 
         # --- Phân tầng Căng thẳng ---
         if self.ego.stress >= self.ego.stress_critical:
