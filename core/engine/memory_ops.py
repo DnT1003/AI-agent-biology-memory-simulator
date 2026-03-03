@@ -48,7 +48,8 @@ class MemoryOpsMixin:
             if final_score > 0.35:
                 candidates.append((final_score, m))
                 
-        time_kws = ['hôm nay', 'hôm qua', 'vừa nãy', 'trước đó', 'mới đây', 'sáng nay', 'chiều nay', 'tối qua', 'gần đây', 'lúc nãy']
+        time_kws = ['h\u00f4m nay', 'h\u00f4m qua', 'v\u1eeba n\u00e3y', 'tr\u01b0\u1edbc \u0111\u00f3', 'm\u1edbi \u0111\u00e2y', 's\u00e1ng nay', 'chi\u1ec1u nay', 't\u1ed1i qua', 'g\u1ea7n \u0111\u00e2y', 'l\u00fac n\u00e3y']
+        recent_mems = []  # Bug #1 fix: khai b\u00e1o tr\u01b0\u1edbc khi d\u00f9ng
         if any(kw in query.lower() for kw in time_kws):
             current_time = time.time()
             try:
@@ -57,10 +58,29 @@ class MemoryOpsMixin:
                     if m.strength >= 0.1 and m.id not in [c[1].id for c in candidates]:
                         recent_mems.append((1.0, m))
             except Exception as e:
-                print(f"{Fore.RED}⚠️ Lỗi truy xuất thời gian: {e}{Style.RESET_ALL}")
-                
+                print(f"{Fore.RED}\u26a0\ufe0f L\u1ed7i tr\u1ef3 xu\u1ea5t th\u1eddi gian: {e}{Style.RESET_ALL}")
+        candidates = candidates + recent_mems
         candidates.sort(key=lambda x: x[0], reverse=True)
         recalled = [c[1] for c in candidates[:4]]
+
+        # =======================================================
+        # Phase 7 Idea 11: Sự Não Cá Vàng Tạm Thời (Brain Fog)
+        # =======================================================
+        import re
+        if self.ego.fatigue >= self.ego.fatigue_mild:
+            for m in recalled:
+                if random.random() < 0.3: # 30% cơ hội bị che mờ chi tiết trong mỗi mẩu ký ức
+                    # Che mờ các con số
+                    m.content = re.sub(r'\b\d+\b', '[quên mất số bao nhiêu rồi]', m.content)
+                    # Giả lập lú lẫn tẻ nhạt
+                    if len(m.content) > 20:
+                         words = m.content.split()
+                         if len(words) > 5:
+                              idx = random.randint(0, len(words) - 2)
+                              words[idx] = "[cái gì đó]"
+                              m.content = " ".join(words)
+                    print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Ký ức bị che mờ do mệt mỏi: {m.content[:50]}...{Style.RESET_ALL}")
+
         
         chained_memory = None
         if recalled:
@@ -125,7 +145,7 @@ class MemoryOpsMixin:
         if len(episodic_mems) >= 5:
             dream_mems = random.sample(episodic_mems, min(15, len(episodic_mems)))
             prompt = get_sleep_dream_prompt("\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems]))
-            raw_response = self.llm.generate_text(prompt, temperature=0.7)
+            raw_response = self.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
             json_str = raw_response.strip().replace("```json", "").replace("```", "").strip()
             try:
                 insights = json.loads(json_str)
@@ -147,4 +167,28 @@ class MemoryOpsMixin:
         self.ego.social_need, self.ego.curiosity = min(1.0, self.ego.social_need + 0.4), min(1.0, self.ego.curiosity + 0.4)
         self.ego.reroll_thresholds()
         self.ego.check_integrity(self.memory.get_all())
+        # Phase 7 Idea 6: Guilt & Self-Correction
+        # Chỉ xảy ra khi Stress > 0.75 hoặc có nhiều hơn 2 chỉ số tiêu cực > 0.5
+        negative_stats_count = sum(1 for val in [self.ego.stress, self.ego.fatigue, (self.ego.mood < -0.5)*1.0, self.ego.is_identity_crisis*1.0] if val > 0.5)
+        
+        if self.ego.stress > 0.75 or negative_stats_count >= 2:
+            if len(self.short_term_buffer) > 0:
+                print(f"{Fore.LIGHTBLACK_EX}🔍 [GUILT REFLECTION]: Đang suy ngẫm lại hành vi trong ngày do tâm lý bất ổn...{Style.RESET_ALL}")
+                guilt_prompt = f"Đây là lịch sử trò chuyện gần đây:\n{self.short_term_buffer}\nBạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có với người dùng không? Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn gọn bắt đầu bằng 'Lý do: '."
+                guilt_res = self.llm.generate_text(guilt_prompt, temperature=0.2).strip()
+                if "CÓ" in guilt_res.upper() or "LÝ DO" in guilt_res.upper():
+                    guilt_reason = guilt_res.replace("CÓ", "").strip(":- ,.\n")
+                    if guilt_reason:
+                        guilt_mem = MemoryTrace(
+                            content=f"Tôi cảm thấy ân hận vì cách hành xử của mình lúc trước: {guilt_reason}. Lần sau phải chú ý ôn hòa hơn.",
+                            type='episodic',
+                            valence=-0.6,
+                            arousal=0.5,
+                            importance=0.8
+                        )
+                        self.memory.add_memory(guilt_mem)
+                        print(f"{Fore.MAGENTA}😔 [GUILT]: Aura cảm thấy hối hận vì: {guilt_reason}{Style.RESET_ALL}")
+
         print(f"   -> Stress giảm còn {self.ego.stress:.2f}, Fatigue reset về 0.")
+
+

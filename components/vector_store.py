@@ -71,6 +71,15 @@ class VectorStore:
         except Exception:
             pass
 
+    def reset_collection(self):
+        """Xóa vĩnh viễn collection hiện tại để tạo lại với kích thước vector mới (đổi model)"""
+        print(f"{Fore.RED}⚠️ [VECTOR STORE]: Đang xóa toàn bộ bộ nhớ cũ để đồng bộ kích thước vector mới...{Style.RESET_ALL}")
+        self.client.delete_collection(name="aura_long_term_memory")
+        self.collection = self.client.get_or_create_collection(
+            name="aura_long_term_memory",
+            metadata={"hnsw:space": "cosine"}
+        )
+
     def get_all_metadata(self) -> List[Any]:
         results = self.collection.get()
         if not results or not results['metadatas']:

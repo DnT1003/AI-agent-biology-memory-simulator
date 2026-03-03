@@ -4,6 +4,7 @@ from typing import List
 from colorama import Fore, Style
 from components.llm import LLM
 from components.embedder import Embedder
+from components.reader import BackgroundReader
 from core.memory import MemoryManager
 from core.self_model import SelfModel
 from .memory_ops import MemoryOpsMixin
@@ -23,7 +24,33 @@ class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
         
         from core.tools import get_skill_registry
         self.skills = get_skill_registry()
+        self.reader = BackgroundReader(self.llm)
+        self.is_reading = False  # Flag để tránh đọc sách song song
         
         if not os.path.exists("outputs"):
             os.makedirs("outputs")
         self.load_short_term_memory()
+
+    def _dump_mind_state(self):
+        """Xuất trạng thái sinh lý và tâm lý ra JSON để Dashboard đọc (Idea 5)"""
+        import json
+        import time
+        try:
+            state = {
+                "name": self.ego.name,
+                "mood": self.ego.mood,
+                "stress": self.ego.stress,
+                "fatigue": self.ego.fatigue,
+                "integrity": self.ego.integrity,
+                "curiosity": self.ego.curiosity,
+                "social_need": self.ego.social_need,
+                "is_stranger": self.ego.is_stranger,
+                "current_intimacy": self.ego.current_intimacy,
+                "is_identity_crisis": self.ego.is_identity_crisis,
+                "active_goals": self.ego.get_active_goals(),
+                "timestamp": time.time()
+            }
+            with open("outputs/mind_state.json", "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            pass

@@ -91,4 +91,26 @@ def get_skill_registry() -> SkillRegistry:
         func=lambda x: read_time()
     ))
     
+    # --- CÁC CÔNG CỤ NHẬN THỨC CỐT LÕI (COGNITIVE ACTIONS) ---
+    registry.register(Skill(
+        name="add_goal",
+        description="Thiết lập mục tiêu dài hạn để Aura thực hiện ngầm.",
+        usage_format="ACTION: add_goal | <tên mục tiêu>",
+        func=lambda x: f"[HÀNH ĐỘNG]: Mục tiêu '{x}' đã được ghi nhận vào Bản Ngã."
+    ))
+    
+    registry.register(Skill(
+        name="search_novel",
+        description="Tìm kiếm truyện trên docln.net và nạp vào hàng đợi đọc.",
+        usage_format="ACTION: search_novel | <tên truyện>",
+        func=lambda x: f"[HÀNH ĐỘNG]: Đang tìm kiếm truyện '{x}' trên thư viện Docln..."
+    ))
+    
+    registry.register(Skill(
+        name="start_reading",
+        description="Bắt đầu phiên đọc tiểu thuyết ngay lập tức.",
+        usage_format="ACTION: start_reading | now",
+        func=lambda x: "[HÀNH ĐỘNG]: Aura bắt đầu phiên đọc sách trong nền."
+    ))
+    
     return registry

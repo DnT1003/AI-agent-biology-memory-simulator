@@ -8,10 +8,10 @@ class LLM:
     def __init__(self):
         self.client = genai.Client(api_key=Config.API_KEY)
 
-    def generate_json(self, prompt: str, temperature: float = 0.1) -> dict:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None) -> dict:
         try:
             resp = self.client.models.generate_content(
-                model=Config.MODEL_NAME, 
+                model=model_override or Config.MODEL_NAME, 
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=temperature)
             )
@@ -28,10 +28,10 @@ class LLM:
             print(f"⚠️ Lỗi LLM JSON: {e}")
             return {}
 
-    def generate_text(self, prompt: str, temperature: float = 0.7) -> str:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None) -> str:
         try:
             resp = self.client.models.generate_content(
-                model=Config.MODEL_NAME, 
+                model=model_override or Config.MODEL_NAME, 
                 contents=prompt,
                 config=types.GenerateContentConfig(temperature=temperature)
             )
@@ -40,14 +40,14 @@ class LLM:
             print(f"⚠️ Lỗi LLM Text: {e}")
             return ""
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None):
+    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None):
         try:
             config_params = {"temperature": temperature}
             if tools:
                 config_params["tools"] = tools
                 
             responses = self.client.models.generate_content_stream(
-                model=Config.MODEL_NAME, 
+                model=model_override or Config.MODEL_NAME, 
                 contents=prompt,
                 config=types.GenerateContentConfig(**config_params)
             )

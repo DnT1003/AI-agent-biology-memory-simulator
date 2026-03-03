@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura Mind Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #1e1e1e;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+        }
+
+        h1 {
+            text-align: center;
+            color: #bb86fc;
+            font-weight: 300;
+            letter-spacing: 2px;
+        }
+
+        .stat-group {
+            margin-bottom: 25px;
+        }
+
+        .stat-label {
+            font-weight: bold;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.1em;
+            color: #e0e0e0;
+        }
+
+        .bar-container {
+            background-color: #333;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+        }
+
+        .bar {
+            height: 100%;
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .bg-red {
+            background-color: #cf6679;
+        }
+
+        .bg-blue {
+            background-color: #3700b3;
+        }
+
+        .bg-green {
+            background-color: #03dac6;
+        }
+
+        .bg-yellow {
+            background-color: #ffb300;
+        }
+
+        .flag {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 0.9em;
+            margin-right: 10px;
+            background: #333;
+        }
+
+        .flag.active {
+            background: #cf6679;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🧠 AURA MIND DASHBOARD</h1>
+
+        <div class="stat-group">
+            <div class="stat-label"><span>Mood (Valence)</span> <span id="val_mood">0.0</span></div>
+            <div class="bar-container">
+                <div id="bar_mood" class="bar bg-green" style="width: 50%;"></div>
+            </div>
+        </div>
+
+        <div class="stat-group">
+            <div class="stat-label"><span>Stress (Arousal)</span> <span id="val_stress">0.0</span></div>
+            <div class="bar-container">
+                <div id="bar_stress" class="bar bg-red" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <div class="stat-group">
+            <div class="stat-label"><span>Fatigue</span> <span id="val_fatigue">0.0</span></div>
+            <div class="bar-container">
+                <div id="bar_fatigue" class="bar bg-blue" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <div class="stat-group">
+            <div class="stat-label"><span>Integrity (Identity)</span> <span id="val_integrity">1.0</span></div>
+            <div class="bar-container">
+                <div id="bar_integrity" class="bar bg-yellow" style="width: 100%;"></div>
+            </div>
+        </div>
+
+        <div class="stat-group">
+            <div class="stat-label"><span>Social Need</span> <span id="val_social">0.5</span></div>
+            <div class="bar-container">
+                <div id="bar_social" class="bar bg-green" style="width: 50%;"></div>
+            </div>
+        </div>
+
+        <hr style="border:1px solid #333; margin:30px 0;" />
+        <h3>SYSTEM FLAGS</h3>
+        <span id="crisis" class="flag">Identity Crisis</span>
+        <span id="stranger" class="flag">Stranger Danger</span>
+        <p style="color: gray; margin-top:20px; font-size:0.9em;">Intimacy Level: <span id="intimacy"
+                style="color:#fff">0.5</span> <br /> Updated: <span id="time" style="color:#fff">...</span></p>
+    </div>
+
+    <script>
+        async function fetchState() {
+            try {
+                const res = await fetch('/api/state');
+                const data = await res.json();
+
+                if (data.error) return;
+
+                let moodPct = ((data.mood + 1.0) / 2.0) * 100;
+                document.getElementById('bar_mood').style.width = Math.max(0, Math.min(100, moodPct)) + '%';
+                document.getElementById('val_mood').innerText = data.mood.toFixed(2);
+
+                let stressPct = data.stress * 100;
+                document.getElementById('bar_stress').style.width = Math.max(0, Math.min(100, stressPct)) + '%';
+                document.getElementById('val_stress').innerText = data.stress.toFixed(2);
+
+                let fatiguePct = data.fatigue * 100;
+                document.getElementById('bar_fatigue').style.width = Math.max(0, Math.min(100, fatiguePct)) + '%';
+                document.getElementById('val_fatigue').innerText = data.fatigue.toFixed(2);
+
+                let integrityPct = data.integrity * 100;
+                document.getElementById('bar_integrity').style.width = Math.max(0, Math.min(100, integrityPct)) + '%';
+                document.getElementById('val_integrity').innerText = data.integrity.toFixed(2);
+
+                let socialPct = data.social_need * 100;
+                document.getElementById('bar_social').style.width = Math.max(0, Math.min(100, socialPct)) + '%';
+                document.getElementById('val_social').innerText = data.social_need.toFixed(2);
+
+                document.getElementById('crisis').className = data.is_identity_crisis ? 'flag active' : 'flag';
+                document.getElementById('stranger').className = data.is_stranger ? 'flag active' : 'flag';
+
+                document.getElementById('intimacy').innerText = data.current_intimacy.toFixed(2);
+                document.getElementById('time').innerText = new Date(data.timestamp * 1000).toLocaleTimeString();
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        setInterval(fetchState, 1000);
+        fetchState();
+    </script>
+</body>
+
+</html>

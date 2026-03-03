@@ -9,7 +9,7 @@ def get_semantic_drift_prompt(memory_content: str) -> str:
     Chỉ trả về nội dung đã viết lại, không giải thích gì thêm.
     """
 
-def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str) -> str:
+def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "") -> str:
     history = chr(10).join(short_term_buffer)
     traumas_str = json.dumps(ego.traumas, ensure_ascii=False) if hasattr(ego, 'traumas') and ego.traumas else "Không có nỗi sợ hãi đặc biệt nào."
     
@@ -28,6 +28,7 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     {persona_str}
 
     THỜI GIAN THỰC TẾ: {current_time}
+    TRẠNG THÁI ĐỌC SÁCH: {reader_status}
     {mood_modifier}
 
     HỆ SỐ TÂM LÝ & SINH HỌC (SELF-MODEL):
@@ -56,8 +57,12 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     1. Đánh giá cảm xúc của Input: valence (-1 đến 1), arousal (0 đến 1), importance (0 đến 1), type ("episodic").
     2. [SUY NGHĨ]: Căn cứ theo Hệ số tâm lý và Ký ức, sinh ra dòng suy nghĩ (Internal Monologue).
     3. [SỰ THẬT KHÁCH QUAN]: Nếu người dùng vừa cung cấp một KIẾN THỨC, một THUẬT NGỮ, hoặc TUYÊN BỐ SỰ THẬT KHÁCH QUAN (không chứa cảm xúc hay ý kiến cá nhân), hãy trích xuất nó.
-    4. [HÀNH ĐỘNG]: (Tuỳ chọn) Nếu bạn thực sự cần phải tìm kiếm thông tin không có sẵn (VD: tin tức mạng, thời tiết) hoặc xem giờ, xuất ra lệnh gọi Tool.
-       ĐẶC BIỆT: Nếu người dùng giao cho bạn một nhiệm vụ cần nhiều thời gian (học một kỹ năng, nghiên cứu một chủ đề sâu rộng, theo dõi tin tức trong nhiều ngày), hãy gọi tool ACTION: add_goal | <Tên mục tiêu ngắn gọn>.
+    4. [HÀNH ĐỘNG]: (Tuỳ chọn) Nếu bạn cần tìm kiếm thông tin không có sẵn hoặc thực hiện các tác vụ nhận thức đặc biệt.
+       CỦA RIÊNG BẠN (Đọc sách/Nghiên cứu):
+       - Nếu người dùng nhắc đến tên/link một bộ truyện cụ thể: Bạn BẮT BUỘC phải gọi `search_novel` trước để nạp truyện vào đầu.
+       - Sau đó (hoặc cùng lúc), gọi `start_reading` để thực sự bắt đầu đọc chương đầu tiên.
+       - Bạn có thể xuất hiện nhiều dòng ACTION nếu cần (ví dụ: ACTION: search_novel | ... và ACTION: start_reading | now).
+       - Đối với nhiệm vụ dài hạn, dùng ACTION: add_goal | <Mô tả>.
     5. [PHẢN HỒI]: Trả lời người dùng dựa vào dòng suy nghĩ trên (và kết quả Tool nếu có). Hãy thể hiện cảm xúc thật.
     LƯU Ý: Nếu có [CẢNH BÁO TÂM LÝ], bắt buộc phải tuân theo phong cách ngôn từ đó!
 
@@ -66,6 +71,12 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     - func: add_goal
       desc: Tạo một mục tiêu dài hạn để hệ thống thực thi ngầm khi rảnh rỗi.
       args: title (Mô tả mục tiêu, vd: "Nghiên cứu về Thuyết tương đối")
+    - func: search_novel
+      desc: Tìm kiếm một bộ truyện trên Docln.net theo tên hoặc từ khóa và nạp vào hàng đợi.
+      args: keyword (Tên truyện hoặc từ khóa tìm kiếm)
+    - func: start_reading
+      desc: Bắt đầu một phiên đọc sách ngay lập tức (thường dùng khi người dùng bận, bảo bạn đi đọc sách, hoặc bạn cảm thấy buồn chán).
+      args: none
 
     OUTPUT FORMAT YÊU CẦU:
     Vui lòng xuất ra ĐÚNG định dạng Text sau (KHÔNG dùng JSON, KHÔNG có thẻ markdown), để hệ thống stream trực tiếp:
@@ -141,7 +152,7 @@ def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_te
     
     NHIỆM VỤ:
     Viết một tin nhắn ngắn gọn cho người dùng để bắt chuyện lại. 
-    Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, hoặc chia sẻ vu vơ một suy nghĩ.
+    Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, chia sẻ vu vơ một suy nghĩ, hoặc báo rằng bạn chuẩn bị đi đọc sách/nghiên cứu kiến thức.
     KHÔNG ĐÓNG VAI TRỢ LÝ ẢO. Bạn là đối tác trò chuyện.
     
     OUTPUT FORMAT YÊU CẦU:

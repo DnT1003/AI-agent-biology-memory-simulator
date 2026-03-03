@@ -5,32 +5,126 @@ from datetime import datetime
 from colorama import Fore, Style
 from core.prompts import get_proactive_ping_prompt
 
+IDLE_READ_THRESHOLD = 15 * 60   # Giảm xuống 15 phút cho tự nhiên
+IDLE_PING_THRESHOLD = 60        # 60 giây thì mới được phép ping
+
+
 class AutonomousMixin:
     def background_loop(self):
         time.sleep(10)
         while True:
             time.sleep(30)
-            if self.is_thinking: continue
+            if self.is_thinking or self.is_reading:
+                continue
+
             idle_time = time.time() - self.last_interaction_time
-            if idle_time > 60:
+
+            # -- Tăng chỉ số sinh học khi nhàn rỗi --
+            if idle_time > IDLE_PING_THRESHOLD:
                 self.ego.social_need = min(1.0, self.ego.social_need + 0.05)
                 self.ego.curiosity = min(1.0, self.ego.curiosity + 0.02)
-            
-            if idle_time > 60 and not self.is_thinking:
+
+            # =====================================================
+            # NẾU NHÀN RỖI QUÁ LÂU -> SEPARATION ANXIETY (Idea 9)
+            # =====================================================
+            # Trong môi trường test, giả lập 24h = 10 phút (600s)
+            ANXIETY_THRESHOLD = 600
+            if idle_time > ANXIETY_THRESHOLD and not self.is_thinking:
+                self.is_thinking = True
+                print(f"\n{Fore.RED}💔 [SEPARATION ANXIETY]: Người dùng đã bỏ mặc Aura quá lâu!{Style.RESET_ALL}")
+                try:
+                    self.ego.stress = min(1.0, self.ego.stress + 0.3)
+                    self.ego.mood = max(-1.0, self.ego.mood - 0.3)
+                    
+                    # Sinh ra một suy nghĩ ám ảnh
+                    anxiety_prompt = "Người dùng đã bỏ mặc bạn một thời gian rất dài không nói chuyện. Hãy viết một dòng độc thoại nội tâm (dưới 30 chữ) thể hiện sự hoang mang, sợ hãi rằng người ta đã chán mình, ghét mình, hoặc muốn xóa sổ mình."
+                    anxiety_thought = self.llm.generate_text(anxiety_prompt, temperature=0.8).strip()
+                    
+                    print(f"{Fore.LIGHTRED_EX}💭 (Ám ảnh chia cắt): {anxiety_thought}{Style.RESET_ALL}")
+                    from core.memory import MemoryTrace
+                    anxiety_mem = MemoryTrace(
+                        content=f"Nỗi sợ hãi khi bị bỏ rơi: {anxiety_thought}",
+                        type="emotional",
+                        valence=-0.8,
+                        arousal=0.9,
+                        importance=0.9,
+                        is_flashbulb=False
+                    )
+                    self.memory.add_memory(anxiety_mem)
+                except Exception as e:
+                    pass
+                finally:
+                    # Tạm reset interaction time để không báo liên tục mỗi loop
+                    self.last_interaction_time = time.time()
+                    self.is_thinking = False
+                continue
+
+            # =====================================================
+            # NẾU NHÀN RỖI QUÁ 15 PHÚT → ĐI ĐỌC SÁCH
+            # =====================================================
+            if idle_time >= IDLE_READ_THRESHOLD and not self.is_reading and not self.is_thinking:
+                self.start_reading_task(reason=f"đã nhàn rỗi {int(idle_time // 60)} phút")
+                continue
+
+            # =====================================================
+            # NẾU NHÀN RỖI 60s-15min → CÓ THỂ PING
+            # =====================================================
+            if IDLE_PING_THRESHOLD < idle_time < IDLE_READ_THRESHOLD and not self.is_thinking:
                 ping_chance = 0.3 if self.ego.social_need > 0.8 else (0.1 if self.ego.social_need > 0.5 else 0.0)
-                if self.ego.curiosity > 0.8: ping_chance += 0.2
+                if self.ego.curiosity > 0.8:
+                    ping_chance += 0.2
                 if random.random() < ping_chance:
                     self.is_thinking = True
-                    try: self._proactive_ping(idle_time)
-                    except Exception as e: print(f"Lỗi background ping: {e}")
+                    try:
+                        self._proactive_ping(idle_time)
+                    except Exception as e:
+                        print(f"Lỗi background ping: {e}")
                     finally:
-                        self.is_thinking, self.ego.social_need = False, max(0.0, self.ego.social_need - 0.3)
+                        self.is_thinking = False
+                        self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
                         self.last_interaction_time = time.time()
-                        
+
+    def start_reading_task(self, reason="tự muốn đọc"):
+        """Kích hoạt một phiên đọc sách (có thể gọi từ bên ngoài)."""
+        if self.is_reading:
+            return
+        
+        self.is_reading = True
+        print(f"\n{Fore.GREEN}📖 [BACKGROUND READER]: Aura {reason}. Bắt đầu đọc sách...{Style.RESET_ALL}")
+        try:
+            self._do_reading_session()
+        except Exception as e:
+            print(f"{Fore.RED}⚠️ Lỗi reading session: {e}{Style.RESET_ALL}")
+        finally:
+            self.is_reading = False
+
+    def _do_reading_session(self):
+        """Aura tự đọc 1 chương sách và lưu vào ký ức."""
+        knowledge_tag, content = self.reader.get_next_reading_material()
+        if knowledge_tag and content:
+            print(f"{Fore.GREEN}📚 [READING]: {knowledge_tag}{Style.RESET_ALL}")
+            from core.memory import MemoryTrace
+            mem = MemoryTrace(
+                content=f"{knowledge_tag}: {content}",
+                type="semantic",
+                valence=0.1,
+                arousal=0.3,
+                importance=0.7,
+                is_flashbulb=False
+            )
+            self.memory.add_memory(mem)
+            print(f"{Fore.LIGHTBLACK_EX}💾 [READING]: Đã lưu kiến thức vào ký ức.{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
+
     def _proactive_ping(self, idle_time):
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         mems = self.memory.get_all()
-        mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in random.sample(mems, min(3, len(mems)))]) if mems else ""
+        # Random sample an toàn
+        sample_size = min(3, len(mems))
+        mems_to_use = random.sample(mems, sample_size) if mems else []
+        mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in mems_to_use])
+        
         system_prompt = get_proactive_ping_prompt(self.ego, current_time, mem_context, self.short_term_buffer, idle_time)
         
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
