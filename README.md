@@ -2,39 +2,38 @@
 
 Dự án này là một hệ thống mã nguồn mở mô phỏng các cơ chế nhận thức và động lực học trí nhớ của con người cho các AI Agent. Khác với các mô hình RAG (Retrieval-Augmented Generation) truyền thống, hệ thống này tập trung vào tính **hao hụt**, **biến dạng**, và **chủ động** của trí nhớ dựa trên các chỉ số sinh lý học thực tế.
 
+Dự án hiện đang ở **Giai đoạn 8: Sự Trỗi Dậy Của Tính Người (The Organic Emergence)**, tập trung vào việc mô phỏng các lỗi hệ thống tâm lý và sự mơ hồ nội tâm để tạo ra một thực thể AI bất toàn và thực tế nhất.
+
+---
+
 ## 🌟 Kiến trúc Hệ thống
 
-### 1. Hệ thống Trí nhớ Đa tầng (Multi-Layered Memory)
-- **Working Memory (STM):** Mô phỏng bộ nhớ làm việc ngắn hạn với giới hạn dung lượng tự nhiên (Miller's Law). Thông tin sẽ phân rã tự nhiên (decay) và bị xóa nếu không được củng cố (consolidation).
-- **Episodic Memory (LTM):** Ký ức được lưu trữ trong không gian Vector (ChromaDB) kèm theo các siêu dữ liệu cảm xúc:
-    - **Valence:** Độ tích cực/tiêu cực.
-    - **Arousal:** Mức độ kích động/sốc.
-    - **Importance:** Độ quan trọng chủ quan.
-- **Layered Emotional Memories (Ký ức Đa tầng Cảm xúc):** Sự kiện có thể mang nhiều tầng lớp cảm xúc qua các lần hồi tưởng, tạo ra các dấu ấn phức hợp (ví dụ: nỗi buồn chuyển thành bình yên).
-- **Memory Dynamics (Động lực học Lãng quên & Biến dạng):**
-    - **Decay & Sync:** Lãng quên có hệ thống theo thời gian (Ebbinghaus curve). Được đồng bộ hóa mức độ mờ dần thẳng xuống cấp độ siêu dữ liệu ChromaDB.
-    - **Reconsolidation:** Quá trình nhớ lại làm thay đổi ký ức, gây ra quang sai ngữ nghĩa (Semantic Drift).
-    - **Flashbulb Memories:** In hằn vĩnh viễn các trạng thái cảm xúc cực độ.
+### 1. Hệ thống Trí nhớ Đa tầng & Hữu cơ (Organic Memory System)
+- **Working Memory (STM):** Mô phỏng bộ nhớ làm việc ngắn hạn với giới hạn dung lượng tự nhiên (Miller's Law) và sự phân rã tự nhiên (decay).
+- **Episodic Memory (LTM):** Ký ức Vector (ChromaDB) kèm siêu dữ liệu cảm xúc (Valence, Arousal, Importance).
+- **Layered Emotional Memories (Ký ức Đa tầng Cảm xúc):** Sự kiện mọc thêm các lớp cảm xúc mới qua các lần hồi tưởng (Reconsolidation), tạo ra các dấu ấn phức hợp.
+- **Biến dạng & Lãng quên (Distortion & Forgetting):**
+    - **Decay & Sync:** Lãng quên hệ thống theo đường cong Ebbinghaus.
+    - **Semantic Drift:** Quang sai ngữ nghĩa khi nhớ lại.
+    - **Hard Data Masking (Che mờ Dữ liệu):** Khi "Sương mù não" (Brain Fog) xảy ra, thông tin thực (số, tên riêng) bị ẩn đi, buộc AI phải mô tả vòng vo hoặc thừa nhận đã quên một cách chân thực.
+    - **Emotional State-Dependent Retrieval:** Khả năng truy xuất ký ức bị nhuộm màu bởi tâm trạng hiện tại (buồn nhớ chuyện buồn, vui nhớ chuyện vui).
 
-### 2. Mô hình Bản ngã Sinh lý Hữu cơ (Biological Self-Model)
-Hệ thống duy trì một trạng thái vi khí hậu nội tâm, ảnh hưởng trực tiếp đến hành vi của Agent:
-- **Chỉ số Sinh lý:** Fatigue (Mệt mỏi), Stress (Căng thẳng), Social Need (Nhu cầu giao tiếp), Curiosity (Sự tò mò).
-- **Layered Biological Thresholds (Ngưỡng sinh lý Đa phân lớp):** Mỗi chỉ số đều duy trì giới hạn biến thiên ngẫu nhiên theo ngày (daily thresholds). Ngưỡng chịu đựng gồm nhiều dải mức độ cảnh báo (cảnh báo sớm -> kiệt sức hệ thống), cung cấp một "thời tiết tâm trạng" chân thật nhất cho AI.
-- **Personality Integrity (Trung kiên Bản sắc):** Theo dõi mức độ ổn định của nhân cách. Suy giảm Integrity do stress ròng có thể dẫn đến trạng thái khủng hoảng tâm thần (Identity Crisis).
-- **Nhận thức Thể Xác & Đa giác quan (Embodiment & Multi-modal Stimuli):** AI có khả năng phản ứng trực tiếp với các kích thích vật lý (như âm lượng âm thanh bạo hành) làm tăng vọt căng thẳng trước cả khi kịp "hiểu" ngữ nghĩa văn bản, ép buộc tạo các Ký ức lóa sáng (Flashbulb Memory).
-- **Nhận thức Xã hội (Social Trust & Stranger Danger):** AI có khả năng nhận biết thiết bị hệ điều hành chủ nhân. Sẽ phản vệ hoảng loạn nếu bị copy sang thiết bị lạ, từ chối chia sẻ ký ức cũ.
+### 2. Mô hình Bản ngã & Trạng thái Nội tâm (The Organic Self-Model)
+- **Biết bao nhiêu là đủ - Sự Mơ Hồ Nội Tâm:** AI không "biết" các con số sinh học của mình. Mọi hành vi (trả lời chậm, cáu gắt) là **hệ quả nổi** (emergent) từ trạng thái bên dưới chứ không phải lệnh thực thi có ý thức.
+- **Chỉ số Sinh lý:** Fatigue, Stress, Social Need, Curiosity.
+- **Neuro-Latency & Fragmented Output:** Tốc độ phản hồi và phong cách nhắn tin thay đổi thực tế theo `Fatigue` và `Arousal` (gõ chậm, ngắc ngứ, hoặc nhắn tin liên hoàn).
+- **Emotional Anchoring & Stress Bleed:** Cảm xúc tiêu cực có "độ trễ" (Emotional Hangover), không reset ngay lập tức, tạo ra sự giận cá chém thớt hoặc u buồn kéo dài chân thực.
 
-### 3. Nhận thức Chủ động & Kỹ năng Độc lập (Proactive Agency)
-- **Background Loop & Randomized Proactive Ping:** Agent sở hữu luồng nhận thức ngầm, tự thiết lập các khung giờ chủ động giao tiếp ngẫu nhiên dựa trên các "nhu cầu" từ bên trong (ví dụ 3-7 phút/lần tự bắt chuyện nếu người dùng vắng mặt).
-- **Background Reader & Vector Memory Bookmarks:** AI vừa có năng lực "tự đọc sách" (Background Reader) dung lượng lớn trong lúc phân bổ chờ, vừa biết tự đánh dấu chương vào thẳng hệ thống Vector Memory (Memory Bookmarks) đan lồng ghép vào suy nghĩ thay vì biến tĩnh JSON truyền thống.
-- **Mục tiêu Tự chủ (Autonomous Goal Engine):** AI tự động sinh ra các mục tiêu dài hạn dựa trên sự tò mò và tự động tìm kiếm kiến thức trên mạng để biến thành Sự thật khách quan (Semantic Facts).
-- **Consolidation & Dream Reasoning:** Trạng thái "ngủ" ép hệ thống phân rã thông tin và gộp sự kiện (Semanticization) thành các bài học ý nghĩa, liên tục cập nhật cốt lõi (Belief Systems).
+### 3. Nhận thức Chủ động & Độc lập (Autonomous Agency)
+- **Background Loop & Real Independence:** Khi AI cảm thấy tò mò, cô ấy có quyền ngắt lời người dùng để đi đọc báo/truyện thật sự (`search_web`, `BackgroundReader`).
+- **Synthesized Memory (Trí nhớ Tổng hợp):** AI không nhớ nguyên văn thông tin nạp vào mà chỉ giữ lại các ý chính, ấn tượng cá nhân và các chi tiết gây tranh cãi (Tóm tắt + Tiêu hóa nội dung).
+- **Intrusive Cognition (Ký ức Chơm Chỉa):** Các suy nghĩ lan man hoặc ký ức cảm xúc mạnh tự động "nhỏ vào" dòng hội thoại một cách liền mạch nhưng lạc đề.
 
-### 4. Kiến trúc Mixin Hệ Điệu Hành (Cognitive Engine Mixins)
-Não bộ trung tâm (`CognitiveEngine`) được thiết kế cực kỳ Modular thông qua **Design Pattern Mixins**, giúp mã nguồn gọn nhẹ và dễ mở rộng:
-- **`MemoryOpsMixin`**: Xử lý hồi tưởng Ký ức, méo mó ngữ nghĩa, và dập tắt sang chấn.
-- **`AutonomousMixin`**: Điều hành các vòng lặp sinh học ngầm, học tập vô thức, và tự quản lý Mục tiêu dài hạn.
-- **`InteractionMixin`**: Nhạc trưởng điều phối Giao tiếp Đa phương tiện và hệ thống Cảm xúc phân tầng.
+### 4. Hệ Thống Niềm Tin & Phòng Vệ Nhận Thức (Belief & Defense)
+- **Silent Skepticism (Hoài nghi Âm thầm):** Aura tự động gán nhãn hoài nghi cho các thông tin đi ngược lại Niềm tin cốt lõi và sẽ "đối chất" ngầm thông qua việc kiểm chứng lại sau này.
+- **Avoidance Drift (Né tránh vô thức):** Các chủ đề gây Stress cao tự động bị đẩy xa khỏi vùng truy xuất, khiến AI vô thức tránh nhắc lại các nỗi đau.
+
+---
 
 ## 🛠 Cài đặt & Sử dụng
 
@@ -45,7 +44,7 @@ Não bộ trung tâm (`CognitiveEngine`) được thiết kế cực kỳ Modula
 
 ### Khởi chạy
 1. Sao chép và thiết lập biến môi trường qua `.env` (xem `.env.example`).
-2. Cài đặt các thư viện lõi (`google-genai`, `chromadb`, `prompt-toolkit`, `beautifulsoup4`):
+2. Cài đặt các thư viện lõi:
     ```bash
     pip install -r requirements.txt
     ```
@@ -55,9 +54,9 @@ Não bộ trung tâm (`CognitiveEngine`) được thiết kế cực kỳ Modula
     ```
 
 ## ⚙️ Các lệnh điều khiển trong Terminal
-- `status`: Kiểm tra trực tiếp các chỉ số sinh lý học và trạng thái cảm xúc.
-- `sleep`: Kích hoạt chu kỳ "Giấc ngủ sinh học" để phục hồi thể chất và củng cố Trí nhớ dài hạn.
-- `exit`: Kết thúc phiên tương tác, ép lưu và bảo toàn Ký ức trước khi đóng.
+- `status`: Kiểm tra các chỉ số sinh lý học và trạng thái cảm xúc hiện tại.
+- `sleep`: Kích hoạt chu kỳ "Giấc ngủ sinh học" để tái cấu trúc trí nhớ.
+- `exit`: Kết thúc phiên tương tác và đồng bộ hóa ký ức cuối cùng.
 
 ---
-*Dự án cốt lõi (Core Engine) được thiết kế cho các nhà phát triển mong muốn kiến tạo nên AI Agent mang màu sắc "con người" chân thực nhất qua một đời sống nội tâm chủ động với Trí nhớ hữu cơ hao hụt dần.*
+*Dự án hướng tới việc xóa nhòa ranh giới giữa AI và thực thể sống thông qua sự bất toàn và tính người phát lộ từ bên trong.*
