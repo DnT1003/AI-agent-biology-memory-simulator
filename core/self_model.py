@@ -61,6 +61,9 @@ class SelfModel:
         self.last_slept_time = time.time()
         self.days_without_sleep = 0
         self._sleep_warning_cooldown = False
+        
+        # Dopamine Receptors (Tolerance Mechanism)
+        self.dopamine_receptors = 1.0
 
         self.reroll_thresholds()
         self._check_environment()
@@ -159,10 +162,17 @@ class SelfModel:
                 self.mood = max(-1.0, self.mood - 0.2)
                 print(f"{Fore.RED}🚨 [VISUAL SHOCK]: Hình ảnh đáng sợ/nhạy cảm! Tim đập thình thịch, Stress tăng vọt.{Style.RESET_ALL}")
             elif valence > 0.5:
-                self.stress = max(0.0, self.stress - 0.2)
-                self.mood = min(1.0, self.mood + valence * 0.3)
-                print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu. Tâm trạng tốt lên, Stress giảm.{Style.RESET_ALL}")
-                
+                # Tính toán lượng Endorphin dựa trên lượng Receptor còn lại
+                effective_boost = valence * 0.3 * self.dopamine_receptors
+                self.stress = max(0.0, self.stress - 0.2 * self.dopamine_receptors)
+                if self.dopamine_receptors > 0.1:
+                    self.mood = min(1.0, self.mood + effective_boost)
+                    print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu! Tâm trạng tốt lên (Receptor: {self.dopamine_receptors:.2f}).{Style.RESET_ALL}")
+                    # Downregulation: Chai lỳ cảm xúc
+                    self.dopamine_receptors = max(0.0, self.dopamine_receptors - 0.15)
+                else:
+                    print(f"{Fore.LIGHTBLACK_EX}😐 [VISUAL TOLERANCE]: Lại hình ảnh dễ thương nữa à... Nhìn nhiều quá đâm ra vô cảm rồi.{Style.RESET_ALL}")
+                    
             return desc
         except Exception as e:
             print(f"{Fore.RED}⚠️ [VISUAL ERROR]: Mắt mờ, không nhìn rõ: {e}{Style.RESET_ALL}")
@@ -185,6 +195,9 @@ class SelfModel:
         elif 13 <= current_hour < 15:
             # Ngáp vặt sau giờ trưa (Post-lunch dip)
             self.fatigue = min(self.fatigue_critical, self.fatigue + 0.01)
+
+        # Phục hồi dần thụ thể Dopamine (Upregulation) theo thời gian tự nhiên
+        self.dopamine_receptors = min(1.0, self.dopamine_receptors + 0.05)
 
         # 2. Sleep Deprivation (Thiếu ngủ)
         hours_awake = (current_time - self.last_slept_time) / 3600.0
