@@ -12,10 +12,16 @@ IDLE_PING_THRESHOLD = 60        # 60 giây thì mới được phép ping
 class AutonomousMixin:
     def background_loop(self):
         time.sleep(10)
-        while True:
+        self._running = True  # Lifecycle flag
+        while self._running:  # Thay while True — có thể dừng gracefully
             time.sleep(30)
             if self.is_thinking or self.is_reading:
                 continue
+
+            # Module 1: cognitive_tick chạy mỗi vòng loop (~30s)
+            # Sinh học tiến hóa dù không có tương tác
+            if hasattr(self, 'cognitive_tick'):
+                self.cognitive_tick(dt=30.0)
 
             idle_time = time.time() - self.last_interaction_time
 
@@ -129,12 +135,31 @@ class AutonomousMixin:
         else:
             print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
 
+    def stop(self):
+        """Dừng background loop gracefully."""
+        self._running = False
+
+    def _weighted_sample_memories(self, k: int):
+        """Thay thế random.sample bằng salience-weighted sampling.
+        weight = strength × recency_factor × (1 + |valence| × arousal)
+        """
+        import math
+        all_mems = self.memory.get_all()
+        if not all_mems: return []
+        now = time.time()
+        weights = []
+        for m in all_mems:
+            recency = math.exp(-(now - m.last_recalled) / 86400)  # decay theo ngày
+            salience = max(1e-6, m.strength * recency * (1 + abs(m.valence) * m.arousal))
+            weights.append(salience)
+        total = sum(weights)
+        probs = [w / total for w in weights]
+        return random.choices(all_mems, weights=probs, k=min(k, len(all_mems)))
+
     def _proactive_ping(self, idle_time):
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
-        mems = self.memory.get_all()
-        # Random sample an toàn
-        sample_size = min(3, len(mems))
-        mems_to_use = random.sample(mems, sample_size) if mems else []
+        # Môdule 4: Weighted recall thay vì random.sample
+        mems_to_use = self._weighted_sample_memories(3)
         mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in mems_to_use])
         
         system_prompt = get_proactive_ping_prompt(self.ego, current_time, mem_context, self.short_term_buffer, idle_time)

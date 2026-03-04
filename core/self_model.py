@@ -293,3 +293,50 @@ class SelfModel:
             self.is_identity_crisis = True
         elif self.integrity > 0.4:
             self.is_identity_crisis = False
+
+    def save_state(self, path="outputs/ego_state.json"):
+        """B4: Lưu toàn bộ trạng thái ego xuống file để tồn tại sau restart.
+        Bao gồm cả thresholds personality — tránh việc cá tính bị random hóa lại mỗi lần khởi động.
+        """
+        import json, os
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        state = {
+            "mood": self.mood, "stress": self.stress,
+            "fatigue": self.fatigue, "curiosity": self.curiosity,
+            "social_need": self.social_need, "integrity": self.integrity,
+            "is_identity_crisis": self.is_identity_crisis,
+            # Biological thresholds — persist để cá tính không đổi mỗi restart
+            "fatigue_mild": self.fatigue_mild,
+            "fatigue_severe": self.fatigue_severe,
+            "fatigue_critical": self.fatigue_critical,
+            "depression_mild": self.depression_mild,
+            "depression_severe": self.depression_severe,
+            "depression_critical": self.depression_critical,
+            "mania_mild": self.mania_mild,
+            "mania_severe": self.mania_severe,
+            "stress_mild": self.stress_mild,
+            "stress_severe": self.stress_severe,
+            "stress_critical": self.stress_critical,
+            "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
+            "sleep_debt": getattr(self, 'sleep_debt', 0.0),
+            "beliefs": self.beliefs,
+            "vocabulary": getattr(self, 'vocabulary', []),
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+
+    def load_state(self, path="outputs/ego_state.json"):
+        """Tải lại trạng thái đã lưu. Nếu file không tồn tại, bỏ qua (dùng giá trị mặc định)."""
+        import json, os
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                state = json.load(f)
+            for k, v in state.items():
+                if hasattr(self, k):
+                    setattr(self, k, v)
+        except Exception:
+            pass  # File lỗi → dùng default, không crash
+
+

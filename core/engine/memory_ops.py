@@ -5,7 +5,7 @@ import random
 from typing import List
 from colorama import Fore, Style
 from config import Config
-from core.memory import MemoryTrace
+from core.memory import MemoryTrace, MemoryType
 from core.prompts import get_semantic_drift_prompt, get_sleep_dream_prompt
 
 class MemoryOpsMixin:
@@ -51,7 +51,8 @@ class MemoryOpsMixin:
                 mood_bias = 0.3   # Tăng ký ức vui khi đang vui
             elif self.ego.mood < -0.3 and m.valence > 0.3:
                 mood_bias = -0.2  # Phạt ký ức vui khi đang buồn
-            final_score = score * m.strength * (1 + m.arousal) + mood_bias
+            # B14: Môod bias là multiplicative (không additive) — tránh override similarity
+            final_score = score * m.strength * (1 + m.arousal) * (1 + mood_bias)
             if final_score > 0.35:
                 candidates.append((final_score, m))
                 
@@ -90,7 +91,7 @@ class MemoryOpsMixin:
         return recalled
 
     def apply_semantic_drift(self, memory: MemoryTrace):
-        if memory.is_flashbulb or memory.type in ['core', 'semantic'] or memory.recall_count < 2:
+        if memory.is_flashbulb or memory.type in [MemoryType.CORE, MemoryType.SEMANTIC] or memory.recall_count < 2:
             return
         if random.random() > Config.SEMANTIC_DRIFT_CHANCE:
             return
@@ -114,7 +115,8 @@ class MemoryOpsMixin:
             check_prompt = f"Câu nói sau của User có ĐI NGƯỢC LẠI, MÂU THUẪN HOÀN TOÀN, hay PHỦ NHẬN các niềm tin cốt lõi sau đây không? Niềm tin: {belief_str}. Câu nói: '{user_input}'. Chỉ trả lời YES hoặc NO."
             try:
                 ans = self.llm.generate_text(check_prompt, temperature=0.1).strip().upper()
-                if "YES" in ans:
+                # B15: dùng startswith thày 'in' — 'YES, because...' không bị detect lầm
+                if ans.startswith("YES"):
                     print(f"{Fore.LIGHTYELLOW_EX}🤨 [SILENT SKEPTICISM]: Aura âm thầm hoài nghi thông tin này vì nó chọi lại Core Belief!{Style.RESET_ALL}")
                     internal_thought += " [HOÀI NGHI: Thông tin này có vẻ sai hoặc lừa dối, không khớp với niềm tin của mình.]"
                     new_valence = min(new_valence, -0.4) # Gắn cảm xúc tiêu cực, bài xích
@@ -132,7 +134,8 @@ class MemoryOpsMixin:
                 m.content = f"(Đã bị ám thị) {user_input} | Tôi nghĩ: {internal_thought}"
             else:
                 m.content += f" | (Mới): User: {user_input} -> Tôi: {internal_thought}"
-            m.strength, m.emotional_layers = 1.0, m.emotional_layers + 1
+            m.strength = min(1.0, m.strength + 0.3)  # B7: recovery curve, không reset về 1.0
+            m.emotional_layers = m.emotional_layers + 1
             if is_flashbulb: m.is_flashbulb = True
             m.valence, m.arousal, m.importance = (m.valence + new_valence) / 2, max(m.arousal, new_arousal), min(1.0, m.importance + 0.1)
             self.memory.store.update_meta(m.id, m)
@@ -144,56 +147,88 @@ class MemoryOpsMixin:
         self.memory.enforce_garbage_collection()
 
     def sleep(self):
-        print(f"\n{Fore.MAGENTA}💤 Aura đang ngủ... (Xử lý Decay & Consolidation & Drift & Advanced Semanticization){Style.RESET_ALL}")
+        """Quản lý giấc ngủ: điều phối 3 phase riêng biệt. B12: split for clarity + testability."""
+        print(f"\n{Fore.MAGENTA}💤 Aura đang ngủ... (Decay & Consolidation & Drift & Semanticization){Style.RESET_ALL}")
+        self._dream_consolidation_phase()
+        self._decay_phase()
+        self._guilt_reflection_phase()
+        self.memory.enforce_garbage_collection()
+        self.ego.stress  = max(0.0, self.ego.stress  - 0.3)
+        self.ego.fatigue = 0.0
+        self.ego.social_need = min(1.0, self.ego.social_need + 0.4)
+        self.ego.curiosity   = min(1.0, self.ego.curiosity   + 0.4)
+        self.ego.reroll_thresholds()
+        self.ego.check_integrity(self.memory.get_all())
+        print(f"   -> Stress giảm còn {self.ego.stress:.2f}, Fatigue reset về 0.")
+
+    # ------------------------------------------------------------------ #
+    # Sleep sub-phases (tách ra để dễ test và debug)                     #
+    # ------------------------------------------------------------------ #
+
+    def _dream_consolidation_phase(self):
+        """Phase 1: Nhớ lại kyờ kẻ + sật ngộ ra → tạo semantic memory mới."""
         mems = self.memory.get_all()
-        episodic_mems = [m for m in mems if m.type == 'episodic']
-        if len(episodic_mems) >= 5:
-            dream_mems = random.sample(episodic_mems, min(15, len(episodic_mems)))
-            prompt = get_sleep_dream_prompt("\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems]))
-            raw_response = self.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
-            json_str = raw_response.strip().replace("```json", "").replace("```", "").strip()
-            try:
-                insights = json.loads(json_str)
-                if isinstance(insights, list):
-                    for item in insights:
-                        tags, reasoning, conclusion = item.get('tags', []), item.get('reasoning', ''), item.get('conclusion', '')
-                        if conclusion and reasoning:
-                            print(f"{Fore.GREEN}   ❇️ Ngộ ra: {conclusion}{Style.RESET_ALL}\n")
-                            self.memory.add_memory(MemoryTrace(content=f"Suy luận logic ({', '.join(tags[:3])}): {conclusion} (Lý do: {reasoning})", type='semantic', valence=0.0, arousal=0.5, importance=1.0, is_flashbulb=True))
+        episodic_mems = [m for m in mems if m.type == MemoryType.EPISODIC]
+        if len(episodic_mems) < 5:
+            return
+        dream_mems = random.sample(episodic_mems, min(15, len(episodic_mems)))
+        prompt = get_sleep_dream_prompt("\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems]))
+        raw_response = self.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
+        json_str = raw_response.strip().replace("```json", "").replace("```", "").strip()
+        try:
+            insights = json.loads(json_str)
+            if isinstance(insights, list):
+                for item in insights:
+                    tags       = item.get('tags', [])
+                    reasoning  = item.get('reasoning', '')
+                    conclusion = item.get('conclusion', '')
+                    if conclusion and reasoning:
+                        print(f"{Fore.GREEN}   ❇️ Ngộ ra: {conclusion}{Style.RESET_ALL}\n")
+                        self.memory.add_memory(MemoryTrace(
+                            content=f"Suy luận logic ({', '.join(tags[:3])}): {conclusion} (Lý do: {reasoning})",
+                            type=MemoryType.SEMANTIC,
+                            valence=0.0, arousal=0.5, importance=1.0, is_flashbulb=True
+                        ))
+                        # B9: Belief validation
+                        if (conclusion and len(conclusion) > 10
+                                and conclusion not in self.ego.beliefs
+                                and len(self.ego.beliefs) < 50):
                             self.ego.beliefs.append(conclusion)
-                            if len(self.ego.beliefs) > 15: self.ego.beliefs.pop(0)
-            except: pass
+        except Exception:
+            pass
+
+    def _decay_phase(self):
+        """Phase 2: Áp dụng decay + semantic drift lên toàn bộ kyờ kẻ."""
+        mems = self.memory.get_all()
         for m in mems:
             m.decay(stress_level=self.ego.stress)
             self.apply_semantic_drift(m)
             self.memory.update_memory(m)
-        self.memory.enforce_garbage_collection()
-        self.ego.stress, self.ego.fatigue = max(0.0, self.ego.stress - 0.3), 0.0
-        self.ego.social_need, self.ego.curiosity = min(1.0, self.ego.social_need + 0.4), min(1.0, self.ego.curiosity + 0.4)
-        self.ego.reroll_thresholds()
-        self.ego.check_integrity(self.memory.get_all())
-        # Phase 7 Idea 6: Guilt & Self-Correction
-        # Chỉ xảy ra khi Stress > 0.75 hoặc có nhiều hơn 2 chỉ số tiêu cực > 0.5
-        negative_stats_count = sum(1 for val in [self.ego.stress, self.ego.fatigue, (self.ego.mood < -0.5)*1.0, self.ego.is_identity_crisis*1.0] if val > 0.5)
-        
+
+    def _guilt_reflection_phase(self):
+        """Phase 3: Nếu tâm lý bất ổn, Aura tự xét lại hành vi trong ngày."""
+        negative_stats_count = sum(1 for val in [
+            self.ego.stress, self.ego.fatigue,
+            float(self.ego.mood < -0.5), float(self.ego.is_identity_crisis)
+        ] if val > 0.5)
+
         if self.ego.stress > 0.75 or negative_stats_count >= 2:
             if len(self.short_term_buffer) > 0:
-                print(f"{Fore.LIGHTBLACK_EX}🔍 [GUILT REFLECTION]: Đang suy ngẫm lại hành vi trong ngày do tâm lý bất ổn...{Style.RESET_ALL}")
-                guilt_prompt = f"Đây là lịch sử trò chuyện gần đây:\n{self.short_term_buffer}\nBạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có với người dùng không? Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn gọn bắt đầu bằng 'Lý do: '."
+                print(f"{Fore.LIGHTBLACK_EX}🔍 [GUILT REFLECTION]: Đang suy ngẫm lại hành vi trong ngày...{Style.RESET_ALL}")
+                guilt_prompt = (
+                    f"Đây là lịch sử trò chuyện gần đây:\n{self.short_term_buffer}\n"
+                    "Bạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có không? "
+                    "Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn bắt đầu bằng 'Lý do: '."
+                )
                 guilt_res = self.llm.generate_text(guilt_prompt, temperature=0.2).strip()
-                if "CÓ" in guilt_res.upper() or "LÝ DO" in guilt_res.upper():
+                # B15: dùng startswith — tránh 'CÓ thể' bị detect lầm
+                if guilt_res.strip().upper().startswith("CÓ") or "LÝ DO" in guilt_res.upper():
                     guilt_reason = guilt_res.replace("CÓ", "").strip(":- ,.\n")
                     if guilt_reason:
                         guilt_mem = MemoryTrace(
                             content=f"Tôi cảm thấy ân hận vì cách hành xử của mình lúc trước: {guilt_reason}. Lần sau phải chú ý ôn hòa hơn.",
-                            type='episodic',
-                            valence=-0.6,
-                            arousal=0.5,
-                            importance=0.8
+                            type=MemoryType.EPISODIC,
+                            valence=-0.6, arousal=0.5, importance=0.8
                         )
                         self.memory.add_memory(guilt_mem)
                         print(f"{Fore.MAGENTA}😔 [GUILT]: Aura cảm thấy hối hận vì: {guilt_reason}{Style.RESET_ALL}")
-
-        print(f"   -> Stress giảm còn {self.ego.stress:.2f}, Fatigue reset về 0.")
-
-

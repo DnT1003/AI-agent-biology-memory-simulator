@@ -27,13 +27,15 @@ if __name__ == "__main__":
             is_shutting_down = True
             print(f"\n{Fore.YELLOW}Hệ thống đang tắt... Bắt buộc Aura đi ngủ để lưu trí nhớ.{Style.RESET_ALL}")
             try:
-                ai.sleep()
+                ai.sleep()          # Lưu ký ức dài hạn
+                ai.shutdown()       # Dừng background loop + lưu ego state
             except Exception as e:
                 print(f"Lỗi khi lưu trí nhớ: {e}")
 
     def signal_handler(signum, frame):
         handle_exit()
         sys.exit(0)
+
 
     # Đăng ký atexit cho trường hợp thoát bình thường hoặc sys.exit
     atexit.register(handle_exit)

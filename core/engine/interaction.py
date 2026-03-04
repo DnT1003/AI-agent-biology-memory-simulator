@@ -16,6 +16,8 @@ class InteractionMixin:
         is_confused = len(same_valence) >= 3
         if is_confused:
             print(f"{Fore.LIGHTRED_EX}🌪️ [COGNITIVE OVERLOAD]: Quá nhiều ký ức tiêu cực tràn về tạo ra nhiễu loạn thông tin!{Style.RESET_ALL}")
+            # B10: copy() trước shuffle — không mutate list gốc
+            recalled_mems = recalled_mems.copy()
             random.shuffle(recalled_mems)
             
         # Phase 8 Idea 3.2: Truy xuất Nghịch lý (Conflicting Recall)
@@ -120,6 +122,11 @@ class InteractionMixin:
             
             if action_match:
                 func_name, arg_str = action_match.group(1).strip(), action_match.group(2).strip()
+                # B1: Tool Whitelist — chặn tất cả tool không nằm trong danh sách cho phép
+                ALLOWED_TOOLS = {"search_novel", "start_reading", "web_search", "add_goal", "search_web"}
+                if func_name not in ALLOWED_TOOLS:
+                    print(f"{Fore.RED}⚠️ [SECURITY]: Tool '{func_name}' bị chặn (không nằm trong whitelist).{Style.RESET_ALL}")
+                    break
                 print(f"\n{Fore.LIGHTMAGENTA_EX}🔧 [HÀNH ĐỘNG]: Kích hoạt Tool {func_name}('{arg_str}')...{Style.RESET_ALL}")
                 tool_result = self.skills.execute(func_name, arg_str)
                 preview = tool_result.replace('\n', ' ')[:100] + "..." if len(tool_result) > 100 else tool_result.replace('\n', ' ')
@@ -137,7 +144,15 @@ class InteractionMixin:
         if final_full_text:
             for key, pattern in [("valence", r'VALENCE:\s*([\d\.-]+)'), ("arousal", r'AROUSAL:\s*([\d\.-]+)'), ("importance", r'IMPORTANCE:\s*([\d\.-]+)'), ("type", r'TYPE:\s*([a-zA-Z]+)')]:
                 match = re.search(pattern, final_full_text)
-                if match: result[key] = float(match.group(1)) if key != "type" else match.group(1)
+                if match:
+                    if key == "type":
+                        result[key] = match.group(1)
+                    else:
+                        raw = float(match.group(1))
+                        # B2: Clamp giá trị LLM parse — LLM có thể trả VALENCE: 999
+                        if key == "valence":   result[key] = max(-1.0, min(1.0, raw))
+                        elif key == "arousal": result[key] = max(0.0,  min(1.0, raw))
+                        else:                  result[key] = max(0.0,  min(1.0, raw))
             thought_match = re.search(r'THOUGHT:\s*(.*?)(?=(?:ACTION:|RESPONSE:|$))', final_full_text, re.DOTALL | re.IGNORECASE)
             if thought_match: result["internal_monologue"] = thought_match.group(1).strip()
             resp_match = re.search(r'RESPONSE:\s*(.*)', final_full_text, re.DOTALL | re.IGNORECASE)

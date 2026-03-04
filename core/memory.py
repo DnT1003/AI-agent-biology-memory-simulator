@@ -1,7 +1,8 @@
 import uuid
 import time
 import math
-from typing import List, Optional
+from enum import Enum
+from typing import List, Optional, Union
 from dataclasses import dataclass, field
 import numpy as np
 from colorama import Fore, Style
@@ -10,10 +11,27 @@ from config import Config
 from components.vector_store import VectorStore
 from components.embedder import Embedder
 
+
+class MemoryType(str, Enum):
+    """Enum cho loại ký ức (kế thừa str — tương thích bật BACKWARD với ChromaDB đã lưu)."""
+    EPISODIC  = "episodic"
+    SEMANTIC  = "semantic"
+    CORE      = "core"
+    EMOTIONAL = "emotional"
+
+
+def memory_type_from_str(s: str) -> MemoryType:
+    """Safe conversion từ string → MemoryType. Fallback về EPISODIC nếu không nhận ra."""
+    try:
+        return MemoryType(s.lower())
+    except ValueError:
+        return MemoryType.EPISODIC
+
+
 @dataclass
 class MemoryTrace:
     content: str
-    type: str  # 'episodic', 'semantic', 'core', 'emotional'
+    type: Union[MemoryType, str]  # MemoryType enum (hoặc string bảo hưng ChromaDB cũ)
 
     # TRỌNG SỐ (WEIGHTS)
     valence: float  # -1.0 (Buồn/Đau) -> 1.0 (Vui/Sướng)
@@ -28,6 +46,14 @@ class MemoryTrace:
     recall_count: int = 0  # Số lần được nhớ lại (để tính toán rủi ro bị méo mó)
     emotional_layers: int = 1 # Số tầng cảm xúc (Càng nhiều tầng, càng khó quên)
     is_flashbulb: bool = False # Ký ức in hằn không bao giờ phai
+    overlays: List[str] = field(default_factory=list)  # Lớt cảm xúc tích lũy (max 5)
+
+    def __post_init__(self):
+        """Invariant enforcement — vào lúc khởi tạo, clamp tất cả số về dải hợp lệ."""
+        self.valence    = max(-1.0, min(1.0, self.valence))
+        self.arousal    = max(0.0,  min(1.0, self.arousal))
+        self.importance = max(0.0,  min(1.0, self.importance))
+        self.strength   = max(0.0,  min(1.0, self.strength))
 
     def decay(self, stress_level: float):
         """
@@ -35,8 +61,9 @@ class MemoryTrace:
         Ký ức nhạt nhẽo (importance thấp, arousal thấp) bay màu cực nhanh.
         Ký ức sốc/quan trọng có thể tồn tại vĩnh viễn (decay_factor tiến về 0).
         """
-        if self.is_flashbulb or self.type == 'core' or self.type == 'semantic':
-            return # Không phai mờ
+        t = self.type
+        if self.is_flashbulb or t == MemoryType.CORE or t == MemoryType.SEMANTIC:
+            return  # Không phai mờ
 
         # Độ lỏng lẻo của ký ức giảm dần nếu có nhiều tầng cảm xúc
         vulnerability = max(0.01, 1.0 - self.importance - (self.emotional_layers * 0.05))
@@ -65,13 +92,20 @@ class MemoryTrace:
             drift = (current_mood - self.valence) * 0.1
             self.valence = max(-1.0, min(1.0, self.valence + drift))
             
-            # Phase 8 Idea 3.1: Emotional Overlays (Ký ức đa tầng cảm xúc)
+            # Phase 8 Idea 3.1: Emotional Overlays (tách field riêng, không mutate content)
             import random
             from datetime import datetime
-            if random.random() < 0.2: # 20% cơ hội bị đóng mác cảm xúc
+            MAX_OVERLAYS = 5
+            if random.random() < 0.2 and len(self.overlays) < MAX_OVERLAYS:
                 date_str = datetime.now().strftime("%d/%m")
                 emotional_tag = "rất vui" if current_mood > 0.3 else ("rất buồn" if current_mood < -0.3 else "bình thường")
-                self.content += f" [Nhớ lại lúc {date_str}: cảm thấy {emotional_tag} khi nghĩ về điều này]"
+                self.overlays.append(f"[{date_str}: {emotional_tag}]")
+
+    def get_display_content(self) -> str:
+        """Nội dung đầy đủ để hiển thị hoặc đưa vào prompt, bao gồm overlays."""
+        if self.overlays:
+            return self.content + " " + " ".join(self.overlays)
+        return self.content
 
 class MemoryManager:
     """Quản lý lớp Bộ nhớ, đóng gói VectorStore tương tự thư viện mem0"""
@@ -107,7 +141,7 @@ class MemoryManager:
         mems = self.get_all()
         forgotten_count = 0
         for m in mems:
-            if m.strength < 0.05 and m.type != 'core':
+            if m.strength < 0.05 and m.type != MemoryType.CORE:
                 self.remove(m.id)
                 forgotten_count += 1
                 

@@ -26,16 +26,21 @@ class VectorStore:
         """Helper chuyển Object sang chuỗi JSON để lưu vào metadata của Chroma"""
         return {
             "data": json.dumps(obj.__dict__, ensure_ascii=False),
-            # Thêm timestamp độc lập để có thể filter bằng vòng lặp ChromaDB where
-            "timestamp": float(getattr(obj, 'created_at', 0.0))
+            "timestamp": float(getattr(obj, 'created_at', 0.0)),
+            "schema_version": "2"  # B13: versioning — tăng khi thay đổi schema MemoryTrace
         }
 
     def _dict_to_obj(self, metadata_dict: dict) -> Any:
-        """Helper phục hồi lại Object từ JSON"""
-        # Lazy import để tránh Circular Dependency với MemoryManager
+        """Helper phục hồi lại Object từ JSON. Safe fallback nếu schema cũ."""
         from core.memory import MemoryTrace
-        data = json.loads(metadata_dict["data"])
-        return MemoryTrace(**data)
+        try:
+            data = json.loads(metadata_dict["data"])
+            # Lọc các field không còn tồn tại để tránh crash khi schema đổi
+            known_fields = {f.name for f in MemoryTrace.__dataclass_fields__.values()}
+            data = {k: v for k, v in data.items() if k in known_fields}
+            return MemoryTrace(**data)
+        except Exception:
+            return None  # Record lỗi thì bỏ qua, không crash toàn bộ
 
     def add(self, record_id: str, vector: np.ndarray, meta: Any):
         # Chroma yêu cầu nhét vector dưới dạng list python
@@ -87,7 +92,9 @@ class VectorStore:
         
         objs = []
         for meta_dict in results['metadatas']:
-             objs.append(self._dict_to_obj(meta_dict))
+            obj = self._dict_to_obj(meta_dict)
+            if obj is not None:  # Bỏ qua record lỗi
+                objs.append(obj)
         return objs
 
     def get_by_time_range(self, start_time: float, end_time: float, limit: int = 10) -> List[Any]:
@@ -130,9 +137,11 @@ class VectorStore:
         for i in range(len(results['ids'][0])):
             distance = results['distances'][0][i]
             # Chroma dùng cosine distance: sim = 1.0 - distance
-            similarity = 1.0 - distance 
+            # Clamp về [0,1] để tránh giá trị âm nếu metric thay đổi
+            similarity = max(0.0, min(1.0, 1.0 - distance))
             meta_obj = self._dict_to_obj(results['metadatas'][0][i])
-            formatted_results.append((similarity, meta_obj))
+            if meta_obj is not None:  # Bỏ qua record lỗi
+                formatted_results.append((similarity, meta_obj))
 
         # Đã được Chroma sort sẵn theo distance từ nhỏ đến lớn (sim từ cao xuống thấp)
         return formatted_results
