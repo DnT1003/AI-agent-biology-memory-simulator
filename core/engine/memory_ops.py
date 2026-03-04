@@ -107,6 +107,20 @@ class MemoryOpsMixin:
         internal_thought = perception.get('internal_monologue', '...')
         new_valence, new_arousal, new_importance = perception.get('valence', 0.0), perception.get('arousal', 0.0), perception.get('importance', 0.5)
         
+        # Phase 8 Idea 6.1: Sự Hoài Nghi Âm Thầm (Silent Skepticism)
+        beliefs = self.ego.get_active_beliefs()
+        if beliefs:
+            belief_str = ", ".join(beliefs)
+            check_prompt = f"Câu nói sau của User có ĐI NGƯỢC LẠI, MÂU THUẪN HOÀN TOÀN, hay PHỦ NHẬN các niềm tin cốt lõi sau đây không? Niềm tin: {belief_str}. Câu nói: '{user_input}'. Chỉ trả lời YES hoặc NO."
+            try:
+                ans = self.llm.generate_text(check_prompt, temperature=0.1).strip().upper()
+                if "YES" in ans:
+                    print(f"{Fore.LIGHTYELLOW_EX}🤨 [SILENT SKEPTICISM]: Aura âm thầm hoài nghi thông tin này vì nó chọi lại Core Belief!{Style.RESET_ALL}")
+                    internal_thought += " [HOÀI NGHI: Thông tin này có vẻ sai hoặc lừa dối, không khớp với niềm tin của mình.]"
+                    new_valence = min(new_valence, -0.4) # Gắn cảm xúc tiêu cực, bài xích
+            except Exception:
+                pass
+        
         is_flashbulb = new_arousal > 0.9 or new_importance > 0.9
         if is_flashbulb:
             print(f"{Fore.MAGENTA}⚡ [FLASHBULB MEMORY]: Sự kiện cực sốc/quan trọng được in hằn vĩnh viễn không phai!{Style.RESET_ALL}")
