@@ -39,11 +39,26 @@ class InteractionMixin:
                 content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[quên mất ngày tháng]', content)
             context_lines.append(f"- [Strength:{m.strength:.2f}] {content}")
             
+            
         mem_context = "\n".join(context_lines)
         if is_confused:
             mem_context = "[CÁC KÝ ỨC BỊ LẪN LỘN — Aura không chắc chắn sự kiện nào xảy ra trước, sự kiện nào xảy ra sau, đang rất bối rối]\n" + mem_context
         if has_conflict:
             mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
+            
+        # Phase 8 Idea 4.1: Suy nghĩ Lan man (Divergent Tangents)
+        if getattr(self.ego, 'curiosity', 0.0) > 0.65 and random.random() < 0.4:
+            try:
+                # Tìm bừa vài mẩu ký ức trong DB
+                all_raw_mems = self.memory.get_all()
+                if len(all_raw_mems) > 5:
+                    random.shuffle(all_raw_mems)
+                    tgt = all_raw_mems[0]
+                    # Thêm vào context với instruction đặc biệt
+                    print(f"\n{Fore.LIGHTCYAN_EX}💫 [DIVERGENT TANGENT]: Chợt nảy ra suy nghĩ miên man: '{tgt.content}'{Style.RESET_ALL}")
+                    mem_context += f"\n\n[Ý NGHĨ LƠ ĐÃNG (SPONTANEOUS RECALL)]: Đột nhiên bạn tự dưng nảy ra suy nghĩ lặp đi lặp lại về chuyện này: '{tgt.content}'. Hãy thêm một câu 'À mà nhắc mới nhớ...' hoặc 'Tự dưng nghĩ đến việc...' vào cuối câu trả lời dựa trên suy nghĩ lơ đãng này."
+            except Exception as e:
+                print(f"Lỗi Divergent Tangent: {e}")
             
         tools_instruction = self.skills.get_prompt_instructions()
         
