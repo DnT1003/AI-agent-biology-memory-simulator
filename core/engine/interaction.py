@@ -36,8 +36,32 @@ class InteractionMixin:
                     elif "RESPONSE:" in chunk:
                         parts = chunk.split("RESPONSE:")
                         if parts[0]: print(f"{Fore.LIGHTBLACK_EX}{parts[0]}{Style.RESET_ALL}", end="", flush=True)
-                        print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {parts[1] if len(parts)>1 else ''}", end="", flush=True)
-                    elif "RESPONSE:" in full_text: print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
+                        
+                        # Xử lý ngay lập tức đoạn đầu tiên sau chữ RESPONSE
+                        response_content = parts[1] if len(parts) > 1 else ""
+                        
+                        # Phase 8 Idea 1: Xử lý Fragmentation (Fragmented Output)
+                        if "[SEND]" in response_content:
+                            frag_parts = response_content.split("[SEND]")
+                            for i, frag in enumerate(frag_parts):
+                                print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {frag.strip()}", end="", flush=True)
+                                if i < len(frag_parts) - 1:
+                                    import time; time.sleep(0.5) # Giả lập gõ phím trễ nhịp
+                        else:
+                            print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {response_content.strip()}", end="", flush=True)
+                        
+                    elif "RESPONSE:" in full_text: 
+                        # Đang trong quá trình yield RESPONSE, kiểm tra [SEND]
+                        if "[SEND]" in chunk:
+                            frag_parts = chunk.split("[SEND]")
+                            for i, frag in enumerate(frag_parts):
+                                print(f"{Fore.CYAN}{frag}{Style.RESET_ALL}", end="", flush=True)
+                                if i < len(frag_parts) - 1:
+                                    print() # Xuống dòng cho tin nhắn mới
+                                    print(f"{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} ", end="", flush=True)
+                                    import time; time.sleep(0.5)
+                        else:
+                            print(f"{Fore.CYAN}{chunk}{Style.RESET_ALL}", end="", flush=True)
                     else: print(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}", end="", flush=True)
             
             final_full_text += full_text + "\n"
@@ -135,7 +159,21 @@ class InteractionMixin:
             pass
 
         recalled = self.recall(user_input)
-        mood_modifier = ""
+        
+        # Phase 8 Idea 1: Nhịp gõ & Sự Trễ Nhịp Vật Lý (Cognitive Degradation)
+        mood_modifier_lines = []
+        if self.ego.fatigue > 0.7:
+             mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT MỆT MỎI (Fatigue > 0.7). Chỉ được dùng CÂU CỰC KỲ NGẮN, lười biếng, thiếu mạch lạc. Không được phân tích logic cầu kỳ. Dùng cảm tính để trả lời.")
+             
+        # Tính toán Arousal dựa trên input hiện tại thay vì self.ego.arousal (SelfModel ko lưu arousal)
+        user_arousal_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", self.llm.generate_text(f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", temperature=0.1).strip() + "0")[0])
+        user_arousal_score = max(0.0, min(1.0, user_arousal_score))
+        
+        if user_arousal_score > 0.6 or abs(self.ego.mood) > 0.6 or self.ego.stress > 0.6:
+            mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT KÍCH ĐỘNG/HỒI HỘP. Hãy chia nhỏ câu trả lời của bạn ra thành nhiều dòng tin nhắn rời rạc liên tiếp nhau bằng cách CHÈN MÃ `[SEND]` GIỮA CÁC ĐOẠN NGẮN thay vì viết một khối văn bản dài. Đừng viết dài ngữ pháp chuẩn.")
+        
+        mood_modifier = "\n".join(mood_modifier_lines)
+
         hour = datetime.now().hour
 
         # --- Phân tầng Thời gian thực tế ---
