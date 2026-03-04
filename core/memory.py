@@ -64,6 +64,14 @@ class MemoryTrace:
         if not self.is_flashbulb:
             drift = (current_mood - self.valence) * 0.1
             self.valence = max(-1.0, min(1.0, self.valence + drift))
+            
+            # Phase 8 Idea 3.1: Emotional Overlays (Ký ức đa tầng cảm xúc)
+            import random
+            from datetime import datetime
+            if random.random() < 0.2: # 20% cơ hội bị đóng mác cảm xúc
+                date_str = datetime.now().strftime("%d/%m")
+                emotional_tag = "rất vui" if current_mood > 0.3 else ("rất buồn" if current_mood < -0.3 else "bình thường")
+                self.content += f" [Nhớ lại lúc {date_str}: cảm thấy {emotional_tag} khi nghĩ về điều này]"
 
 class MemoryManager:
     """Quản lý lớp Bộ nhớ, đóng gói VectorStore tương tự thư viện mem0"""

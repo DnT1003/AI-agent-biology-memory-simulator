@@ -17,6 +17,12 @@ class InteractionMixin:
         if is_confused:
             print(f"{Fore.LIGHTRED_EX}🌪️ [COGNITIVE OVERLOAD]: Quá nhiều ký ức tiêu cực tràn về tạo ra nhiễu loạn thông tin!{Style.RESET_ALL}")
             random.shuffle(recalled_mems)
+            
+        # Phase 8 Idea 3.2: Truy xuất Nghịch lý (Conflicting Recall)
+        valences = [getattr(m, 'valence', 0.0) for m in recalled_mems]
+        has_conflict = any(v < -0.3 for v in valences) and any(v > 0.3 for v in valences)
+        if has_conflict:
+            print(f"{Fore.LIGHTMAGENTA_EX}🎭 [COGNITIVE DISSONANCE]: Ký ức mâu thuẫn cảm xúc được gọi lên cùng lúc.{Style.RESET_ALL}")
         
         # Phase 8 Idea 5.1: Tính Bất Toàn Trí Nhớ Nơ-ron (Brain Fog Masking)
         # Chỉ che mờ chuỗi văn bản gửi cho LLM, bảo toàn hoàn toàn object m.content gốc
@@ -36,6 +42,8 @@ class InteractionMixin:
         mem_context = "\n".join(context_lines)
         if is_confused:
             mem_context = "[CÁC KÝ ỨC BỊ LẪN LỘN — Aura không chắc chắn sự kiện nào xảy ra trước, sự kiện nào xảy ra sau, đang rất bối rối]\n" + mem_context
+        if has_conflict:
+            mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
             
         tools_instruction = self.skills.get_prompt_instructions()
         
