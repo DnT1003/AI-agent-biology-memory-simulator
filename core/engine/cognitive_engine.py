@@ -12,11 +12,19 @@ from .interaction import InteractionMixin
 from .autonomous import AutonomousMixin
 
 class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
-    def __init__(self):
-        self.llm = LLM()
-        self.embedder = Embedder()
-        self.memory = MemoryManager(self.embedder)
-        self.ego = SelfModel()
+    def __init__(self, *, llm=None, embedder=None, memory=None, ego=None):
+        """
+        Khởi tạo CognitiveEngine với hỗ trợ Dependency Injection (DI).
+        Khi chạy thật:    engine = CognitiveEngine()
+        Khi viết test:    engine = CognitiveEngine(memory=FakeMemory(), llm=FakeLLM())
+        """
+        # Dependency Injection: dùng object được truyền vào nếu có,
+        # nếu không thì tự tạo mới như bình thường (Production mode).
+        self.llm      = llm      or LLM()
+        self.embedder = embedder or Embedder()
+        self.memory   = memory   or MemoryManager(self.embedder)
+        self.ego      = ego      or SelfModel()
+
         self.short_term_buffer: List[str] = []
         self.stm_file_path = "outputs/short_term.json"
         self.last_interaction_time = time.time()
