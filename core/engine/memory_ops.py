@@ -43,7 +43,14 @@ class MemoryOpsMixin:
         candidates = []
         for score, m in results:
             if m.strength < 0.1: continue
-            mood_bias = 0.2 if (self.ego.mood < -0.3 and m.valence < -0.2) else 0
+            # Phase 8 Idea 6.2: Emotional State-Dependent Retrieval
+            mood_bias = 0.0
+            if self.ego.mood < -0.3 and m.valence < -0.2:
+                mood_bias = 0.3   # Tăng ký ức buồn khi đang buồn
+            elif self.ego.mood > 0.3 and m.valence > 0.2:
+                mood_bias = 0.3   # Tăng ký ức vui khi đang vui
+            elif self.ego.mood < -0.3 and m.valence > 0.3:
+                mood_bias = -0.2  # Phạt ký ức vui khi đang buồn
             final_score = score * m.strength * (1 + m.arousal) + mood_bias
             if final_score > 0.35:
                 candidates.append((final_score, m))
