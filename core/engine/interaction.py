@@ -8,7 +8,35 @@ from core.tools import execute_tool
 class InteractionMixin:
     def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "") -> dict:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
-        mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in recalled_mems])
+        import random
+        
+        # Phase 8 Idea 5.2: Nhiễu loạn thông tin (Information Interference)
+        # Nếu có >= 3 ký ức tiêu cực được rút ra cùng lúc, trộn lẫn lên.
+        same_valence = [m for m in recalled_mems if getattr(m, 'valence', 0.0) < -0.2]
+        is_confused = len(same_valence) >= 3
+        if is_confused:
+            print(f"{Fore.LIGHTRED_EX}🌪️ [COGNITIVE OVERLOAD]: Quá nhiều ký ức tiêu cực tràn về tạo ra nhiễu loạn thông tin!{Style.RESET_ALL}")
+            random.shuffle(recalled_mems)
+        
+        # Phase 8 Idea 5.1: Tính Bất Toàn Trí Nhớ Nơ-ron (Brain Fog Masking)
+        # Chỉ che mờ chuỗi văn bản gửi cho LLM, bảo toàn hoàn toàn object m.content gốc
+        context_lines = []
+        is_foggy = hasattr(self, 'ego') and getattr(self.ego, 'fatigue', 0.0) > 0.6
+        if is_foggy and recalled_mems:
+            print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Trí nhớ tạm thời bị sương mù che phủ do kiệt sức...{Style.RESET_ALL}")
+            
+        for m in recalled_mems:
+            content = m.content
+            if is_foggy:
+                content = re.sub(r'\b\d{2,}\b', '[quên mất số cụ thể]', content)
+                content = re.sub(r'\b\d{1,2}:\d{2}\b', '[quên mất giờ]', content)
+                content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[quên mất ngày tháng]', content)
+            context_lines.append(f"- [Strength:{m.strength:.2f}] {content}")
+            
+        mem_context = "\n".join(context_lines)
+        if is_confused:
+            mem_context = "[CÁC KÝ ỨC BỊ LẪN LỘN — Aura không chắc chắn sự kiện nào xảy ra trước, sự kiện nào xảy ra sau, đang rất bối rối]\n" + mem_context
+            
         tools_instruction = self.skills.get_prompt_instructions()
         
         # Lấy trạng thái từ Reader để Aura biết mình có sách hay chưa

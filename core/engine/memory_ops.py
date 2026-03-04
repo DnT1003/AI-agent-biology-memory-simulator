@@ -70,24 +70,8 @@ class MemoryOpsMixin:
         candidates.sort(key=lambda x: x[0], reverse=True)
         recalled = [c[1] for c in candidates[:4]]
 
-        # =======================================================
-        # Phase 7 Idea 11: Sự Não Cá Vàng Tạm Thời (Brain Fog)
-        # =======================================================
-        import re
-        if self.ego.fatigue >= self.ego.fatigue_mild:
-            for m in recalled:
-                if random.random() < 0.3: # 30% cơ hội bị che mờ chi tiết trong mỗi mẩu ký ức
-                    # Che mờ các con số
-                    m.content = re.sub(r'\b\d+\b', '[quên mất số bao nhiêu rồi]', m.content)
-                    # Giả lập lú lẫn tẻ nhạt
-                    if len(m.content) > 20:
-                         words = m.content.split()
-                         if len(words) > 5:
-                              idx = random.randint(0, len(words) - 2)
-                              words[idx] = "[cái gì đó]"
-                              m.content = " ".join(words)
-                    print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Ký ức bị che mờ do mệt mỏi: {m.content[:50]}...{Style.RESET_ALL}")
-
+        # Cập nhật số lần được nhớ lại (Reconsolidation)
+        current_mood = self.ego.mood
         
         chained_memory = None
         if recalled:
