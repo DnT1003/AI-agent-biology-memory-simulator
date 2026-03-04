@@ -9,8 +9,11 @@ from core.memory import MemoryTrace, MemoryType
 from core.prompts import get_semantic_drift_prompt, get_sleep_dream_prompt
 
 class MemoryOpsMixin:
+    # Phase 14: Sliding Context Window cap
+    STM_MAX_ENTRIES = 15
+
     def load_short_term_memory(self):
-        """Khôi phục bộ nhớ ngắn hạn từ ổ cứng nếu thời gian chưa trôi qua quá lâu (3 tiếng)"""
+        """Khoi phuc bo nho ngan han tu o cung neu thoi gian chua troi qua qua lau (3 tieng)"""
         if os.path.exists(self.stm_file_path):
             try:
                 with open(self.stm_file_path, "r", encoding="utf-8") as f:
@@ -19,16 +22,20 @@ class MemoryOpsMixin:
                     saved_buffer = data.get("buffer", [])
                     
                     if time.time() - last_updated < 3 * 3600:
-                        self.short_term_buffer = saved_buffer
-                        print(f"{Fore.LIGHTBLACK_EX}🔄 [WORKING MEMORY]: Phục hồi {len(self.short_term_buffer)} ký ức ngắn hạn từ phiên trước.{Style.RESET_ALL}")
+                        # Chi phuc hoi toi da STM_MAX_ENTRIES cuoi cung
+                        self.short_term_buffer = saved_buffer[-self.STM_MAX_ENTRIES:]
+                        print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Phuc hoi {len(self.short_term_buffer)} ky uc ngan han tu phien truoc.{Style.RESET_ALL}")
                     else:
-                        print(f"{Fore.LIGHTBLACK_EX}🧹 [WORKING MEMORY]: Ký ức ngắn hạn đã quá hạn chặn 3 tiếng. Xóa sạch.{Style.RESET_ALL}")
+                        print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Ky uc ngan han da qua han 3 tieng. Xoa sach.{Style.RESET_ALL}")
             except Exception as e:
-                print(f"{Fore.RED}⚠️ Lỗi nạp bộ nhớ ngắn hạn: {e}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Loi nap bo nho ngan han: {e}{Style.RESET_ALL}")
 
     def save_short_term_memory(self):
-        """Lưu đè mảng trí nhớ ngắn hạn xuống ổ cứng"""
+        """Luu de mang tri nho ngan han xuong o cung (voi cap STM_MAX_ENTRIES)"""
         try:
+            # Phase 14: Cap truoc khi luu — tranh file phong to vo han
+            if len(self.short_term_buffer) > self.STM_MAX_ENTRIES:
+                self.short_term_buffer = self.short_term_buffer[-self.STM_MAX_ENTRIES:]
             data = {
                 "timestamp": time.time(),
                 "buffer": self.short_term_buffer
@@ -36,7 +43,7 @@ class MemoryOpsMixin:
             with open(self.stm_file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"{Fore.RED}⚠️ Lỗi lưu bộ nhớ ngắn hạn: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Loi luu bo nho ngan han: {e}{Style.RESET_ALL}")
 
     def recall(self, query: str) -> List[MemoryTrace]:
         results = self.memory.search_memories(query, top_k=10)
@@ -109,7 +116,7 @@ class MemoryOpsMixin:
         new_valence, new_arousal, new_importance = perception.get('valence', 0.0), perception.get('arousal', 0.0), perception.get('importance', 0.5)
         
         # Phase 8 Idea 6.1: Sự Hoài Nghi Âm Thầm (Silent Skepticism)
-        beliefs = self.ego.get_active_beliefs()
+        beliefs = self.ego.get_active_beliefs(context_query=user_input)
         if beliefs:
             belief_str = ", ".join(beliefs)
             check_prompt = f"Câu nói sau của User có ĐI NGƯỢC LẠI, MÂU THUẪN HOÀN TOÀN, hay PHỦ NHẬN các niềm tin cốt lõi sau đây không? Niềm tin: {belief_str}. Câu nói: '{user_input}'. Chỉ trả lời YES hoặc NO."
@@ -131,9 +138,14 @@ class MemoryOpsMixin:
             m = similar[0][1]
             if not m.is_flashbulb and random.random() < 0.2:
                 print(f"{Fore.LIGHTRED_EX}🎭 [CONFABULATION]: Ký ức cũ bị thao túng nhập nhằng với thông tin mới.{Style.RESET_ALL}")
-                m.content = f"(Đã bị ám thị) {user_input} | Tôi nghĩ: {internal_thought}"
+                m.overlays.append(f"[Ám thị mới] User: {user_input} | Tâm trí: {internal_thought}")
             else:
-                m.content += f" | (Mới): User: {user_input} -> Tôi: {internal_thought}"
+                m.overlays.append(f"[Liên kết mới]: User: {user_input} -> Tôi nghĩ: {internal_thought}")
+                
+            # Đảm bảo overlays không quá dài (keep max 10)
+            if len(m.overlays) > 10:
+                m.overlays = m.overlays[-10:]
+                
             m.strength = min(1.0, m.strength + 0.3)  # B7: recovery curve, không reset về 1.0
             m.emotional_layers = m.emotional_layers + 1
             if is_flashbulb: m.is_flashbulb = True

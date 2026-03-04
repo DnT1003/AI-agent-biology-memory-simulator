@@ -87,12 +87,22 @@ class MemoryTrace:
         recovery_boost = Config.RECONSOLIDATION_RATE / 4.0 if is_associative else Config.RECONSOLIDATION_RATE
         self.strength = min(1.0, self.strength + recovery_boost)
 
-        # Méo mó cảm xúc
+        # Phase 13: Emotional Inertia (Quán tính cảm xúc)
+        # Ký ức CORE có sức kháng cự lớn hơn với mood nhất thời — chống "tẩy não"
+        # Flashbulb: hoàn toàn miễn nhiễm (đây là nền tảng bất biến của self)
         if not self.is_flashbulb:
-            drift = (current_mood - self.valence) * 0.1
+            t = self.type
+            if t == MemoryType.CORE:
+                drift_factor = 0.02   # Cực kỳ khó thay đổi (5× so với episodic)
+            elif t == MemoryType.SEMANTIC:
+                drift_factor = 0.05   # Kháng cự vừa phải (2×)
+            else:
+                drift_factor = 0.1    # EPISODIC / EMOTIONAL: trôi dạt bình thường
+            
+            drift = (current_mood - self.valence) * drift_factor
             self.valence = max(-1.0, min(1.0, self.valence + drift))
             
-            # Phase 8 Idea 3.1: Emotional Overlays (tách field riêng, không mutate content)
+            # Emotional Overlays (ghi nhận cảm xúc khi nhớ lại)
             import random
             from datetime import datetime
             MAX_OVERLAYS = 5
@@ -100,6 +110,9 @@ class MemoryTrace:
                 date_str = datetime.now().strftime("%d/%m")
                 emotional_tag = "rất vui" if current_mood > 0.3 else ("rất buồn" if current_mood < -0.3 else "bình thường")
                 self.overlays.append(f"[{date_str}: {emotional_tag}]")
+            # Phase 13: Pruning — giữ tối đa 5 overlay gần nhất (mới nhất = quan trọng nhất)
+            if len(self.overlays) > MAX_OVERLAYS:
+                self.overlays = self.overlays[-MAX_OVERLAYS:]
 
     def get_display_content(self) -> str:
         """Nội dung đầy đủ để hiển thị hoặc đưa vào prompt, bao gồm overlays."""
@@ -121,11 +134,10 @@ class MemoryManager:
         """Cập nhật đè lại Metadata vào Vector Store"""
         self.store.update_meta(trace.id, trace)
 
-    def search_memories(self, query: str, top_k: int = 5) -> List[tuple[float, MemoryTrace]]:
-        # Gọi Vector Store để tìm kiếm
+    def search_memories(self, query: str, top_k: int = 5, min_strength: float = 0.1) -> List[tuple[float, MemoryTrace]]:
+        """Tim ky uc theo vector similarity. min_strength duoc day xuong DB layer (Phase 13)."""
         query_vec = self.embedder.encode(query)
-        # Kết quả trả về là list of tuples (score, MemoryTrace)
-        return self.store.search(query_vec, top_k=top_k)
+        return self.store.search(query_vec, top_k=top_k, min_strength=min_strength)
 
     def chronological_recall(self, start_time: float, end_time: float, limit: int = 10) -> List[MemoryTrace]:
         return self.store.get_by_time_range(start_time, end_time, limit)
@@ -137,13 +149,23 @@ class MemoryManager:
         self.store.remove(memory_id)
 
     def enforce_garbage_collection(self):
-        """Xóa vĩnh viễn những ký ức đã phai mờ (strength < 0.05). Không còn giới hạn dung lượng cứng!"""
-        mems = self.get_all()
+        """Xóa vĩnh viễn những ký ức đã phai mờ (strength < 0.05). Hỗ trợ phân trang chống tràn RAM."""
         forgotten_count = 0
-        for m in mems:
-            if m.strength < 0.05 and m.type != MemoryType.CORE:
-                self.remove(m.id)
-                forgotten_count += 1
+        limit = 50
+        offset = 0
+        
+        while True:
+            mems_chunk = self.store.get_all_metadata(limit=limit, offset=offset)
+            if not mems_chunk:
+                break
+                
+            for m in mems_chunk:
+                # Phase 13: Flashbulb memories cung duoc bao ve khoi GC
+                if m.strength < 0.05 and m.type != MemoryType.CORE and not m.is_flashbulb:
+                    self.remove(m.id)
+                    forgotten_count += 1
+            
+            offset += limit
                 
         if forgotten_count > 0:
             print(f"{Fore.RED}🗑️ [GARBAGE COLLECTION]: Đã quên vĩnh viễn {forgotten_count} sự kiện nhạt nhẽo.{Style.RESET_ALL}")

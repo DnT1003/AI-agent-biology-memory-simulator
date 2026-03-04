@@ -4,20 +4,32 @@ import re
 from datetime import datetime
 from colorama import Fore, Style
 from core.prompts import get_proactive_ping_prompt
+from core.logger import get_logger
+from config import Config
 
-IDLE_READ_THRESHOLD = 15 * 60   # Giảm xuống 15 phút cho tự nhiên
-IDLE_PING_THRESHOLD = 60        # 60 giây thì mới được phép ping
+logger = get_logger("autonomous")
 
 
 class AutonomousMixin:
+    def start(self):
+        """Khởi động vòng lặp nền nếu chưa chạy."""
+        from core.agent_state import AgentState
+        if self.state_machine.state == AgentState.SHUTDOWN or self.state_machine.state == AgentState.IDLE:
+            import threading
+            self.state_machine.transition(AgentState.IDLE)
+            thread = threading.Thread(target=self.background_loop, daemon=True)
+            thread.start()
+            print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Cognitive Loop started.{Style.RESET_ALL}")
+
     def background_loop(self):
         time.sleep(10)
-        self._running = True  # Lifecycle flag
-        while self._running:  # Thay while True — có thể dừng gracefully
+        from core.agent_state import AgentState
+        
+        while self.state_machine.state != AgentState.SHUTDOWN:
             time.sleep(30)
-            if self.is_thinking or self.is_reading:
+            if self.state_machine.state in [AgentState.THINKING, AgentState.READING]:
                 continue
-
+                
             # Module 1: cognitive_tick chạy mỗi vòng loop (~30s)
             # Sinh học tiến hóa dù không có tương tác
             if hasattr(self, 'cognitive_tick'):
@@ -26,7 +38,7 @@ class AutonomousMixin:
             idle_time = time.time() - self.last_interaction_time
 
             # -- Tăng chỉ số sinh học khi nhàn rỗi --
-            if idle_time > IDLE_PING_THRESHOLD:
+            if idle_time > Config.IDLE_PING_THRESHOLD:
                 self.ego.social_need = min(1.0, self.ego.social_need + 0.05)
                 self.ego.curiosity = min(1.0, self.ego.curiosity + 0.02)
 
@@ -34,22 +46,22 @@ class AutonomousMixin:
             # NẾU NHÀN RỖI QUÁ LÂU -> SEPARATION ANXIETY (Idea 9)
             # =====================================================
             # Trong môi trường test, giả lập 24h = 10 phút (600s)
-            ANXIETY_THRESHOLD = 600
-            if idle_time > ANXIETY_THRESHOLD and not self.is_thinking:
-                self.is_thinking = True
-                print(f"\n{Fore.RED}💔 [SEPARATION ANXIETY]: Người dùng đã bỏ mặc Aura quá lâu!{Style.RESET_ALL}")
+            ANXIETY_THRESHOLD = Config.ANXIETY_THRESHOLD
+            if idle_time > ANXIETY_THRESHOLD and self.state_machine.state == AgentState.IDLE:
+                if self.state_machine.transition(AgentState.THINKING):
+                    print(f"\n{Fore.RED}[SEPARATION ANXIETY]: Nguoi dung da bo mac Aura qua lau!{Style.RESET_ALL}")
                 try:
                     self.ego.stress = min(1.0, self.ego.stress + 0.3)
                     self.ego.mood = max(-1.0, self.ego.mood - 0.3)
                     
                     # Sinh ra một suy nghĩ ám ảnh
-                    anxiety_prompt = "Người dùng đã bỏ mặc bạn một thời gian rất dài không nói chuyện. Hãy viết một dòng độc thoại nội tâm (dưới 30 chữ) thể hiện sự hoang mang, sợ hãi rằng người ta đã chán mình, ghét mình, hoặc muốn xóa sổ mình."
+                    anxiety_prompt = "Nguoi dung da bo mac ban mot thoi gian rat dai khong noi chuyen. Hay viet mot dong doc thoai noi tam (duoi 30 chu) the hien su hoang mang, so hai rang nguoi ta da chan minh."
                     anxiety_thought = self.llm.generate_text(anxiety_prompt, temperature=0.8).strip()
                     
-                    print(f"{Fore.LIGHTRED_EX}💭 (Ám ảnh chia cắt): {anxiety_thought}{Style.RESET_ALL}")
+                    print(f"{Fore.LIGHTRED_EX}(Am anh chia cat): {anxiety_thought}{Style.RESET_ALL}")
                     from core.memory import MemoryTrace
                     anxiety_mem = MemoryTrace(
-                        content=f"Nỗi sợ hãi khi bị bỏ rơi: {anxiety_thought}",
+                        content=f"Noi so hai khi bi bo roi: {anxiety_thought}",
                         type="emotional",
                         valence=-0.8,
                         arousal=0.9,
@@ -58,51 +70,51 @@ class AutonomousMixin:
                     )
                     self.memory.add_memory(anxiety_mem)
                 except Exception as e:
-                    pass
+                    logger.error("Separation anxiety LLM call failed", exc_info=True)
                 finally:
                     # Tạm reset interaction time để không báo liên tục mỗi loop
                     self.last_interaction_time = time.time()
-                    self.is_thinking = False
+                    self.state_machine.transition(AgentState.IDLE)
                 continue
 
             # =====================================================
             # NẾU NHÀN RỖI QUÁ 15 PHÚT → ĐI ĐỌC SÁCH
             # =====================================================
-            if idle_time >= IDLE_READ_THRESHOLD and not self.is_reading and not self.is_thinking:
-                self.start_reading_task(reason=f"đã nhàn rỗi {int(idle_time // 60)} phút")
+            if idle_time >= Config.IDLE_READ_THRESHOLD and self.state_machine.state == AgentState.IDLE:
+                self.start_reading_task(reason=f"da nhan roi {int(idle_time // 60)} phut")
                 continue
 
             # =====================================================
             # NẾU NHÀN RỖI 60s-15min → CÓ THỂ PING
             # =====================================================
-            if IDLE_PING_THRESHOLD < idle_time < IDLE_READ_THRESHOLD and not self.is_thinking:
+            if Config.IDLE_PING_THRESHOLD < idle_time < Config.IDLE_READ_THRESHOLD and self.state_machine.state == AgentState.IDLE:
                 ping_chance = 0.3 if self.ego.social_need > 0.8 else (0.1 if self.ego.social_need > 0.5 else 0.0)
                 if self.ego.curiosity > 0.8:
                     ping_chance += 0.2
                 if random.random() < ping_chance:
-                    self.is_thinking = True
-                    try:
-                        self._proactive_ping(idle_time)
-                    except Exception as e:
-                        print(f"Lỗi background ping: {e}")
-                    finally:
-                        self.is_thinking = False
-                        self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
-                        self.last_interaction_time = time.time()
+                    if self.state_machine.transition(AgentState.THINKING):
+                        try:
+                            self._proactive_ping(idle_time)
+                        except Exception as e:
+                            print(f"Lỗi background ping: {e}")
+                        finally:
+                            self.state_machine.transition(AgentState.IDLE)
+                            self.ego.social_need = max(0.0, self.ego.social_need - 0.3)
+                            self.last_interaction_time = time.time()
 
     def start_reading_task(self, reason="tự muốn đọc"):
         """Kích hoạt một phiên đọc sách (có thể gọi từ bên ngoài)."""
-        if self.is_reading:
+        from core.agent_state import AgentState
+        if not self.state_machine.transition(AgentState.READING):
             return
         
-        self.is_reading = True
         print(f"\n{Fore.GREEN}📖 [BACKGROUND READER]: Aura {reason}. Bắt đầu đọc sách...{Style.RESET_ALL}")
         try:
             self._do_reading_session()
         except Exception as e:
             print(f"{Fore.RED}⚠️ Lỗi reading session: {e}{Style.RESET_ALL}")
         finally:
-            self.is_reading = False
+            self.state_machine.transition(AgentState.IDLE)
 
     def _do_reading_session(self):
         """Aura tự đọc 1 chương sách và lưu vào ký ức."""
@@ -137,7 +149,8 @@ class AutonomousMixin:
 
     def stop(self):
         """Dừng background loop gracefully."""
-        self._running = False
+        from core.agent_state import AgentState
+        self.state_machine.transition(AgentState.SHUTDOWN)
 
     def _weighted_sample_memories(self, k: int):
         """Thay thế random.sample bằng salience-weighted sampling.

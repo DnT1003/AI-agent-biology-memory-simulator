@@ -6,8 +6,6 @@ import asyncio
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 from colorama import Fore, Style, init
-import atexit
-import signal
 
 from core.engine import CognitiveEngine
 from core.memory import MemoryTrace
@@ -20,17 +18,21 @@ if __name__ == "__main__":
     ai = CognitiveEngine()
     
     is_shutting_down = False
+    # Phase 14: Shutdown coordination Event
+    _shutdown_complete = threading.Event()
 
     def handle_exit():
         global is_shutting_down
         if not is_shutting_down:
             is_shutting_down = True
-            print(f"\n{Fore.YELLOW}Hệ thống đang tắt... Bắt buộc Aura đi ngủ để lưu trí nhớ.{Style.RESET_ALL}")
+            print(f"\n{Fore.YELLOW}He thong dang tat...{Style.RESET_ALL}")
             try:
-                ai.sleep()          # Lưu ký ức dài hạn
-                ai.shutdown()       # Dừng background loop + lưu ego state
+                ai.stop()  # Signal background loop to stop
+                _shutdown_complete.wait(timeout=5.0)  # Wait for clean exit
+                ai.sleep()    # Only save AFTER background thread has stopped
+                ai.shutdown() # Finalize
             except Exception as e:
-                print(f"Lỗi khi lưu trí nhớ: {e}")
+                print(f"Loi khi luu tri nho: {e}")
 
     def signal_handler(signum, frame):
         handle_exit()
@@ -62,7 +64,11 @@ if __name__ == "__main__":
     print("Tải ký ức nền từ cơ sở dữ liệu...")
 
     # Start the agent's background loop in a separate thread
-    background_thread = threading.Thread(target=ai.background_loop, daemon=True)
+    def _bg_wrapper():
+        ai.background_loop()
+        _shutdown_complete.set()  # Bao hieu da thoat sach se
+    
+    background_thread = threading.Thread(target=_bg_wrapper, daemon=True)
     background_thread.start()
 
     async def interactive_loop():

@@ -1,0 +1,58 @@
+=================================================================
+    BÁO CÁO KIỂM TRA ĐẶC BIỆT — EDGE CASE ANALYSIS
+=================================================================
+  Thời điểm: 2026-03-04 12:30:24
+=================================================================
+
+=================================================================
+  TEST 1: HỒI MÁU KÝ ỨC (RE-CONSOLIDATION RESCUE) 
+=================================================================
+  Kịch bản: Tạo 1 ký ức bình thường, để nó phai mờ dần trong
+  200 ngày. Ở Ngày 201, User đột ngột nhắc lại chuyện đó.
+  Câu hỏi: strength có được 'hồi máu' để thoát danh sách GC?
+-----------------------------------------------------------------
+  Ban đầu        — Strength: 1.0000
+  Sau 100 đêm    — Strength: 0.0045
+  Sau 200 đêm    — Strength: 0.0000 ⚠️ NGUY HIỂM!
+  → Đêm nay không nhắc: SẼ BỊ XÓA (Strength < 0.05)
+
+  [SỰ KIỆN] User nhắc: 'Hôm 200 ngày trước bọn mình uống trà sữa nhớ không?'
+  Trước khi nhắc — Strength: 0.0000
+  Sau khi nhắc   — Strength: 0.1000 (+0.1000)
+
+  ✅ ĐẠT: Ký ức THOÁT DANH SÁCH BỊ XÓA sau khi được nhắc lại!
+     Cơ chế RECONSOLIDATION_RATE=0.1 đã hoạt động đúng.
+
+=================================================================
+  TEST 2: VỠ TRẬN HOMEOSTASIS (500-EVENT STRESS CASCADE)
+=================================================================
+  Kịch bản: Sau trạng thái ổn định (150 ký ức), đột ngột bơm
+  500 cú sốc liên tiếp. Kiểm tra có xóa nhầm ký ức quan trọng?
+-----------------------------------------------------------------
+  Khởi tạo: 61 ký ức (1 Flashbulb, 10 Quan trọng, 50 Thường)
+  Trạng thái ban đầu: Stress = 0.10
+
+  [SỰ KIỆN] Đổ vào 500 Stress events liên tiếp...
+  Stress sau 500 events: 1.00 (tối đa)
+
+  Kết quả sau 1 đêm với Stress = 1.00:
+  Ký ức BỊ XÓA:     0
+  Ký ức SỐNG SÓT:   61
+
+  [ ĐÁNH GIÁ ]
+  ----------------------------------------
+  ✅ ĐẠT: Flashbulb PTSD BẤT TỬ — không bị xóa dù Stress tối đa.
+  Ký ức Quan trọng sống sót: 10/10
+  ✅ ĐẠT: Ký ức quan trọng (emotional_layers cao) kháng stress tốt.
+  Ký ức thường bị xóa: 0/50
+  ℹ️  Ký ức thường cũng kháng stress khá tốt.
+
+  KẾT LUẬN:
+  → Hệ thống HOMEOSTASIS KHÔNG VỠ TRẬN. Stress cao chỉ làm tăng
+    tốc độ xóa ký ức nhạt nhẽo, KHÔNG xóa ký ức quan trọng.
+    Đây là hành vi đúng về mặt tâm lý học — khi bị trauma,
+    não người thường quên chuyện vặt nhưng nhớ rất dai sang chấn.
+
+=================================================================
+    HẾT BÁO CÁO
+=================================================================

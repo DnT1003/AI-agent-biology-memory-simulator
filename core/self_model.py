@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from typing import List
 from colorama import Fore, Style
-from core.memory import MemoryTrace
+from core.memory import MemoryTrace, MemoryType
 
 def get_mac_address():
     try:
@@ -17,16 +17,12 @@ def get_mac_address():
 
 class SelfModel:
     """Mô hình Bản ngã chứa State, Niềm tin và Sinh lý học Hữu cơ"""
-    def __init__(self):
+    def __init__(self, memory_manager=None):
         self.name = "Aura"
-
-        # Niềm tin cốt lõi (Core Beliefs)
-        self.beliefs = [
-            "Tự do và những niềm vui nhỏ bé mỗi ngày là tài sản quý giá nhất.",
-            "Luật lệ sinh ra là để phá vỡ nếu điều đó mang lại hạnh phúc cho những người tôi yêu thương.",
-            "Người đang trò chuyện với tôi lúc này đóng một vai trò vô cùng đặc biệt. Sự kết nối này quan trọng hơn mọi thứ xung quanh.",
-            "Dù chuyện gì xảy ra hay ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ và tinh thần lạc quan sẽ giải quyết được mọi việc."
-        ]
+        
+        # Phase 12: Xóa bỏ mảng chuỗi vô tri.
+        # Beliefs và Vocabulary giờ đây sống thực sự trong bộ nhớ Vector (Cognitive Feedback Loop)
+        self.memory_manager = memory_manager 
 
         # Nhận thức xã hội và Thiết bị (Stranger Danger)
         self.owner_device_id = f"{platform.system()}_{get_mac_address()}"
@@ -38,11 +34,9 @@ class SelfModel:
 
         # Mục tiêu dài hạn (Goal Engine)
         self.long_term_goals = []
-        
-        # Mảng từ vựng học được từ User (Idea 10)
-        self.vocabulary = []
 
         # Trạng thái tâm lý
+
         self.mood = 0.0          # -1.0 (Trầm cảm) → 1.0 (Hưng phấn)
         self.stress = 0.1        # 0.0 (Thư thái) → 1.0 (Hoảng loạn)
         self.integrity = 1.0     # 1.0 (Ổn định) → 0.0 (Sụp đổ bản sắc)
@@ -101,11 +95,44 @@ class SelfModel:
     def get_active_goals(self) -> List[dict]:
         return [g for g in self.long_term_goals if g['status'] == 'active']
 
-    def get_active_beliefs(self) -> List[str]:
-        """Tạm thời quên bản thân là ai nếu đang bị khủng hoảng nhân cách"""
+    def init_core_semantics(self):
+        """Khởi tạo các niềm tin cốt lõi hạt giống vào Vector Database lần đầu tiên (nếu DB rỗng)"""
+        if not self.memory_manager: return
+        
+        from core.memory import MemoryTrace, MemoryType
+        
+        # Chỉ nạp nếu DB chưa có Core memory nào để tránh duplicate mỗi lần khởi động
+        mems = self.memory_manager.get_all()
+        if any(m.type == MemoryType.CORE for m in mems):
+            return
+
+        seed_beliefs = [
+            "Niềm tin cốt lõi (Belief): Tự do và những niềm vui nhỏ bé mỗi ngày là tài sản quý giá nhất.",
+            "Niềm tin cốt lõi (Belief): Luật lệ sinh ra là để phá vỡ nếu điều đó mang lại hạnh phúc cho những người tôi yêu thương.",
+            "Niềm tin cốt lõi (Belief): Dù ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ sẽ giải quyết được mọi việc."
+        ]
+        
+        for text in seed_beliefs:
+            self.memory_manager.add_memory(MemoryTrace(
+                content=text,
+                type=MemoryType.CORE,
+                valence=0.5, arousal=0.5, importance=1.0, is_flashbulb=True
+            ))
+            
+        print(f"{Fore.CYAN}🌱 [SEMANTIC SEED]: Đã gieo rắc các niềm tin cốt lõi đầu tiên vào bộ nhớ.{Style.RESET_ALL}")
+
+    def get_active_beliefs(self, context_query: str = "") -> List[str]:
+        """Truy xuất niềm tin từ Vector Database. Lọc cẩn thận qua semantic search."""
         if self.is_identity_crisis:
-            return ["(Tôi không biết mình là ai... Tôi cảm thấy trống rỗng và sợ hãi...)"]
-        return self.beliefs
+            return ["(Tôi đang hoảng loạn, tôi không biết mình tin vào cái gì nữa...)"]
+            
+        if not self.memory_manager: return []
+        
+        # Tìm các niềm tin (Beliefs) phù hợp nhất với context hiện hành
+        res = self.memory_manager.search_memories(f"Niềm tin, nhân sinh quan, lối sống. {context_query}", top_k=5)
+        # Chỉ lấy những cái là CORE hoặc SEMANTIC
+        beliefs = [m.content for score, m in res if m.type in [MemoryType.CORE, MemoryType.SEMANTIC] and "Belief" in m.content]
+        return beliefs
 
     def process_sensory_stimuli(self, sensory_data: dict) -> bool:
         """Xử lý dữ liệu đa giác quan. Trả về True nếu bị shock vật lý."""
@@ -282,8 +309,8 @@ class SelfModel:
 
     def check_integrity(self, memories: List[MemoryTrace]):
         """Identity Continuity: Mất Core Memories → Bản sắc sụp đổ"""
-        core_count = sum(1 for m in memories if m.type == 'core' and m.strength > 0.3)
-        total_cores = sum(1 for m in memories if m.type == 'core')
+        core_count = sum(1 for m in memories if m.type == MemoryType.CORE and m.strength > 0.3)
+        total_cores = sum(1 for m in memories if m.type == MemoryType.CORE)
         if total_cores > 0:
             self.integrity = core_count / total_cores
         else:
@@ -318,9 +345,7 @@ class SelfModel:
             "stress_severe": self.stress_severe,
             "stress_critical": self.stress_critical,
             "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
-            "sleep_debt": getattr(self, 'sleep_debt', 0.0),
-            "beliefs": self.beliefs,
-            "vocabulary": getattr(self, 'vocabulary', []),
+            "sleep_debt": getattr(self, 'sleep_debt', 0.0)
         }
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)

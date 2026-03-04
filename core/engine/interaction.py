@@ -10,6 +10,17 @@ class InteractionMixin:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         import random
         
+        # Phase 11: Token Budgeting cho Memory Context (tránh nổ token window)
+        MAX_MEMORY_CHARS = 8000 # ~2000 tokens
+        current_chars = 0
+        budgeted_mems = []
+        for m in recalled_mems:
+            if current_chars + len(m.content) > MAX_MEMORY_CHARS:
+                break
+            budgeted_mems.append(m)
+            current_chars += len(m.content)
+        recalled_mems = budgeted_mems
+
         # Phase 8 Idea 5.2: Nhiễu loạn thông tin (Information Interference)
         # Nếu có >= 3 ký ức tiêu cực được rút ra cùng lúc, trộn lẫn lên.
         same_valence = [m for m in recalled_mems if getattr(m, 'valence', 0.0) < -0.2]
@@ -34,12 +45,15 @@ class InteractionMixin:
             print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Trí nhớ tạm thời bị sương mù che phủ do kiệt sức...{Style.RESET_ALL}")
             
         for m in recalled_mems:
-            content = m.content
+            # Phase 13: Dùng get_display_content() để bao gồm cả Overlays (suy nghĩ nội tâm tích lũy)
+            # Trước đây chỉ lấy m.content thô — Aura mù toàn bộ với các tầng suy nghĩ của mình
+            content = m.get_display_content()
             if is_foggy:
                 content = re.sub(r'\b\d{2,}\b', '[quên mất số cụ thể]', content)
                 content = re.sub(r'\b\d{1,2}:\d{2}\b', '[quên mất giờ]', content)
                 content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[quên mất ngày tháng]', content)
-            context_lines.append(f"- [Strength:{m.strength:.2f}] {content}")
+            overlay_indicator = f" [{len(m.overlays)}♥]" if m.overlays else ""
+            context_lines.append(f"- [Strength:{m.strength:.2f}{overlay_indicator}] {content}")
             
             
         mem_context = "\n".join(context_lines)
