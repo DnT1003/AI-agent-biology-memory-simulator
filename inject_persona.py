@@ -8,15 +8,18 @@ from core.engine import CognitiveEngine
 from core.memory import MemoryTrace
 
 def inject_persona():
-    print(f"{Fore.CYAN}Bắt đầu khởi tạo Tiền kiếp (Persona Injection) cho Aura...{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}Bắt đầu kiểm tra Tiền kiếp (Persona Injection) cho Aura...{Style.RESET_ALL}")
     
     # Khởi tạo engine (sẽ tự tải vector store cũ nếu có)
     engine = CognitiveEngine()
     
-    print(f"{Fore.YELLOW}Đang dọn dẹp ký ức cũ để nạp cốt truyện mới...{Style.RESET_ALL}")
-    engine.memory.store.clear_all()
-    
-    print(f"{Fore.GREEN}Đang tiêm các hạt giống ký ức (Flashbulb Memories nòng cốt)...{Style.RESET_ALL}")
+    # [FIX GASLIGHTING] Kiểm tra xem não đã có ký ức chưa
+    existing_mems = engine.memory.get_all()
+    if len(existing_mems) > 0:
+        print(f"{Fore.YELLOW}⚠️ [PERSONA SHIELD]: Phát hiện Aura đã có {len(existing_mems)} ký ức cá nhân. Bỏ qua ghi đè để bảo vệ nhân cách hiện tại.{Style.RESET_ALL}")
+        return
+        
+    print(f"{Fore.YELLOW}Não bộ đang trống rỗng. Đang tiêm các hạt giống ký ức (Flashbulb Memories nòng cốt/Tiền kiếp)...{Style.RESET_ALL}")
     
     memories_to_inject = [
         # Ký ức 1: Câu chuyện Vũ & Hân (The Heartbreak) -> Cốt lõi về sự trân trọng
