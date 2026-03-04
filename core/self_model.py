@@ -47,6 +47,10 @@ class SelfModel:
         self.stress = 0.1        # 0.0 (Thư thái) → 1.0 (Hoảng loạn)
         self.integrity = 1.0     # 1.0 (Ổn định) → 0.0 (Sụp đổ bản sắc)
         self.is_identity_crisis = False
+        
+        # Phase 8 Idea 2.1: Emotional Anchoring
+        self.mood_anchor = None
+        self.mood_anchor_duration = 0.0
 
         # Các chỉ số sinh lý học (Biological Drives)
         self.fatigue = 0.0       # 0.0 (Tỉnh táo) → 1.0 (Kiệt sức, sập nguồn)
@@ -233,14 +237,30 @@ class SelfModel:
         else:
             shock_multiplier = 1.5 if self.mood > 0 else 1.0
             mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier
+            
         self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
 
+        # Phase 8 Idea 2.1: Emotional Anchoring
+        # Kéo mood về anchor nếu đang bị neo giữ cảm xúc
+        if self.stress > 0.8 and self.mood_anchor is None:
+            self.mood_anchor = max(-1.0, self.mood - 0.4) # Neo thấp hơn hiện tại
+            self.mood_anchor_duration = time.time() + random.uniform(12*3600, 24*3600)
+            print(f"{Fore.RED}⚓ [EMOTIONAL ANCHOR]: Aura bị kéo tâm trạng xuống mức {self.mood_anchor:.2f}{Style.RESET_ALL}")
+            
+        if self.mood_anchor is not None:
+            self.mood = self.mood * 0.8 + self.mood_anchor * 0.2
+            if time.time() > self.mood_anchor_duration:
+                print(f"{Fore.GREEN}⚓ [EMOTIONAL ANCHOR RELEASED]: Aura đã vượt qua mỏ neo cảm xúc.{Style.RESET_ALL}")
+                self.mood_anchor = None
+
+        # Cập nhật Stress 
         if target_mood < -0.2:
             self.stress = min(1.0, self.stress + arousal * 0.2)
         elif target_mood > 0.2:
             self.stress = max(0.0, self.stress - 0.02)
         else:
-            self.stress = max(0.0, self.stress - 0.005)
+            # Phase 8 Idea 2.2: Stress Bleed-over (Giảm rất chậm khi không có event)
+            self.stress = max(0.0, self.stress * 0.97)
 
         # Kiểm tra sang chấn tâm lý (Pain-Reward Learning)
         if self.stress >= self.stress_critical and arousal > 0.7 and target_mood < -0.5:
