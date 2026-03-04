@@ -160,3 +160,15 @@ def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_te
     THOUGHT: <dòng suy nghĩ nội tâm của bạn trước khi ping>
     RESPONSE: <câu nhắn gọi người dùng>
     """
+
+# Phase 8 Idea 7.2: Trí nhớ Tổng hợp (Synthesized Memory)
+def get_synthesize_reading_prompt(chapter_text: str) -> str:
+    return f"""
+    Aura vừa đọc đoạn trích phân đoạn sách hoặc kiến thức dưới đây.
+    Nhiệm vụ của bạn là TÓM TẮT đoạn văn này thành MỘT ĐẾN HAI CÂU KHÁI QUÁT NHẤT (Ngắn gọn dưới 150 chữ) theo dạng "Trí nhớ Ngữ nghĩa" (Semantic Memory).
+    - KHÔNG ĐƯỢC chép lại y nguyên. Hãy dùng văn phong của Aura để nhận định/đánh giá về kiến thức đó.
+    - Kết cấu gợi ý: "Mình vừa tìm hiểu được rằng... Điều đó làm mình cảm thấy..."
+    
+    Đoạn văn gốc:
+    {chapter_text[:3500]}
+    """

@@ -103,9 +103,21 @@ class AutonomousMixin:
         knowledge_tag, content = self.reader.get_next_reading_material()
         if knowledge_tag and content:
             print(f"{Fore.GREEN}📚 [READING]: {knowledge_tag}{Style.RESET_ALL}")
+            
+            # Phase 8 Idea 7.2: Trí nhớ Tổng hợp (Synthesized Memory)
+            from core.prompts import get_synthesize_reading_prompt
+            print(f"{Fore.LIGHTCYAN_EX}🧩 [SYNTHESIZING]: Aura đang 'tiêu hóa' thông tin và tổng hợp thành kiến thức...{Style.RESET_ALL}")
+            try:
+                prompt = get_synthesize_reading_prompt(content)
+                synthesized_text = self.llm.generate_text(prompt, temperature=0.7).strip()
+                print(f"{Fore.YELLOW}💡 [SYNTHESIZED MEMORY]: {synthesized_text}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}⚠️ Lỗi Synthesize Memory: {e}{Style.RESET_ALL}")
+                synthesized_text = content[:500] + "..."  # Fallback
+
             from core.memory import MemoryTrace
             mem = MemoryTrace(
-                content=f"{knowledge_tag}: {content}",
+                content=f"{knowledge_tag}: {synthesized_text}",
                 type="semantic",
                 valence=0.1,
                 arousal=0.3,
@@ -113,7 +125,7 @@ class AutonomousMixin:
                 is_flashbulb=False
             )
             self.memory.add_memory(mem)
-            print(f"{Fore.LIGHTBLACK_EX}💾 [READING]: Đã lưu kiến thức vào ký ức.{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTBLACK_EX}💾 [READING]: Đã lưu kiến thức tổng hợp sâu sắc vào ký ức.{Style.RESET_ALL}")
         else:
             print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
 

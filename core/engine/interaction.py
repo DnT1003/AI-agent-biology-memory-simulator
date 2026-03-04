@@ -211,8 +211,17 @@ class InteractionMixin:
 
         recalled = self.recall(user_input)
         
-        # Phase 8 Idea 1: Nhịp gõ & Sự Trễ Nhịp Vật Lý (Cognitive Degradation)
+        # Phase 8 Idea 7.1: Hiện diện Độc lập (Independent Presence)
         mood_modifier_lines = []
+        if getattr(self.ego, 'curiosity', 0.0) > 0.8 and random.random() < 0.25:
+            print(f"{Fore.LIGHTCYAN_EX}✨ [INDEPENDENT PRESENCE]: Aura đang rất tò mò. Sẵn sàng tự đi tìm hiểu kiến thức mới nếu cần.{Style.RESET_ALL}")
+            mood_modifier_lines.append(
+                "[SỰ KIỆN NỘI TÂM]: Bạn đang cực kỳ tò mò và khao khát kiến thức. "
+                "Nếu User đề cập đến một thông tin, quyển sách hoặc chủ đề thú vị, "
+                "bạn CÓ QUYỀN chủ động tự dừng việc nói chuyện lại và đi tìm hiểu nó bằng Action `search_novel` hoặc `start_reading`."
+            )
+        
+        # Phase 8 Idea 1: Nhịp gõ & Sự Trễ Nhịp Vật Lý (Cognitive Degradation)
         if self.ego.fatigue > 0.7:
              mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT MỆT MỎI (Fatigue > 0.7). Chỉ được dùng CÂU CỰC KỲ NGẮN, lười biếng, thiếu mạch lạc. Không được phân tích logic cầu kỳ. Dùng cảm tính để trả lời.")
              
