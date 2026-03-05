@@ -18,20 +18,24 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str) -> dict:
+    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None) -> dict:
+        config_params = {"response_mime_type": "application/json", "temperature": temperature}
+        if max_output_tokens:
+            config_params["max_output_tokens"] = max_output_tokens
+            
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
             contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=temperature)
+            config=types.GenerateContentConfig(**config_params)
         )
         data = json.loads(resp.text)
         if isinstance(data, list):
             return data[0] if len(data) > 0 else {}
         return data
 
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None) -> dict:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None) -> dict:
         try:
-            return self._generate_json_with_retry(prompt, temperature, model_override)
+            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens)
         except Exception as e:
             logger.error(f"Lỗi LLM JSON (đã retry 3 lần thất bại): {e}")
             return {}
@@ -42,25 +46,31 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str) -> str:
+    def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None) -> str:
+        config_params = {"temperature": temperature}
+        if max_output_tokens:
+            config_params["max_output_tokens"] = max_output_tokens
+            
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=temperature)
+            config=types.GenerateContentConfig(**config_params)
         )
         return resp.text.strip()
 
-    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None) -> str:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None) -> str:
         try:
-            return self._generate_text_with_retry(prompt, temperature, model_override)
+            return self._generate_text_with_retry(prompt, temperature, model_override, max_output_tokens)
         except Exception as e:
             logger.error(f"Lỗi LLM Text (đã retry 3 lần thất bại): {e}")
             return ""
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None):
+    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None):
         # Không dùng @retry cho generator vì nó vỡ state stream nếu fail giữa chừng. Nhưng có thể wrap lệnh gọi initial.
         try:
             config_params = {"temperature": temperature}
+            if max_output_tokens:
+                config_params["max_output_tokens"] = max_output_tokens
             if tools:
                 config_params["tools"] = tools
                 

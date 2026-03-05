@@ -46,6 +46,9 @@ class CognitiveEngine:
         self.skills = get_skill_registry()
         self.reader = BackgroundReader(self.llm)
 
+        from core.world_graph import WorldGraph
+        self.world_graph = WorldGraph()
+
         self.memory_ops = MemoryOperationsController(self)
         self.interaction = InteractionController(self)
         self.autonomous = AutonomousController(self)

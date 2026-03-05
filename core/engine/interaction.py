@@ -24,6 +24,24 @@ class InteractionController:
             current_chars += len(m.content)
         recalled_mems = budgeted_mems
 
+        # [Phase 21] Ký ức Xâm nhập (Intrusive Memories / Flashbulb)
+        if getattr(self.engine.ego, 'stress', 0.0) > 0.8:
+            # Truy xuất các nỗi đau (Flashbulb + Valence rất thấp) chưa có trong recalled_mems
+            trauma_mems = [m for m in self.engine.memory.get_all() if getattr(m, 'is_flashbulb', False) and getattr(m, 'valence', 0.0) < -0.4]
+            if trauma_mems:
+                intrusive_mem = random.choice(trauma_mems)
+                if intrusive_mem.id not in [m.id for m in recalled_mems]:
+                    # Chèn nỗi ám ảnh lên đầu
+                    print(f"{Fore.LIGHTRED_EX}⚠️ [INTRUSIVE MEMORY]: Căng thẳng tột độ khiến nỗi ám ảnh ùa về: {intrusive_mem.content}{Style.RESET_ALL}")
+                    recalled_mems.insert(0, intrusive_mem)
+                    is_intrusive_active = True
+                else:
+                    is_intrusive_active = True
+            else:
+                is_intrusive_active = False
+        else:
+            is_intrusive_active = False
+
         # Phase 8 Idea 5.2: Nhiễu loạn thông tin (Information Interference)
         # Nếu có >= 3 ký ức tiêu cực được rút ra cùng lúc, trộn lẫn lên.
         same_valence = [m for m in recalled_mems if getattr(m, 'valence', 0.0) < -0.2]
@@ -47,6 +65,21 @@ class InteractionController:
         if is_foggy and recalled_mems:
             print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Trí nhớ tạm thời bị sương mù che phủ do kiệt sức...{Style.RESET_ALL}")
             
+        # [Phase 21] World Graph Retrieval
+        import re
+        entities = set(re.findall(r'\b[A-ZÀ-Ỹ][a-zà-ỹ]*\b', user_input))
+        graph_facts = []
+        for entity in entities:
+             if entity.lower() not in ["tôi", "em", "anh", "chị", "bạn", "của"]:
+                 facts = self.engine.world_graph.query(entity)
+                 graph_facts.extend(facts)
+        
+        user_facts = self.engine.world_graph.query("User")
+        if user_facts:
+            graph_facts.extend(random.sample(user_facts, min(3, len(user_facts))))
+            
+        graph_facts = list(set(graph_facts))
+
         for m in recalled_mems:
             # Phase 13: Dùng get_display_content() để bao gồm cả Overlays (suy nghĩ nội tâm tích lũy)
             # Trước đây chỉ lấy m.content thô — Aura mù toàn bộ với các tầng suy nghĩ của mình
@@ -56,7 +89,12 @@ class InteractionController:
                 content = re.sub(r'\b\d{1,2}:\d{2}\b', '[quên mất giờ]', content)
                 content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[quên mất ngày tháng]', content)
             overlay_indicator = f" [{len(m.overlays)}♥]" if m.overlays else ""
-            context_lines.append(f"- [Strength:{m.strength:.2f}{overlay_indicator}] {content}")
+            
+            # Đánh dấu Intrusive Memory cho LLM hiểu
+            if is_intrusive_active and m == recalled_mems[0]:
+                context_lines.append(f"- [KÝ ỨC XÂM NHẬP - ÁM ẢNH TỘT ĐỘ]: {content}")
+            else:
+                context_lines.append(f"- [Strength:{m.strength:.2f}{overlay_indicator}] {content}")
             
             
         mem_context = "\n".join(context_lines)
@@ -65,6 +103,8 @@ class InteractionController:
         if has_conflict:
             mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
             
+        if graph_facts:
+             mem_context = "[CÁC SỰ THẬT TỪ ĐỒ THỊ XÃ HỘI (WORLD GRAPH)]\n" + "\n".join(f"- {f}" for f in graph_facts) + "\n\n" + mem_context
         # Phase 8 Idea 4.1: Suy nghĩ Lan man (Divergent Tangents)
         if getattr(self.engine.ego, 'curiosity', 0.0) > 0.65 and random.random() < 0.4:
             try:
@@ -92,9 +132,15 @@ class InteractionController:
         
         import time
         import json
+        
+        # [Phase 21] Biological Constraints: Giới hạn tokens nếu quá mệt mỏi
+        max_tokens = None
+        if getattr(self.engine.ego, 'fatigue', 0.0) > 0.8:
+            max_tokens = 150 # Ép trả lời cực ngắn, không cho LLM cơ hội dài dòng
+        
         while iterations < 5 and not self.is_interrupted:
             try:
-                result_json = self.engine.llm.generate_json(prompt_in_use, temperature=0.7)
+                result_json = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, max_output_tokens=max_tokens)
             except Exception as e:
                 print(f"{Fore.RED}⚠️ Lỗi parse JSON Interaction: {e}{Style.RESET_ALL}")
                 break
@@ -186,6 +232,33 @@ class InteractionController:
 
         # NOTE: Mọi yêu cầu tìm truyện ("đọc truyện X"), hay báo bận ("Tớ đi làm") 
         # giờ đây đều được LLM xử lý tự nhiên thông qua perceives_and_respond và Actions.
+
+        # [Phase 21] World Graph Extraction
+        def _extract_graph():
+            prompt = f"""
+            Phân tích câu nói sau của người dùng để rút ra các mối quan hệ xã hội, trạng thái hoặc sở hữu.
+            Câu nói: "{user_input}"
+            
+            Nếu câu nói CHỨA thông tin về một người/vật khác và mối quan hệ với User (ví dụ: "Anh trai tớ là Hùng", "Mẹ tôi làm giáo viên"), hãy trích xuất dưới định dạng JSON:
+            [
+                {{"source": "User", "relation": "có anh trai là", "target": "Hùng"}}, ...
+            ]
+            Khuyến khích dùng "User" làm source name nếu người dùng xưng tôi/tớ/mình.
+            Nếu không có thông tin quan hệ xã hội rành mạch, trả lời mảng rỗng: []
+            """
+            try:
+                res = self.engine.llm.generate_text(prompt, temperature=0.1)
+                import json
+                json_str = res.strip()
+                if json_str.startswith("```json"): json_str = json_str[7:]
+                if json_str.startswith("```"): json_str = json_str[3:]
+                if json_str.endswith("```"): json_str = json_str[:-3]
+                data = json.loads(json_str.strip())
+                for item in data:
+                    self.engine.world_graph.add_relation(item['source'], item['relation'], item['target'])
+            except Exception:
+                pass
+        threading.Thread(target=_extract_graph).start()
 
         self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.2)
         

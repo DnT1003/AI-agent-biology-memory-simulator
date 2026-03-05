@@ -37,6 +37,18 @@ class AutonomousController:
             if hasattr(self.engine, 'cognitive_tick'):
                 self.engine.cognitive_tick(dt=30.0)
 
+            # [Phase 21] Dòng chảy Trí nhớ (Memory Stream) - Associative Recall
+            if self.engine.state_machine.state == AgentState.IDLE and random.random() < 0.2:
+                stream_mems = self._weighted_sample_memories(1)
+                if stream_mems:
+                    mem = stream_mems[0]
+                    if mem.strength > 0.3:
+                        print(f"{Fore.LIGHTBLACK_EX}💭 [MEMORY STREAM]: (Dòng suy nghĩ miên man) Nhớ lại: {mem.content}{Style.RESET_ALL}")
+                        mem.last_recalled = time.time()
+                        # Reconsolidate nhẹ do nhớ nội tâm
+                        mem.reconsolidate(self.engine.ego.mood, is_associative=True)
+                        self.engine.memory.update_memory(mem)
+
             idle_time = time.time() - self.engine.last_interaction_time
 
             # -- Tăng chỉ số sinh học khi nhàn rỗi --
@@ -90,10 +102,17 @@ class AutonomousController:
             # NẾU NHÀN RỖI 60s-15min → CÓ THỂ PING
             # =====================================================
             if Config.IDLE_PING_THRESHOLD < idle_time < Config.IDLE_READ_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
+                # [Phase 21] HardTrigger: Nếu nhu cầu giao tiếp đạt đỉnh, BẮT BUỘC phải ping
+                is_hard_trigger = (self.engine.ego.social_need >= 0.95)
+                
                 ping_chance = 0.3 if self.engine.ego.social_need > 0.8 else (0.1 if self.engine.ego.social_need > 0.5 else 0.0)
                 if self.engine.ego.curiosity > 0.8:
                     ping_chance += 0.2
-                if random.random() < ping_chance:
+                    
+                if is_hard_trigger or random.random() < ping_chance:
+                    if is_hard_trigger:
+                        print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Nhu cầu giao tiếp đạt đỉnh! Aura bắt buộc phải lên tiếng.{Style.RESET_ALL}")
+                        
                     if self.engine.state_machine.transition(AgentState.THINKING):
                         try:
                             self._proactive_ping(idle_time)

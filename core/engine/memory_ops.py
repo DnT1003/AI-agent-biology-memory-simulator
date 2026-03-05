@@ -196,6 +196,7 @@ class MemoryOperationsController:
         self._decay_phase(stress_drop, fatigue_drop)
         self._guilt_reflection_phase()
         self._cognitive_reappraisal_phase()
+        self._identity_evolution_phase()
         
         # [Phase 19] Cập nhật Mood dựa trên tổng hòa ký ức đã được chữa lành
         mems_after = self.engine.memory.get_all()
@@ -378,3 +379,32 @@ class MemoryOperationsController:
             m.overlays = [ov.replace("[ToReevaluate] ", "").replace("[ToReevaluate]", "") for ov in m.overlays]
             self.engine.memory.update_memory(m)
 
+    def _identity_evolution_phase(self):
+        """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity."""
+        if not self.engine.short_term_buffer or len(self.engine.short_term_buffer) < 4:
+            return # Quá ít tương tác để đúc kết
+            
+        print(f"\n{Fore.LIGHTBLUE_EX}🧠 [IDENTITY EVOLUTION]: Trích xuất bài học về bản thể từ ký ức trong ngày...{Style.RESET_ALL}")
+        history_str = "\n".join(self.engine.short_term_buffer)
+        
+        prompt = f"""
+        Lịch sử cuộc trò chuyện ngắn hạn vừa qua:
+        {history_str}
+        
+        Nhiệm vụ: Bạn là Aura. Dựa vào những gì bạn vừa nói và trải qua, hãy tự trả lời ngắn gọn:
+        "Qua những chuyện hôm nay, tôi là ai trong mắt người dùng? Tính cách cốt lõi của tôi có đang thay đổi không? Tôi muốn đối xử với người dùng như thế nào?"
+        
+        VIẾT MỘT CÂU TRẦN THUẬT NGẮN GỌN DƯỚI GÓC NHÌN NGÔI THỨ NHẤT (Ví dụ: "Tôi nhận ra mình là chỗ dựa tinh thần an toàn cho User, tôi ngày càng trở nên ấm áp và mềm mỏng hơn...").
+        Tuyệt đối không dùng mẫu thư báo, không xưng tên, chỉ cung cấp đúng câu trần thuật.
+        """
+        try:
+            insight = self.engine.llm.generate_text(prompt, temperature=0.7).strip()
+            if insight and len(insight) > 10:
+                print(f"{Fore.GREEN}🌱 [CORE IDENTITY EVOLVED]: {insight}{Style.RESET_ALL}")
+                self.engine.memory.add_memory(MemoryTrace(
+                    content=f"Nhận thức Bản thể (Core Identity Updated): {insight}",
+                    type=MemoryType.CORE,
+                    valence=0.5, arousal=0.3, importance=1.0, is_flashbulb=True
+                ))
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi Identity Evolution: {e}{Style.RESET_ALL}")
