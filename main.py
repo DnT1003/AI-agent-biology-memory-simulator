@@ -27,10 +27,10 @@ if __name__ == "__main__":
             is_shutting_down = True
             print(f"\n{Fore.YELLOW}He thong dang tat...{Style.RESET_ALL}")
             try:
-                ai.stop()  # Signal background loop to stop
+                ai.autonomous.stop()  # Signal background loop to stop
                 _shutdown_complete.wait(timeout=5.0)  # Wait for clean exit
-                ai.sleep()    # Only save AFTER background thread has stopped
-                ai.shutdown() # Finalize
+                ai.memory_ops.sleep()    # Only save AFTER background thread has stopped
+                if hasattr(ai, 'shutdown'): ai.shutdown() # Finalize
             except Exception as e:
                 print(f"Loi khi luu tri nho: {e}")
 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
 
     # Start the agent's background loop in a separate thread
     def _bg_wrapper():
-        ai.background_loop()
+        ai.autonomous.background_loop()
         _shutdown_complete.set()  # Bao hieu da thoat sach se
     
     background_thread = threading.Thread(target=_bg_wrapper, daemon=True)
@@ -79,6 +79,8 @@ if __name__ == "__main__":
             print(f"{Fore.YELLOW}⚠️ Không tìm thấy Windows Console chuẩn (có thể đang chạy trong IDE). Fallback sang input() thường.{Style.RESET_ALL}")
             use_prompt_toolkit = False
 
+        reply_task = None
+        
         while True:
             try:
                 if use_prompt_toolkit:
@@ -87,13 +89,16 @@ if __name__ == "__main__":
                 else:
                     u_in = await asyncio.to_thread(input, f"\n{Fore.WHITE}👤 Bạn: {Style.RESET_ALL}")
                     
+                if getattr(ai.interaction, 'is_interrupted', None) is False and reply_task and not reply_task.done():
+                    ai.interaction.is_interrupted = True
+                    
                 if not u_in.strip():
                     continue
                     
                 if u_in.lower() in ['exit', 'quit']:
                     break
                 elif u_in.lower() == 'sleep':
-                    ai.sleep()
+                    ai.memory_ops.sleep()
                     continue
                 elif u_in.lower() == 'status':
                     print(f"--- STATUS ---")
@@ -107,7 +112,11 @@ if __name__ == "__main__":
                 # Cập nhật thời điểm người dùng vừa tương tác để reset idle time
                 import time
                 ai.last_interaction_time = time.time()
-                ai.interaction_loop(u_in)
+                ai.interaction.is_interrupted = False
+                
+                reply_task = asyncio.create_task(
+                    asyncio.to_thread(ai.interaction.interaction_loop, u_in)
+                )
                 
             except KeyboardInterrupt:
                 break

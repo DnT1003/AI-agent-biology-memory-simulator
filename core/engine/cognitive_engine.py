@@ -11,15 +11,15 @@ from core.memory import MemoryManager
 from core.self_model import SelfModel
 from core.logger import get_logger
 from config import Config
-from .memory_ops import MemoryOpsMixin
-from .interaction import InteractionMixin
-from .autonomous import AutonomousMixin
+from .memory_ops import MemoryOperationsController
+from .interaction import InteractionController
+from .autonomous import AutonomousController
 from core.agent_state import StateMachine, AgentState
 
 logger = get_logger("cognitive_engine")
 
 
-class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
+class CognitiveEngine:
     def __init__(self, *, llm=None, embedder=None, memory=None, ego=None):
         """
         Khởi tạo CognitiveEngine với hỗ trợ Dependency Injection (DI).
@@ -46,6 +46,10 @@ class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
         self.skills = get_skill_registry()
         self.reader = BackgroundReader(self.llm)
 
+        self.memory_ops = MemoryOperationsController(self)
+        self.interaction = InteractionController(self)
+        self.autonomous = AutonomousController(self)
+
         if not os.path.exists("outputs"):
             os.makedirs("outputs")
 
@@ -55,7 +59,7 @@ class CognitiveEngine(MemoryOpsMixin, InteractionMixin, AutonomousMixin):
             self.ego.init_core_semantics()
         logger.info("CognitiveEngine initialized. Ego state loaded and core semantics seeded.")
 
-        self.load_short_term_memory()
+        self.memory_ops.load_short_term_memory()
 
     def cognitive_tick(self, dt: float = 30.0):
         """

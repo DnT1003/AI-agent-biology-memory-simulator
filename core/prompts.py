@@ -78,16 +78,21 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
       desc: Bắt đầu một phiên đọc sách ngay lập tức (thường dùng khi người dùng bận, bảo bạn đi đọc sách, hoặc bạn cảm thấy buồn chán).
       args: none
 
-    OUTPUT FORMAT YÊU CẦU:
-    Vui lòng xuất ra ĐÚNG định dạng Text sau (KHÔNG dùng JSON, KHÔNG có thẻ markdown), để hệ thống stream trực tiếp:
-    VALENCE: <số thực>
-    AROUSAL: <số thực>
-    IMPORTANCE: <số thực>
-    TYPE: <chuỗi>
-    THOUGHT: <dòng suy nghĩ nội tâm của bạn>
-    [FACT: <Trích xuất sự thật tối đa 1-2 câu nếu có. NẾU KHÔNG CÓ KIẾN THỨC MỚI KHÁCH QUAN, PHẢI BỎ QUA HOÀN TOÀN DÒNG NÀY>]
-    [ACTION: <lệnh gọi tool nếu cần. Nếu muốn tự trả lời, bỏ qua dòng này>]
-    RESPONSE: <câu trả lời tới người dùng. Nếu bạn dùng ACTION, khoan viết đoạn RESPONSE này. Hãy đợi hệ thống cấp kết quả rồi mới trả lời.>
+    OUTPUT FORMAT YÊU CẦU (STRICT JSON):
+    Bạn BẮT BUỘC phải trả về một object JSON (không dùng thẻ ```json, trả về text JSON thuần), đúng theo schema sau:
+    {{
+      "valence": <float từ -1.0 đến 1.0>,
+      "arousal": <float từ 0.0 đến 1.0>,
+      "importance": <float từ 0.0 đến 1.0>,
+      "type": "episodic",
+      "thought": "<dòng suy nghĩ nội tâm>",
+      "action": "<tên_tool|tham_số>" hoặc null nếu không dùng tool,
+      "response": "<phản hồi tới người dùng, nếu dùng action thì để rỗng>"
+    }}
+    Lưu ý:
+    - `action`: Chỉ dùng 1 tool mỗi lần. Format bắt buộc: "tên_tool|tham_số". Ví dụ: "search_novel|Harry Potter". Nếu không dùng tool, để `null`.
+    - `response`: Nếu có `action`, hãy để `response` là chuỗi rỗng "". Hệ thống sẽ trả kết quả action lại cho bạn rồi mới yêu cầu bạn viết response.
+    - `thought`: Phải có. Dòng suy nghĩ này người dùng KHÔNG đọc được.
     """
 
 def get_sleep_dream_prompt(dream_context: str, is_hallucinating: bool = False) -> str:
@@ -155,10 +160,12 @@ def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_te
     Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, chia sẻ vu vơ một suy nghĩ, hoặc báo rằng bạn chuẩn bị đi đọc sách/nghiên cứu kiến thức.
     KHÔNG ĐÓNG VAI TRỢ LÝ ẢO. Bạn là đối tác trò chuyện.
     
-    OUTPUT FORMAT YÊU CẦU:
-    Vui lòng xuất ra ĐÚNG định dạng Text sau (để stream):
-    THOUGHT: <dòng suy nghĩ nội tâm của bạn trước khi ping>
-    RESPONSE: <câu nhắn gọi người dùng>
+    OUTPUT FORMAT YÊU CẦU (STRICT JSON):
+    Bạn BẮT BUỘC phải trả về một object JSON thuần túy theo schema sau:
+    {{
+      "thought": "<suy nghĩ nội tâm để quyết định ping người dùng>",
+      "response": "<câu nhắn người dùng>"
+    }}
     """
 
 # Phase 8 Idea 7.2: Trí nhớ Tổng hợp (Synthesized Memory)
