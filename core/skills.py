@@ -21,15 +21,24 @@ class SkillRegistry:
     def register(self, skill: Skill):
         self.skills[skill.name] = skill
 
-    def execute(self, name: str, args: str) -> str:
+    def execute(self, name: str, args: str, ego=None) -> str:
         if name in self.skills:
             skill = self.skills[name]
+            
+            from colorama import Fore, Style
+            
+            # Áp dụng penalty nếu độ thông thạo thấp (lóng ngóng)
+            if ego and skill.mastery < 0.4:
+                ego.fatigue = min(1.0, ego.fatigue + 0.05)
+                ego.stress = min(1.0, ego.stress + 0.05)
+                print(f"{Fore.YELLOW}⚠️ [PROCEDURAL MEMORY]: Dùng tool '{name}' khi thông thạo thấp ({skill.mastery:.2f}). Aura tốn gấp đôi công sức và hơi căng thẳng.{Style.RESET_ALL}")
             
             # Nếu skill quá rỉ sét, có khả năng Aura bị "quên" cách dùng
             if skill.rust_level > 0.5 and random.random() < (skill.rust_level - 0.3):
                 skill.rust_level = max(0.0, skill.rust_level - 0.2) # Thất bại nhưng cũng là một lần luyện tập (nhớ lại)
                 skill.mastery = max(0.0, skill.mastery - 0.05)
                 skill.last_used = time.time()
+                self.save()
                 return f"[HỆ THỐNG]: Bạn đã quên cú pháp chính xác hoặc lóng ngóng khi dùng tool '{name}'. Vui lòng thử lại sau."
                 
             try:
@@ -37,9 +46,11 @@ class SkillRegistry:
                 result = skill.func(args)
                 
                 # Cập nhật độ nhuần nhuyễn
+                # Dùng tool thành công sẽ tăng proficiency nhanh
                 skill.mastery = min(1.0, skill.mastery + 0.1)
                 skill.rust_level = 0.0
                 skill.last_used = time.time()
+                self.save()
                 
                 return result
             except Exception as e:
@@ -53,12 +64,40 @@ class SkillRegistry:
             if days_since_last_use > 1.0:
                 skill.rust_level = min(1.0, skill.rust_level + 0.1 * days_passed)
                 skill.mastery = max(0.0, skill.mastery - 0.05 * days_passed)
+        self.save()
 
     def get_prompt_instructions(self) -> str:
         if not self.skills:
             return "HỆ THỐNG CÔNG CỤ (ACTION SYSTEM): Hiện tại không có công cụ nào."
             
-        lines = ["HỆ THỐNG CÔNG CỤ (ACTION SYSTEM):", "Nếu cần dùng Tool, xuất ra ĐÚNG 1 dòng ACTION: <tên_tool> | <tham số>"]
+        lines = ["HỆ THỐNG CÔNG CỤ (ACTION SYSTEM):", "Nếu cần dùng Tool, xuất ra ĐÚNG 1 dòng ACTION: <tên_tool> | <tham số>. Lưu ý: Độ thông thạo càng thấp, dùng Tool càng tốn sức và dễ lỗi."]
         for s in self.skills.values():
-            lines.append(f"- Tool \"{s.name}\": {s.description}. VD: {s.usage_format}")
+            level = "Chưa quen" if s.mastery < 0.4 else ("Khá quen" if s.mastery < 0.8 else "Rất thành thạo")
+            lines.append(f"- Tool \"{s.name}\": {s.description}. VD: {s.usage_format}. [Độ thông thạo: Chọn ở mức {level} ({s.mastery:.2f}/1.0)]")
         return "\n".join(lines)
+
+    def save(self):
+        try:
+            import os, json
+            os.makedirs("outputs", exist_ok=True)
+            data = {}
+            for k, s in self.skills.items():
+                data[k] = {"mastery": s.mastery, "rust_level": s.rust_level, "last_used": s.last_used}
+            with open("outputs/skills.json", "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e: 
+            print(f"Lỗi save skills: {e}")
+
+    def load(self):
+        try:
+            import os, json
+            if os.path.exists("outputs/skills.json"):
+                with open("outputs/skills.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for k, v in data.items():
+                        if k in self.skills:
+                            self.skills[k].mastery = v.get("mastery", 0.5)
+                            self.skills[k].rust_level = v.get("rust_level", 0.0)
+                            self.skills[k].last_used = v.get("last_used", time.time())
+        except Exception as e: 
+            print(f"Lỗi load skills: {e}")

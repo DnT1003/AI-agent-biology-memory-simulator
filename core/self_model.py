@@ -48,8 +48,10 @@ class SelfModel:
 
         # Các chỉ số sinh lý học (Biological Drives)
         self.fatigue = 0.0       # 0.0 (Tỉnh táo) → 1.0 (Kiệt sức, sập nguồn)
+        self.energy = 1.0        # 1.0 (Tràn đầy) → 0.0 (Cạn kiệt năng lượng/đói)
+        self.atp_level = 1.0     # 1.0 (Sẵn sàng) → 0.0 (Lãnh cảm/Suy nhược)
         self.social_need = 0.5   # 0.0 (Cô độc) → 1.0 (Khao khát giao tiếp)
-        self.curiosity = 0.5     # 0.0 (Lãnh đạm) → 1.0 (Tò mò muốn hỏi)
+        self.curiosity = 0.5     # 0.0 (Lãnh đạm) → 1.0 (Tò bò muốn hỏi)
 
         # Nhịp sinh học (Circadian Rhythm)
         self.last_slept_time = time.time()
@@ -58,6 +60,7 @@ class SelfModel:
         
         # Dopamine Receptors (Tolerance Mechanism)
         self.dopamine_receptors = 1.0
+        self.dopamine_level = 0.5 # 0.0 (Uể oải) -> 1.0 (Hưng phấn/Kỳ vọng phần thưởng)
 
         # Phase 20: Resilience & Growth
         self.resilience = 0.0    # 0.0 (Mong manh) → 1.0 (Bản lĩnh xã hội)
@@ -261,6 +264,30 @@ class SelfModel:
         if total_weight < 0.01: return 0.0
         return max(-1.0, min(1.0, weighted_sum / total_weight))
 
+    def apply_biological_decay(self, dt: float, idle_time: float):
+        """
+        [Phase 21] Cập nhật các chỉ số sinh học dựa trên bước thời gian dt và thời gian nhàn rỗi.
+        """
+        # 1. Social Need: Tăng theo thời gian nhàn rỗi. 
+        # Càng cô đơn (social_need cao), nhu cầu tăng càng nhanh (áp lực tâm lý).
+        social_growth_rate = 0.01 + (self.social_need * 0.05) 
+        if idle_time > 60: # Chỉ tăng nếu nhàn rỗi hơn 1 phút
+             self.social_need = min(1.0, self.social_need + (social_growth_rate * dt / 3600))
+
+        # 2. Curiosity: Tăng chậm khi không có gì mới
+        if idle_time > 300:
+            self.curiosity = min(1.0, self.curiosity + 0.005 * dt / 3600)
+
+        # 3. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
+        # Nếu không có kích thích mạnh, các thụ thể sẽ dần phục hồi
+        if self.dopamine_receptors < 1.0:
+            recovery_speed = 0.05 * (1.0 - self.dopamine_receptors)
+            self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt / 3600)
+
+        # 4. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
+        dopamine_decay_rate = 0.1 # Decay 10% mỗi giờ
+        self.dopamine_level = max(0.0, self.dopamine_level - (dopamine_decay_rate * dt / 3600))
+
     def apply_circadian_rhythm(self):
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
         current_hour = datetime.now().hour
@@ -391,6 +418,10 @@ class SelfModel:
             "fatigue": self.fatigue, "curiosity": self.curiosity,
             "social_need": self.social_need, "integrity": self.integrity,
             "is_identity_crisis": self.is_identity_crisis,
+            # Phase 7: Intrinsic Goals
+            "long_term_goals": getattr(self, 'long_term_goals', []),
+            "energy": getattr(self, 'energy', 1.0),
+            "atp_level": getattr(self, 'atp_level', 1.0),
             # Biological thresholds — persist để cá tính không đổi mỗi restart
             "fatigue_mild": self.fatigue_mild,
             "fatigue_severe": self.fatigue_severe,
@@ -404,6 +435,7 @@ class SelfModel:
             "stress_severe": self.stress_severe,
             "stress_critical": self.stress_critical,
             "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
+            "dopamine_level": getattr(self, 'dopamine_level', 0.5),
             "resilience": getattr(self, 'resilience', 0.0),
             "sleep_debt": getattr(self, 'sleep_debt', 0.0)
         }

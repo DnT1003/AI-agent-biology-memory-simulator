@@ -9,10 +9,14 @@ from colorama import Fore, Style, init
 
 from core.engine import CognitiveEngine
 from core.memory import MemoryTrace
+from core.gpu_config import setup_gpu
 from config import Config
 
 # Khởi tạo màu sắc cho Terminal
 init(autoreset=True)
+
+# Phase 12: Tối ưu hóa GPU (RTX 3060) và giới hạn VRAM
+setup_gpu(vram_limit_gb=4.0)
 
 if __name__ == "__main__":
     ai = CognitiveEngine()

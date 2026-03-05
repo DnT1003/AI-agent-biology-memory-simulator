@@ -26,10 +26,10 @@ class CognitiveEngine:
         Khi chạy thật:    engine = CognitiveEngine()
         Khi viết test:    engine = CognitiveEngine(memory=FakeMemory(), llm=FakeLLM())
         """
-        self.llm      = llm      or LLM()
         self.embedder = embedder or Embedder()
         self.memory   = memory   or MemoryManager(self.embedder)
         self.ego      = ego      or SelfModel(memory_manager=self.memory)
+        self.llm      = llm      or LLM(ego=self.ego)
 
         # Thread Safety: RLock (reentrant) — cùng thread có thể acquire nhiều lần
         self._ego_lock    = threading.RLock()
@@ -44,10 +44,17 @@ class CognitiveEngine:
 
         from core.tools import get_skill_registry
         self.skills = get_skill_registry()
+        self.skills.load()  # Phase 6: Nạp độ thông thạo từ ổ cứng
         self.reader = BackgroundReader(self.llm)
 
         from core.world_graph import WorldGraph
         self.world_graph = WorldGraph()
+
+        from core.value_system import ValueSystem
+        self.value_system = ValueSystem()
+
+        from core.local_perception import LocalPerception
+        self.local_perception = LocalPerception()
 
         self.memory_ops = MemoryOperationsController(self)
         self.interaction = InteractionController(self)
@@ -79,19 +86,54 @@ class CognitiveEngine:
                 self.ego.fatigue = min(1.0, self.ego.fatigue + fatigue_rate * dt * (1 + self.ego.fatigue * 0.5))
 
                 idle_seconds = time.time() - self.last_interaction_time
-                if idle_seconds > 60:
-                    self.ego.social_need = min(1.0, self.ego.social_need + 0.001 * dt / 60)
+                self.ego.apply_biological_decay(dt, idle_seconds)
 
                 # Stress giam theo exponential decay (half-life model, khong tuyen tinh)
                 # s_new = s * exp(-decay_rate * dt)
                 stress_decay = math.exp(-0.002 * dt / 60)
                 self.ego.stress = max(0.0, self.ego.stress * stress_decay)
 
+                # Phase 8: Metabolism (Energy & ATP)
+                # Energy hồi phục tự nhiên (0.01 mỗi phút)
+                self.ego.energy = min(1.0, self.ego.energy + 0.01 * dt / 60)
+                # ATP hồi phục nhanh hơn khi IDLE (không làm việc nặng)
+                atp_recovery_rate = 0.05 if self.state_machine.state == AgentState.IDLE else 0.01
+                self.ego.atp_level = min(1.0, self.ego.atp_level + atp_recovery_rate * dt / 60)
+
                 if self.state_machine.state == AgentState.READING:
                     self.ego.curiosity = max(0.0, self.ego.curiosity - 0.002 * dt / 60)
+                    # Đọc sách tiêu tốn Energy
+                    self.ego.energy = max(0.0, self.ego.energy - 0.005 * dt / 60)
+
                 # Giảm nhẹ trừ gốc (0.005 -> 0.001) chờ tích hợp Token-based cost bên trong `llm.py`
                 if self.state_machine.state == AgentState.THINKING:
                     self.ego.fatigue = min(1.0, self.ego.fatigue + 0.001 * dt / 60)
+                    # Suy nghĩ sâu (LLM) tiêu tốn ATP mạnh
+                    self.ego.atp_level = max(0.0, self.ego.atp_level - 0.05 * dt / 60)
+
+                # Phân hệ 9 (Sprint D): Storage Pressure (Áp lực sinh thái)
+                # Nếu ChromaDB quá lớn, Aura sẽ cảm thấy "nặng đầu" (Tăng stress)
+                try:
+                    def get_dir_size(path):
+                        total = 0
+                        with os.scandir(path) as it:
+                            for entry in it:
+                                if entry.is_file():
+                                    total += entry.stat().size
+                                elif entry.is_dir():
+                                    total += get_dir_size(entry.path)
+                        return total
+                    
+                    if os.path.exists(Config.CHROMA_DB_PATH):
+                        db_size = get_dir_size(Config.CHROMA_DB_PATH)
+                        if db_size > Config.MAX_STORAGE_SIZE:
+                            pressure = (db_size - Config.MAX_STORAGE_SIZE) / (100 * 1024 * 1024) # Mỗi 100MB dư thêm 1 stress unit
+                            storage_stress = min(0.3, pressure * 0.1) # Max penalty 0.3
+                            self.ego.stress = min(1.0, self.ego.stress + storage_stress)
+                            if storage_stress > 0.05:
+                                print(f"{Fore.LIGHTRED_EX}🧠 [STORAGE PRESSURE]: Bộ nhớ quá tải ({db_size/1024/1024:.1f}MB). Aura cảm thấy nặng đầu...{Style.RESET_ALL}")
+                except Exception as e:
+                    logger.debug(f"Failed to calculate storage pressure: {e}")
 
                 self.ego.apply_circadian_rhythm()
 
@@ -101,7 +143,7 @@ class CognitiveEngine:
                 import random
                 mems = self.memory.get_all()
                 if mems:
-                    sample = random.sample(mems, k=max(1, len(mems) // 10))
+                    sample = random.sample(list(mems), k=max(1, len(mems) // 10))
                     for m in sample:
                         m.decay(stress_level=self.ego.stress)
                         self.memory.update_memory(m)

@@ -243,8 +243,9 @@ class VectorStore:
         if count == 0:
             return []
 
+        vec_to_query = query_vec.tolist() if hasattr(query_vec, 'tolist') else query_vec
         query_kwargs = {
-            "query_embeddings": [query_vec.tolist()],
+            "query_embeddings": [vec_to_query],
             "n_results": min(top_k, count),
             "include": ["metadatas", "distances"]
         }

@@ -28,5 +28,12 @@ class Config:
     IDLE_READ_THRESHOLD: int = int(os.getenv("AURA_READ_THRESHOLD", str(15 * 60)))
     # Thoi gian nhan roi gay ra Separation Anxiety (giay)
     ANXIETY_THRESHOLD: int = int(os.getenv("AURA_ANXIETY_THRESHOLD", "600"))
-    # So entry toi da trong Short-Term Buffer
+    # SO ENTRY TOI DA TRONG SHORT-TERM BUFFER
     STM_MAX_ENTRIES: int = int(os.getenv("AURA_STM_MAX", "15"))
+
+    # LOCAL LLM (OLLAMA)
+    OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api")
+    LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "phi3:mini")
+
+    # STORAGE LIMITS (Phase 9 - Sprint D)
+    MAX_STORAGE_SIZE = 500 * 1024 * 1024  # 500MB

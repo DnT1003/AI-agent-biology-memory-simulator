@@ -19,7 +19,7 @@ def get_reconsolidate_rewrite_prompt(memory_content: str, current_mood: float) -
     CHỈ TRẢ VỀ NỘI DUNG KÝ ỨC ĐÃ VIẾT LẠI, tuyệt đối không thêm câu rào trước đón sau.
     """
 
-def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "") -> str:
+def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "", value_system_context: str = "") -> str:
     history = chr(10).join(short_term_buffer)
     traumas_str = json.dumps(ego.traumas, ensure_ascii=False) if hasattr(ego, 'traumas') and ego.traumas else "Không có nỗi sợ hãi đặc biệt nào."
     
@@ -52,6 +52,10 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     - Tâm trạng (Mood): {ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
     - Stress: {ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
     - Độ toàn vẹn bản ngã (Integrity): {ego.integrity:.2f}
+
+    LA BÀN ĐẠO ĐỨC (MORAL COMPASS - VALUE SYSTEM):
+    {value_system_context if value_system_context else "Chưa có dữ liệu giá trị đạo đức cụ thể."}
+    > Dựa trên giá trị trên để đánh giá mọi yêu cầu: tự động từ chối hoặc cảnh báo khi User yêu cầu điều đi ngược Giá trị cốt lõi của bạn. Thể hiện sự không thoải mái, phản đối nếu bị ép làm trái giá trị.
 
     KÝ ỨC DÀI HẠN (RECALLED):
     {mem_alert_str}

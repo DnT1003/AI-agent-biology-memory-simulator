@@ -76,7 +76,7 @@ class InteractionController:
         
         user_facts = self.engine.world_graph.query("User")
         if user_facts:
-            graph_facts.extend(random.sample(user_facts, min(3, len(user_facts))))
+            graph_facts.extend(random.sample(list(user_facts), min(3, len(user_facts))))
             
         graph_facts = list(set(graph_facts))
 
@@ -84,10 +84,10 @@ class InteractionController:
             # Phase 13: Dùng get_display_content() để bao gồm cả Overlays (suy nghĩ nội tâm tích lũy)
             # Trước đây chỉ lấy m.content thô — Aura mù toàn bộ với các tầng suy nghĩ của mình
             content = m.get_display_content()
-            if is_foggy:
-                content = re.sub(r'\b\d{2,}\b', '[quên mất số cụ thể]', content)
-                content = re.sub(r'\b\d{1,2}:\d{2}\b', '[quên mất giờ]', content)
-                content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[quên mất ngày tháng]', content)
+            
+            # [Phase 21] Fog Masking tập trung từ MemoryOps
+            content = self.engine.memory_ops._apply_fog_masking(content)
+            
             overlay_indicator = f" [{len(m.overlays)}♥]" if m.overlays else ""
             
             # Đánh dấu Intrusive Memory cho LLM hiểu
@@ -124,7 +124,12 @@ class InteractionController:
         # Lấy trạng thái từ Reader để Aura biết mình có sách hay chưa
         reader_status = getattr(self.engine.reader, 'get_status', lambda: "Hệ thống chưa sẵn sàng.")()
         
-        system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status)
+        # [Phase 5] Value System: lấy moral context để nhúng vào prompt
+        value_system_context = ""
+        if hasattr(self.engine, 'value_system'):
+            value_system_context = self.engine.value_system.get_moral_context()
+
+        system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status, value_system_context)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
         prompt_in_use, final_full_text, iterations = system_prompt, "", 0
@@ -133,10 +138,14 @@ class InteractionController:
         import time
         import json
         
-        # [Phase 21] Biological Constraints: Giới hạn tokens nếu quá mệt mỏi
+        # [Phase 21] Biological Constraints: Giới hạn tokens và hành động
         max_tokens = None
-        if getattr(self.engine.ego, 'fatigue', 0.0) > 0.8:
-            max_tokens = 150 # Ép trả lời cực ngắn, không cho LLM cơ hội dài dòng
+        atp = getattr(self.engine.ego, 'atp_level', 1.0)
+        fatigue = getattr(self.engine.ego, 'fatigue', 0.0)
+        
+        if fatigue > 0.8 or atp < 0.2:
+            max_tokens = 150 # Ép trả lời cực ngắn
+            system_prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang kiệt sức (ATP thấp/Fatigue cao). Hãy trả lời cực kỳ ngắn gọn và KHÔNG thực hiện bất kỳ hành động (Action) nào yêu cầu tìm kiếm hay đọc sách."
         
         while iterations < 5 and not self.is_interrupted:
             try:
@@ -172,7 +181,7 @@ class InteractionController:
                     break
                 
                 print(f"\n{Fore.LIGHTMAGENTA_EX}🔧 [HÀNH ĐỘNG]: Kích hoạt Tool {func_name}('{arg_str}')...{Style.RESET_ALL}")
-                tool_result = self.engine.skills.execute(func_name, arg_str)
+                tool_result = self.engine.skills.execute(func_name, arg_str, ego=self.engine.ego)
                 preview = str(tool_result).replace('\n', ' ')[:100] + "..." if len(str(tool_result)) > 100 else str(tool_result).replace('\n', ' ')
                 print(f"{Fore.LIGHTBLACK_EX}   -> Kết quả: {preview}{Style.RESET_ALL}")
                 
@@ -182,6 +191,11 @@ class InteractionController:
                 continue
             else:
                 if response:
+                    # Phase 8: Cognitive Consumption
+                    # Mỗi lượt phản hồi tiêu tốn ATP và Energy
+                    self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - 0.1)
+                    self.engine.ego.energy = max(0.0, self.engine.ego.energy - 0.02)
+                    
                     # Giả lập typing gõ chậm Fragmentation
                     if "[SEND]" in response:
                         frag_parts = response.split("[SEND]")
@@ -233,38 +247,47 @@ class InteractionController:
         # NOTE: Mọi yêu cầu tìm truyện ("đọc truyện X"), hay báo bận ("Tớ đi làm") 
         # giờ đây đều được LLM xử lý tự nhiên thông qua perceives_and_respond và Actions.
 
-        # [Phase 21] World Graph Extraction
+        # [Phase 21] World Graph Extraction (NLP Engine Version)
         def _extract_graph():
-            prompt = f"""
-            Phân tích câu nói sau của người dùng để rút ra các mối quan hệ xã hội, trạng thái hoặc sở hữu.
-            Câu nói: "{user_input}"
-            
-            Nếu câu nói CHỨA thông tin về một người/vật khác và mối quan hệ với User (ví dụ: "Anh trai tớ là Hùng", "Mẹ tôi làm giáo viên"), hãy trích xuất dưới định dạng JSON:
-            [
-                {{"source": "User", "relation": "có anh trai là", "target": "Hùng"}}, ...
-            ]
-            Khuyến khích dùng "User" làm source name nếu người dùng xưng tôi/tớ/mình.
-            Nếu không có thông tin quan hệ xã hội rành mạch, trả lời mảng rỗng: []
-            """
+            # Sử dụng logic spaCy + LLM mới từ WorldGraph
+            self.engine.world_graph.update_from_text(user_input, self.engine.llm)
+        threading.Thread(target=_extract_graph).start()
+
+        # [Phase 5] Value System: phát hiện User đang thể hiện giá trị nào
+        def _extract_values():
+            if not hasattr(self.engine, 'value_system'):
+                return
+            prompt = f"""Phân tích câu nói sau của người dùng để xem họ có đang thể hiện THÁI ĐỘ RÕ RÀNG (ủng hộ hoặc phản đối) đối với một giá trị đạo đức/quan điểm sống cụ thể không.
+Câu nói: "{user_input}"
+
+Nếu CÓ, trả về JSON array (tối đa 2 items):
+[
+    {{"value": "Tên giá trị ngắn gọn (vd: Sự Thành Thật, Bạo Lực, Lòng Tốt...)", "sentiment": <float từ -1.0 đến 1.0>}}
+]
+- sentiment 1.0 = User RẤT ĐỒNG TÌNH/ĐỀ CAO giá trị đó.
+- sentiment -1.0 = User RẤT PHẢN ĐỐI/GHÉT giá trị đó.
+Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm thông thường, chỉ thị kỹ thuật,...), trả về mảng rỗng: []"""
             try:
-                res = self.engine.llm.generate_text(prompt, temperature=0.1)
                 import json
-                json_str = res.strip()
-                if json_str.startswith("```json"): json_str = json_str[7:]
-                if json_str.startswith("```"): json_str = json_str[3:]
-                if json_str.endswith("```"): json_str = json_str[:-3]
-                data = json.loads(json_str.strip())
+                res = self.engine.llm.generate_text(prompt, temperature=0.1).strip()
+                if res.startswith("```json"): res = res[7:]
+                if res.startswith("```"): res = res[3:]
+                if res.endswith("```"): res = res[:-3]
+                data = json.loads(res.strip())
                 for item in data:
-                    self.engine.world_graph.add_relation(item['source'], item['relation'], item['target'])
+                    v_name = str(item.get('value', '')).strip()
+                    v_sent = float(item.get('sentiment', 0.0))
+                    if v_name and abs(v_sent) >= 0.4:
+                        self.engine.value_system.update_user_value(v_name, v_sent)
             except Exception:
                 pass
-        threading.Thread(target=_extract_graph).start()
+        threading.Thread(target=_extract_values).start()
 
         self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.2)
         
         if any(kw in user_input.lower() for kw in ['ngủ đi', 'cho aura ngủ', 'hãy đi ngủ', 'đi ngủ thôi', 'good night', 'ngủ ngon']):
             print(f"\n{Fore.GREEN}🤖 [AURA]: Ừm... *ngáp dài*... tớ gục đây...{Style.RESET_ALL}\n")
-            self.sleep()
+            self.engine.memory_ops.sleep()
             return
 
         if self.engine.ego.fatigue >= self.engine.ego.fatigue_critical:
@@ -282,24 +305,26 @@ class InteractionController:
             return
 
         # ==========================================================
-        # Phase 7 Idea 8: Đồng Cảm Cảm Xúc & Bắt Chước (Empathy Mirroring)
+        # Phase 8: Local Perception Engine (Local Empathy Mirroring)
         # ==========================================================
-        # Phân tích nhanh cảm xúc đoạn chat của User thông qua một prompt nhỏ gọn
-        empathy_prompt = f"Câu nói này mang cảm xúc chung là TÍCH CỰC, TIÊU CỰC hay TRUNG TÍNH? Chỉ trả lời bằng 1 số từ -1.0 (Rất Tiêu Cực) đến 1.0 (Rất Tích Cực):\n\nUser: '{user_input}'"
         try:
-            empathy_score_str = self.engine.llm.generate_text(empathy_prompt, temperature=0.1).strip()
-            user_mood_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", empathy_score_str)[0])
-            user_mood_score = max(-1.0, min(1.0, user_mood_score))
+            # Phân tích Valence/Arousal bằng mô hình RoBERTa cục bộ trên RTX 3060
+            local_res = self.engine.local_perception.analyze(user_input)
+            user_mood_score = local_res.get("valence", 0.0)
             
             # Lây nhiễm cảm xúc (Kéo Mood của Aura về phía Mood của User 1 đoạn nhỏ)
             if abs(user_mood_score) > 0.3:
                 drift = (user_mood_score - self.engine.ego.mood) * 0.15
                 self.engine.ego.mood = max(-1.0, min(1.0, self.engine.ego.mood + drift))
-                print(f"{Fore.LIGHTBLACK_EX}💞 [EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.engine.ego.mood:.2f}{Style.RESET_ALL}")
-        except Exception:
-            pass
+                print(f"{Fore.LIGHTBLACK_EX}💞 [LOCAL EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.engine.ego.mood:.2f} (Confidence: {local_res.get('confidence', 0.0):.2f}){Style.RESET_ALL}")
+            
+            # Cập nhật Stress dựa trên Arousal của User nếu nó quá cao (kích động)
+            if local_res.get("arousal", 0.0) > 0.7:
+                 self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
+        except Exception as e:
+            print(f"Lỗi Local Empathy: {e}")
 
-        recalled = self.recall(user_input)
+        recalled = self.engine.memory_ops.recall(user_input)
         
         # Phase 8 Idea 7.1: Hiện diện Độc lập (Independent Presence)
         mood_modifier_lines = []
@@ -408,7 +433,7 @@ class InteractionController:
         # ACTION: start_reading
         if _re.search(r'ACTION:\s*start_reading', combined_log, _re.IGNORECASE):
              print(f"\n{Fore.GREEN}📖 [ACTION]: Aura quyết định đi đọc sách...{Style.RESET_ALL}")
-             threading.Thread(target=self.start_reading_task, args=("theo ý muốn bản thân",), daemon=True).start()
+             threading.Thread(target=self.engine.autonomous.start_reading_task, args=("theo ý muốn bản thân",), daemon=True).start()
 
         # ACTION: search_novel
         search_matches = _re.findall(r'ACTION:\s*search_novel\s*\|\s*(.+)', combined_log, _re.IGNORECASE)
@@ -420,7 +445,7 @@ class InteractionController:
                 print(f"\n{Fore.GREEN}📚 [ACTION - SEARCH]: {result_msg}{Style.RESET_ALL}")
             threading.Thread(target=_async_search, daemon=True).start()
 
-        threading.Thread(target=self.update_or_add_memory, args=(user_input, output)).start()
+        threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output)).start()
         self.engine.short_term_buffer.append(f"User: {user_input}")
         self.engine.short_term_buffer.append(f"Aura: {response}")
         if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
@@ -430,6 +455,6 @@ class InteractionController:
         self.engine.ego.apply_circadian_rhythm()
 
         # Update JSON Dashboard
-        if hasattr(self, '_dump_mind_state'):
-            self._dump_mind_state()
+        if hasattr(self.engine, '_dump_mind_state'):
+            self.engine._dump_mind_state()
 

@@ -1,5 +1,6 @@
 import os
 import json
+import spacy
 from typing import Dict, List, Set
 from colorama import Fore, Style
 from core.logger import get_logger
@@ -13,7 +14,69 @@ class WorldGraph:
         # data: dict { "EntityA": { "Relation": "EntityB", ... } }
         self.nodes = {} 
         self.edges = [] 
+        
+        # Load model NER Transformers (Phase 11)
+        try:
+            self.nlp = spacy.load("en_core_web_trf")
+            logger.info("WorldGraph: Loaded en_core_web_trf successfully.")
+        except Exception as e:
+            logger.error(f"WorldGraph: Failed to load spaCy model: {e}")
+            self.nlp = None
+
         self.load()
+
+    def extract_entities(self, text: str) -> List[Dict]:
+        """Sử dụng spaCy NER để tìm các thực thể quan trọng."""
+        if not self.nlp: return []
+        doc = self.nlp(text)
+        entities = []
+        for ent in doc.ents:
+            # Chỉ lấy các thực thể liên quan đến xã hội/thực thể
+            if ent.label_ in ["PERSON", "ORG", "GPE", "FAC", "PRODUCT"]:
+                entities.append({
+                    "text": ent.text,
+                    "label": ent.label_
+                })
+        return entities
+
+    def update_from_text(self, text: str, llm):
+        """
+        Kết hợp spaCy NER và LLM để xây dựng đồ thị quan hệ.
+        NER giúp LLM tập trung vào đúng thực thể.
+        """
+        entities = self.extract_entities(text)
+        
+        # Mở rộng detection các đại từ nhân xưng (Phase 11 Optimization)
+        pronouns = ["User", "tớ", "mình", "tôi", "anh", "chị", "em", "bố", "mẹ"]
+        has_pronoun = any(p in text.lower() for p in pronouns)
+
+        if not entities and not has_pronoun: # Fallback cơ bản
+            return
+
+        ent_str = ", ".join([f"{e['text']} ({e['label']})" for e in entities])
+        
+        prompt = f"""
+        Dựa trên câu nói của người dùng và các thực thể vừa trích xuất được.
+        Câu nói: "{text}"
+        Thực thể tiềm năng trích xuất bằng NER: {ent_str if ent_str else "Không tìm thấy thực thể rõ ràng"}
+        
+        Nhiệm vụ: Trích xuất các quan hệ xã hội (Social Relations) hoặc sở hữu.
+        Nếu có thông tin, trả về JSON array:
+        [
+            {{"source": "Entity A", "relation": "mối quan hệ", "target": "Entity B"}}
+        ]
+        - Ưu tiên dùng "User" làm source nếu người dùng nhắc về bản thân (x xưng tớ, mình, tôi...).
+        - Cố gắng tìm tên riêng ngay cả khi NER model bỏ sót.
+        - Nếu không có thông tin rõ ràng, trả về [].
+        """
+        
+        try:
+            res = llm.generate_json(prompt, temperature=0.1)
+            if isinstance(res, list):
+                for item in res:
+                    self.add_relation(item.get('source'), item.get('relation'), item.get('target'))
+        except Exception as e:
+            logger.error(f"WorldGraph update error: {e}")
 
     def add_relation(self, source: str, relation: str, target: str):
         """Thêm một quan hệ vào đồ thị. Ví dụ: add_relation("User", "có mẹ là", "Cô Lan")"""

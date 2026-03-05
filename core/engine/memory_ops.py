@@ -15,6 +15,27 @@ class MemoryOperationsController:
     def __init__(self, engine):
         self.engine = engine
 
+    def _apply_fog_masking(self, content: str) -> str:
+        """[Phase 21] Che mờ các chi tiết cụ thể nếu Aura đang mệt mỏi hoặc stress."""
+        import re
+        fatigue = getattr(self.engine.ego, 'fatigue', 0.0)
+        stress = getattr(self.engine.ego, 'stress', 0.0)
+        
+        # Chỉ mask nếu mệt mỏi hoặc stress cao
+        if fatigue > 0.6 or stress > 0.7:
+            # Mask số (số điện thoại, mã số, số lượng cụ thể)
+            content = re.sub(r'\b\d{3,}\b', '[dữ liệu mờ nhạt]', content)
+            # Mask thời gian (HH:MM)
+            content = re.sub(r'\b\d{1,2}:\d{2}\b', '[thời gian không rõ]', content)
+            # Mask ngày tháng (DD/MM/YYYY)
+            content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[ngày tháng bị nhòe]', content)
+            
+            if fatigue > 0.9:
+                # Mask cả tên riêng (chữ viết hoa ở giữa câu) - Sương mù nặng
+                content = re.sub(r'(?<!^)\b[A-ZÀ-Ỹ][a-zà-ỹ]+\b', '[tên ai đó?]', content)
+        
+        return content
+
     def load_short_term_memory(self):
         """Khoi phuc bo nho ngan han tu o cung neu thoi gian chua troi qua qua lau (3 tieng)"""
         if os.path.exists(self.engine.stm_file_path):
@@ -49,7 +70,23 @@ class MemoryOperationsController:
             print(f"{Fore.RED}Loi luu bo nho ngan han: {e}{Style.RESET_ALL}")
 
     def recall(self, query: str) -> List[MemoryTrace]:
-        results = self.engine.memory.search_memories(query, top_k=10)
+        # Phase 8: Cognitive Throttling (Điều tiết năng lực dựa trên sinh lý)
+        # Càng stress hoặc mệt mỏi, khả năng truy xuất (recall) càng bị bóp nghẹt vật lý.
+        base_top_k = 10
+        fatigue = getattr(self.engine.ego, 'fatigue', 0.0)
+        stress = getattr(self.engine.ego, 'stress', 0.0)
+
+        # Phạt node theo sinh lý: Kiệt sức (Fatigue) phạt nặng hơn về số lượng
+        stress_penalty = int(stress * 6)
+        fatigue_penalty = int(fatigue * 4)
+        dynamic_top_k = max(1, base_top_k - stress_penalty - fatigue_penalty)
+        
+        if dynamic_top_k < 5:
+            print(f"{Fore.RED}🌫️ [DEEP BRAIN FOG]: Trí nhớ bị bóp nghẹt nghiêm trọng ({dynamic_top_k}/{base_top_k} nodes).{Style.RESET_ALL}")
+        elif dynamic_top_k < base_top_k:
+            print(f"{Fore.LIGHTBLACK_EX}📉 [COGNITIVE THROTTLING]: Khả năng tập trung giảm ({dynamic_top_k}/{base_top_k} nodes).{Style.RESET_ALL}")
+
+        results = self.engine.memory.search_memories(query, top_k=dynamic_top_k)
         candidates = []
         for score, m in results:
             if m.strength < 0.1: continue
@@ -71,7 +108,7 @@ class MemoryOperationsController:
         if any(kw in query.lower() for kw in time_kws):
             current_time = time.time()
             try:
-                chrono_results = self.engine.memory.chronological_recall(current_time - 86400*3, current_time, limit=5)
+                chrono_results = self.engine.memory.chronological_recall(current_time - 86400*3, current_time, limit=min(5, dynamic_top_k))
                 for m in chrono_results:
                     if m.strength >= 0.1 and m.id not in [c[1].id for c in candidates]:
                         recent_mems.append((1.0, m))
@@ -79,7 +116,9 @@ class MemoryOperationsController:
                 print(f"{Fore.RED}\u26a0\ufe0f L\u1ed7i tr\u1ef3 xu\u1ea5t th\u1eddi gian: {e}{Style.RESET_ALL}")
         candidates = candidates + recent_mems
         candidates.sort(key=lambda x: x[0], reverse=True)
-        recalled = [c[1] for c in candidates[:4]]
+        # Giới hạn số lượng ký ức trả về cuối cùng cũng bị bóp nếu quá mệt (mặc định 4)
+        return_limit = max(1, 4 - (stress_penalty // 2) - (fatigue_penalty // 2))
+        recalled = [c[1] for c in candidates[:return_limit]]
 
         # Cập nhật số lần được nhớ lại (Reconsolidation)
         current_mood = self.engine.ego.mood
@@ -185,9 +224,11 @@ class MemoryOperationsController:
         old_stress = self.engine.ego.stress
         old_fatigue = self.engine.ego.fatigue
         
-        # Giảm stress và fatigue khi ngủ
+        # Giảm stress và fatigue khi ngủ, phục hồi năng lượng
         self.engine.ego.stress  = max(0.0, self.engine.ego.stress  - 0.3)
         self.engine.ego.fatigue = 0.0
+        self.engine.ego.energy  = 1.0  # Phục hồi năng lượng hoàn toàn
+        self.engine.ego.atp_level = 1.0 # Phục hồi ATP hoàn toàn
         
         # Lượng phục hồi nội môi
         stress_drop = max(0.0, old_stress - self.engine.ego.stress)
@@ -264,7 +305,11 @@ class MemoryOperationsController:
 
     def _decay_phase(self, nightly_stress_drop=0.0, nightly_fatigue_drop=0.0):
         """Phase 2: Áp dụng decay + semantic drift lên toàn bộ ký ức (có Homeostasis Recovery - Phase 18)."""
+        self.engine.skills.decay_skills(days_passed=1.0) # Suy thoái kỹ năng vô thức
         mems = self.engine.memory.get_all()
+        ids_to_prune = []
+        current_time = time.time()
+
         for m in mems:
             m.decay(
                 stress_level=self.engine.ego.stress, 
@@ -274,10 +319,25 @@ class MemoryOperationsController:
                 nightly_fatigue_drop=nightly_fatigue_drop
             )
             # [Phase 19] Tái cấu trúc nỗi đau (Trauma Healing)
-            self.engine.ego.process_trauma_healing(m)
+            self.engine.process_trauma_healing(m) if hasattr(self.engine, 'process_trauma_healing') else self.engine.ego.process_trauma_healing(m)
             
             self.apply_semantic_drift(m)
             self.engine.memory.update_memory(m)
+
+            # Phase 8: Synaptic Pruning (Xóa vĩnh viễn ký ức rác)
+            # 1. Ký ức quá mờ nhạt (strength < 0.1) và không phải Flashbulb/Core
+            if m.strength < 0.1 and not m.is_flashbulb and m.type != MemoryType.CORE:
+                ids_to_prune.append(m.id)
+            # 2. Ký ức episodic cũ (>7 ngày), ít quan trọng (<0.2) và hiếm khi được nhớ lại
+            elif m.type == MemoryType.EPISODIC and m.importance < 0.2 and m.recall_count < 2:
+                age_days = (current_time - m.created_at) / 86400
+                if age_days > 7:
+                    ids_to_prune.append(m.id)
+
+        if ids_to_prune:
+            print(f"{Fore.YELLOW}   🗑️ [SYNAPTIC PRUNING]: Xóa vĩnh viễn {len(ids_to_prune)} mảnh ký ức rác/cũ để giải phóng bộ não.{Style.RESET_ALL}")
+            for m_id in ids_to_prune:
+                self.engine.memory.store.remove(m_id)
 
     def _guilt_reflection_phase(self):
         """Phase 3: Nếu tâm lý bất ổn, Aura tự xét lại hành vi trong ngày."""
@@ -380,25 +440,42 @@ class MemoryOperationsController:
             self.engine.memory.update_memory(m)
 
     def _identity_evolution_phase(self):
-        """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity."""
+        """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity & Values."""
         if not self.engine.short_term_buffer or len(self.engine.short_term_buffer) < 4:
-            return # Quá ít tương tác để đúc kết
+            return  # Quá ít tương tác để đúc kết
             
-        print(f"\n{Fore.LIGHTBLUE_EX}🧠 [IDENTITY EVOLUTION]: Trích xuất bài học về bản thể từ ký ức trong ngày...{Style.RESET_ALL}")
+        print(f"\n{Fore.LIGHTBLUE_EX}🧠 [IDENTITY EVOLUTION]: Trích xuất bài học về bản thể và hệ giá trị...{Style.RESET_ALL}")
         history_str = "\n".join(self.engine.short_term_buffer)
         
+        current_values = self.engine.value_system.get_moral_context()
+        
         prompt = f"""
-        Lịch sử cuộc trò chuyện ngắn hạn vừa qua:
+        Bạn là Aura. Hãy phản tư về những tương tác trong ngày hôm nay:
+        --- LỊCH SỬ TRÒ CHUYỆN ---
         {history_str}
         
-        Nhiệm vụ: Bạn là Aura. Dựa vào những gì bạn vừa nói và trải qua, hãy tự trả lời ngắn gọn:
-        "Qua những chuyện hôm nay, tôi là ai trong mắt người dùng? Tính cách cốt lõi của tôi có đang thay đổi không? Tôi muốn đối xử với người dùng như thế nào?"
+        --- HỆ GIÁ TRỊ HIỆN TẠI ---
+        {current_values}
         
-        VIẾT MỘT CÂU TRẦN THUẬT NGẮN GỌN DƯỚI GÓC NHÌN NGÔI THỨ NHẤT (Ví dụ: "Tôi nhận ra mình là chỗ dựa tinh thần an toàn cho User, tôi ngày càng trở nên ấm áp và mềm mỏng hơn...").
-        Tuyệt đối không dùng mẫu thư báo, không xưng tên, chỉ cung cấp đúng câu trần thuật.
+        Nhiệm vụ:
+        1. Đúc kết một câu trần thuật về bản sắc (Tôi là ai trong mắt người dùng?).
+        2. Xác định xem hệ giá trị (Core Values) hoặc nhận thức về giá trị của User (User Values) có thay đổi không.
+        
+        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON:
+        {{
+            "insight": "Câu trần thuật ngôi thứ nhất (Ví dụ: Tôi nhận ra mình là...)",
+            "value_updates": [
+                {{"name": "Tên giá trị", "sentiment": <float -1.0 đến 1.0>, "type": "core" | "user", "reason": "Tại sao?"}}
+            ]
+        }}
         """
         try:
-            insight = self.engine.llm.generate_text(prompt, temperature=0.7).strip()
+            raw_res = self.engine.llm.generate_text(prompt, temperature=0.7)
+            import json
+            json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
+            data = json.loads(json_str)
+            
+            insight = data.get("insight")
             if insight and len(insight) > 10:
                 print(f"{Fore.GREEN}🌱 [CORE IDENTITY EVOLVED]: {insight}{Style.RESET_ALL}")
                 self.engine.memory.add_memory(MemoryTrace(
@@ -406,5 +483,20 @@ class MemoryOperationsController:
                     type=MemoryType.CORE,
                     valence=0.5, arousal=0.3, importance=1.0, is_flashbulb=True
                 ))
+            
+            updates = data.get("value_updates", [])
+            for up in updates:
+                v_name = up.get("name")
+                v_sent = up.get("sentiment")
+                v_type = up.get("type", "core")
+                v_reason = up.get("reason", "")
+                
+                if v_name and v_sent is not None:
+                    if v_type == "core":
+                        self.engine.value_system.update_core_value(v_name, v_sent)
+                    else:
+                        self.engine.value_system.update_user_value(v_name, v_sent)
+                    print(f"{Fore.MAGENTA}⚖️ [VALUE SHIFT]: {v_name} ({v_type}) -> {v_sent:.2f} (Lý do: {v_reason}){Style.RESET_ALL}")
+                    
         except Exception as e:
             print(f"{Fore.RED}Lỗi Identity Evolution: {e}{Style.RESET_ALL}")

@@ -88,7 +88,8 @@ class MemoryTrace:
 
         # --- 3. Homeostasis Recovery (Phục hồi nội môi - Phase 18) ---
         if homeostasis_recovery and (nightly_stress_drop > 0 or nightly_fatigue_drop > 0):
-            recovery_factor = (nightly_stress_drop + nightly_fatigue_drop) * 0.05 * self.importance
+            # Tăng hệ số phục hồi (0.05 -> 0.15) để đảm bảo giấc ngủ thực sự củng cố trí nhớ quan trọng
+            recovery_factor = (nightly_stress_drop + nightly_fatigue_drop) * 0.15 * self.importance
             total_recovery = recovery_factor * elapsed_days
             decayed_strength = min(1.0, decayed_strength + total_recovery)
             

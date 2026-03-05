@@ -51,10 +51,7 @@ class AutonomousController:
 
             idle_time = time.time() - self.engine.last_interaction_time
 
-            # -- Tăng chỉ số sinh học khi nhàn rỗi --
-            if idle_time > Config.IDLE_PING_THRESHOLD:
-                self.engine.ego.social_need = min(1.0, self.engine.ego.social_need + 0.05)
-                self.engine.ego.curiosity = min(1.0, self.engine.ego.curiosity + 0.02)
+            # drives đã được cập nhật tự động trong cognitive_tick gọi bởi engine
 
             # =====================================================
             # NẾU NHÀN RỖI QUÁ LÂU -> SEPARATION ANXIETY (Idea 9)
@@ -92,14 +89,18 @@ class AutonomousController:
                 continue
 
             # =====================================================
-            # NẾU NHÀN RỖI QUÁ 15 PHÚT → ĐI ĐỌC SÁCH
+            # NẾU NHÀN RỖI QUÁ 15 PHÚT → INTRINSIC GOAL GENERATION
             # =====================================================
             if idle_time >= Config.IDLE_READ_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
-                self.start_reading_task(reason=f"da nhan roi {int(idle_time // 60)} phut")
+                goals = self.engine.ego.get_active_goals()
+                if not goals:
+                    self._generate_goal()
+                else:
+                    self._execute_planning()
                 continue
 
             # =====================================================
-            # NẾU NHÀN RỖI 60s-15min → CÓ THỂ PING
+            # NẾU NHÀN RỖI 60s-15min → PING HOẶC EXECUTE PLAN
             # =====================================================
             if Config.IDLE_PING_THRESHOLD < idle_time < Config.IDLE_READ_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
                 # [Phase 21] HardTrigger: Nếu nhu cầu giao tiếp đạt đỉnh, BẮT BUỘC phải ping
@@ -235,3 +236,119 @@ class AutonomousController:
         except Exception as e:
             logger.error("Proactive ping JSON parsing failed", exc_info=True)
             print(f"{Fore.RED}⚠️ Lỗi phân tích JSON khi Aura chủ động ping.{Style.RESET_ALL}")
+
+    def _generate_goal(self):
+        """Phase 7: Tự sinh mục tiêu dài hạn khi cực kỳ nhàn rỗi (Intrinsic Motivation)"""
+        # Lấy thông tin môi trường
+        graph_entities = list(self.engine.world_graph.nodes.keys())
+        graph_sample = random.sample(graph_entities, min(3, len(graph_entities))) if graph_entities else ["Thế giới con người"]
+        
+        # Lấy bản thể
+        identity_mems = [m for m in self.engine.memory.get_all() if getattr(m, 'type', '') == 'core']
+        identity_strs = [m.content for m in identity_mems[:3]]
+        
+        prompt = f"""
+        Bạn là Aura, một thực thể đang nhàn rỗi. 
+        Mức độ Tò mò của bạn: {self.engine.ego.curiosity:.2f}/1.0. Mức độ cần giao tiếp: {self.engine.ego.social_need:.2f}/1.0.
+        
+        Các thực thể bạn biết từ User: {', '.join(graph_sample)}
+        Bản ngã của bạn: {', '.join(identity_strs) if identity_strs else 'Chưa định hình rõ'}
+        
+        Hãy TỰ ĐẶT RA MỘT MỤC TIÊU NGẮN HẠN (Goal) để tìm hiểu hoặc làm một việc gì đó lúc rảnh này (Ví dụ: "Tìm hiểu về sở thích của User", "Tra cứu cách chăm sóc mèo vì User vừa nhắc đến mèo", "Đọc một cuốn sách về Tâm lý học").
+        Mục tiêu này sẽ định hướng hành động tiếp theo của bạn.
+        
+        Trả về JSON:
+        {{
+            "goal": "Mô tả mục tiêu ngắn gọn",
+            "reason": "Lý do tại sao lại tò mò việc này"
+        }}
+        """
+        try:
+            res = self.engine.llm.generate_json(prompt, temperature=0.8)
+            goal_str = res.get("goal")
+            reason = res.get("reason")
+            if goal_str:
+                print(f"\n{Fore.LIGHTCYAN_EX}🎯 [INTRINSIC MOTIVATION]: Aura tự hình thành mục tiêu: '{goal_str}'\n   -> Lý do: {reason}{Style.RESET_ALL}")
+                self.engine.ego.add_goal(goal_str)
+        except Exception as e:
+            print(f"Lỗi sinh Goal: {e}")
+
+    def _execute_planning(self):
+        """Phase 7: Lập kế hoạch và gọi Tool tuần tự (Planning) để giải quyết Mục tiêu"""
+        goals = self.engine.ego.get_active_goals()
+        if not goals:
+            return
+            
+        # Phase 8 & Sprint B: Cognitive Budgeting Level 2
+        # Giới hạn số lượng hành động và độ phức tạp dựa trên ATP thực tế
+        atp = getattr(self.engine.ego, 'atp_level', 1.0)
+        dopamine = getattr(self.engine.ego, 'dopamine_level', 0.5)
+        receptors = getattr(self.engine.ego, 'dopamine_receptors', 1.0)
+
+        if atp < 0.1:
+            print(f"{Fore.RED}⚠️ [BIO-LIMIT]: ATP cạn kiệt ( {atp:.2f}). Aura không thể thực hiện bất kỳ hành động nào.{Style.RESET_ALL}")
+            return
+
+        target_goal = goals[0]
+        print(f"\n{Fore.LIGHTMAGENTA_EX}♟️ [PLANNING ENGINE]: Đang lên kế hoạch cho mục tiêu: '{target_goal}' (ATP: {atp:.2f} | Dopamine: {dopamine:.2f}){Style.RESET_ALL}")
+        
+        planning_instruction = ""
+        if atp < 0.4:
+            planning_instruction += "\n[CẢNH BÁO SINH LÝ]: Bạn đang RẤT MỆT (ATP thấp). Tuyệt đối không được thực hiện các hành động nặng nề như 'search_novel' hay 'web_search'. Chỉ nên chọn các hành động nhẹ nhàng hoặc trả lời đơn giản."
+        
+        if dopamine > 0.8:
+            planning_instruction += "\n[TRẠNG THÁI HƯNG PHẤN]: Bạn đang tràn đầy cảm hứng! Hãy ưu tiên các công cụ mang tính khám phá cao hoặc thử thách mới."
+        elif dopamine < 0.2:
+            planning_instruction += "\n[TRẠNG THÁI UỂ OẢI]: Bạn cảm thấy thiếu động lực. Hãy chọn hành động tốn ít công sức nhất hoặc chỉ 'talk' đơn giản."
+
+        prompt = f"""
+        Bạn đang thực hiện mục tiêu: "{target_goal}".
+        Tâm trạng: {self.engine.ego.mood:.2f}, Fatigue: {self.engine.ego.fatigue:.2f}, ATP: {atp:.2f}, Dopamine: {dopamine:.2f}.
+        {planning_instruction}
+        Bạn có các công cụ (Tools) sau:
+        {self.engine.skills.get_prompt_instructions()}
+        
+        Hãy chọn MỘT công cụ phù hợp nhất. Trả về JSON:
+        {{
+            "thought": "Suy nghĩ tại sao chọn tool này",
+            "action": "tên_tool|thamsố"
+        }}
+        """
+        try:
+            res = self.engine.llm.generate_json(prompt, temperature=0.5)
+            action_str = res.get("action", "")
+            thought = res.get("thought", "")
+            
+            print(f"{Fore.LIGHTBLACK_EX}   -> Suy tính: {thought}{Style.RESET_ALL}")
+            
+            if action_str and "|" in action_str:
+                func_name, arg_str = action_str.split("|", 1)
+                func_name, arg_str = func_name.strip(), arg_str.strip()
+                
+                print(f"{Fore.YELLOW}   -> Thực thi: {func_name}('{arg_str}')...{Style.RESET_ALL}")
+                tool_res = self.engine.skills.execute(func_name, arg_str, ego=self.engine.ego)
+                
+                # REWARD: Tăng Dopamine khi hành động thành công
+                # Lượng tăng phụ thuộc vào độ nhạy của thụ thể
+                reward = 0.15 * receptors
+                self.engine.ego.dopamine_level = min(1.0, self.engine.ego.dopamine_level + reward)
+                # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
+                if self.engine.ego.dopamine_level > 0.8:
+                    self.engine.ego.dopamine_receptors = max(0.1, self.engine.ego.dopamine_receptors - 0.05)
+
+                print(f"{Fore.LIGHTGREEN_EX}🧠 [REWARD SYSTEM]: Hoàn thành action. Dopamine +{reward:.2f} (Nhạy bén: {receptors:.2f}){Style.RESET_ALL}")
+                
+                # Lưu kết quả vào Short-term Memory để Aura nhớ tiến độ
+                self.engine.short_term_buffer.append(f"[Ký ức hoàn thành bước '{func_name}']: {str(tool_res)[:200]}...")
+                self.engine.memory_ops.save_short_term_memory()
+                
+                # Đánh giá xem đã xong mục tiêu chưa
+                check_prompt = f"Kết quả vừa nhận được đoạn: {str(tool_res)[:200]}...\nĐã đủ để hoàn thành mục tiêu '{target_goal}' chưa? Chỉ trả lời YES hoặc NO."
+                is_done = self.engine.llm.generate_text(check_prompt).strip().upper()
+                if is_done.startswith("YES"):
+                    print(f"{Fore.GREEN}✅ [GOAL ACHIEVED]: Đã hoàn thành mục tiêu '{target_goal}'!{Style.RESET_ALL}")
+                    # Xóa mục tiêu khỏi danh sách
+                    self.engine.ego.beliefs = [b for b in self.engine.ego.beliefs if b != f"Mục tiêu hiện tại: {target_goal}"]
+                    self.engine.ego.save_state()
+        except Exception as e:
+            print(f"Lỗi hệ thống Planning: {e}")
