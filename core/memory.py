@@ -46,63 +46,80 @@ class MemoryTrace:
     recall_count: int = 0  # Số lần được nhớ lại (để tính toán rủi ro bị méo mó)
     emotional_layers: int = 1 # Số tầng cảm xúc (Càng nhiều tầng, càng khó quên)
     is_flashbulb: bool = False # Ký ức in hằn không bao giờ phai
-    overlays: List[str] = field(default_factory=list)  # Lớt cảm xúc tích lũy (max 5)
+    impact_weight: float = 1.0 # Trọng số tác động đến Mood (Phase 19)
+    overlays: List[str] = field(default_factory=list)  # Lớp cảm xúc tích lũy (max 5)
 
     def __post_init__(self):
         """Invariant enforcement — vào lúc khởi tạo, clamp tất cả số về dải hợp lệ."""
-        self.valence    = max(-1.0, min(1.0, self.valence))
-        self.arousal    = max(0.0,  min(1.0, self.arousal))
-        self.importance = max(0.0,  min(1.0, self.importance))
-        self.strength   = max(0.0,  min(1.0, self.strength))
+        self.valence       = max(-1.0, min(1.0, self.valence))
+        self.arousal       = max(0.0,  min(1.0, self.arousal))
+        self.importance    = max(0.0,  min(1.0, self.importance))
+        self.strength      = max(0.0,  min(1.0, self.strength))
+        self.impact_weight = max(0.0,  min(2.0, self.impact_weight))
 
-    def decay(self, stress_level: float):
+    def decay(self, stress_level: float, elapsed_days: float = 1.0, 
+              homeostasis_recovery: bool = False, nightly_stress_drop: float = 0.0, nightly_fatigue_drop: float = 0.0):
         """
-        Cơ chế Lọc rác Sinh học (Biological Garbage Collection)
-        Ký ức nhạt nhẽo (importance thấp, arousal thấp) bay màu cực nhanh.
-        Ký ức sốc/quan trọng có thể tồn tại vĩnh viễn (decay_factor tiến về 0).
+        Cơ chế Lãng quên Hybrid Ebbinghaus + Deep Freeze + Homeostasis Recovery (Phase 18)
         """
         t = self.type
         if self.is_flashbulb or t == MemoryType.CORE or t == MemoryType.SEMANTIC:
             return  # Không phai mờ
 
-        # Độ lỏng lẻo của ký ức giảm dần nếu có nhiều tầng cảm xúc
-        vulnerability = max(0.01, 1.0 - self.importance - (self.emotional_layers * 0.05))
+        # --- 1. Cơ chế Deep Freeze (Phase 18) ---
+        # Ký ức rất quan trọng & được nhắc lại nhiều lần sẽ biến thành Flashbulb (Nhớ trọn đời)
+        if self.importance >= 0.9 and self.recall_count >= 10:
+            self.is_flashbulb = True
+            print(f"❄️ [DEEP FREEZE]: Ký ức '{self.content[:30]}...' đã hóa thạch vĩnh viễn trong não bộ.")
+            return
+
+        # --- 2. Hybrid Ebbinghaus Decay ---
+        # Tính R (Độ ổn định / Retrievability)
+        base_R = 1.0 + (self.importance * 10.0) + (self.arousal * 5.0) + (abs(self.valence) * 3.0)
+        current_R = base_R * (1.2 ** self.recall_count) * (1.1 ** self.emotional_layers)
         
-        # Công thức phai mờ chịu ảnh hưởng bởi Vulnerability
-        decay_factor = Config.FORGETTING_RATE * (1 + stress_level * 0.5) * (vulnerability * 5.0)
+        # Stress Penalty
+        stress_penalty = 1.0 - (stress_level * 0.5) 
+        effective_R = current_R * stress_penalty
 
-        # Keo dính cảm xúc (Chống lãng quên). Các ký ức nhiều tầng được cộng điểm.
-        emotional_glue = 0.1 + (self.arousal * 3.0) + (abs(self.valence) * 2.0) + (self.emotional_layers * 0.5)
+        # Suy giảm theo hàm e mũ
+        S_0 = self.strength # Strength từ ngày hôm trước
+        decayed_strength = self.strength * math.exp(-elapsed_days / (effective_R + 1e-6))
 
-        # Trừ sức mạnh
-        self.strength *= math.exp(-decay_factor / emotional_glue)
+        # --- 3. Homeostasis Recovery (Phục hồi nội môi - Phase 18) ---
+        if homeostasis_recovery and (nightly_stress_drop > 0 or nightly_fatigue_drop > 0):
+            recovery_factor = (nightly_stress_drop + nightly_fatigue_drop) * 0.05 * self.importance
+            total_recovery = recovery_factor * elapsed_days
+            decayed_strength = min(1.0, decayed_strength + total_recovery)
+            
+        self.strength = decayed_strength
 
-    def reconsolidate(self, current_mood: float, is_associative: bool = False):
+    def reconsolidate(self, current_mood: float, is_associative: bool = False) -> bool:
         """Ký ức bị thay đổi cảm xúc khi nhớ lại (Reconsolidation)"""
         self.last_recalled = time.time()
         self.recall_count += 1
         
-        # Hồi sức nhẹ khi vừa được nhớ lại
-        # Nếu chỉ là nhớ mang máng (liên tưởng dây chuyền), hồi sức rất ít
         recovery_boost = Config.RECONSOLIDATION_RATE / 4.0 if is_associative else Config.RECONSOLIDATION_RATE
         self.strength = min(1.0, self.strength + recovery_boost)
 
-        # Phase 13: Emotional Inertia (Quán tính cảm xúc)
-        # Ký ức CORE có sức kháng cự lớn hơn với mood nhất thời — chống "tẩy não"
-        # Flashbulb: hoàn toàn miễn nhiễm (đây là nền tảng bất biến của self)
+        needs_rewrite = False
         if not self.is_flashbulb:
             t = self.type
             if t == MemoryType.CORE:
-                drift_factor = 0.02   # Cực kỳ khó thay đổi (5× so với episodic)
+                drift_factor = 0.02
             elif t == MemoryType.SEMANTIC:
-                drift_factor = 0.05   # Kháng cự vừa phải (2×)
+                drift_factor = 0.05
             else:
-                drift_factor = 0.1    # EPISODIC / EMOTIONAL: trôi dạt bình thường
+                drift_factor = 0.1
             
-            drift = (current_mood - self.valence) * drift_factor
+            mood_diff = current_mood - self.valence
+            # Nếu chênh lệch quá lớn (Phase 17B True False Memories)
+            if abs(mood_diff) > 0.6 and t != MemoryType.CORE:
+                needs_rewrite = True
+
+            drift = mood_diff * drift_factor
             self.valence = max(-1.0, min(1.0, self.valence + drift))
             
-            # Emotional Overlays (ghi nhận cảm xúc khi nhớ lại)
             import random
             from datetime import datetime
             MAX_OVERLAYS = 5
@@ -110,9 +127,11 @@ class MemoryTrace:
                 date_str = datetime.now().strftime("%d/%m")
                 emotional_tag = "rất vui" if current_mood > 0.3 else ("rất buồn" if current_mood < -0.3 else "bình thường")
                 self.overlays.append(f"[{date_str}: {emotional_tag}]")
-            # Phase 13: Pruning — giữ tối đa 5 overlay gần nhất (mới nhất = quan trọng nhất)
+            
             if len(self.overlays) > MAX_OVERLAYS:
                 self.overlays = self.overlays[-MAX_OVERLAYS:]
+
+        return needs_rewrite
 
     def get_display_content(self) -> str:
         """Nội dung đầy đủ để hiển thị hoặc đưa vào prompt, bao gồm overlays."""
@@ -149,23 +168,10 @@ class MemoryManager:
         self.store.remove(memory_id)
 
     def enforce_garbage_collection(self):
-        """Xóa vĩnh viễn những ký ức đã phai mờ (strength < 0.05). Hỗ trợ phân trang chống tràn RAM."""
-        forgotten_count = 0
-        limit = 50
-        offset = 0
-        
-        while True:
-            mems_chunk = self.store.get_all_metadata(limit=limit, offset=offset)
-            if not mems_chunk:
-                break
-                
-            for m in mems_chunk:
-                # Phase 13: Flashbulb memories cung duoc bao ve khoi GC
-                if m.strength < 0.05 and m.type != MemoryType.CORE and not m.is_flashbulb:
-                    self.remove(m.id)
-                    forgotten_count += 1
-            
-            offset += limit
-                
-        if forgotten_count > 0:
-            print(f"{Fore.RED}🗑️ [GARBAGE COLLECTION]: Đã quên vĩnh viễn {forgotten_count} sự kiện nhạt nhẽo.{Style.RESET_ALL}")
+        """Phase 17B: Xóa vĩnh viễn những ký ức đã phai mờ (strength < 0.05) bằng DB API query."""
+        try:
+            forgotten_count = self.store.delete_weak_memories(threshold=0.05)
+            if forgotten_count > 0:
+                print(f"{Fore.RED}🗑️ [GARBAGE COLLECTION]: Đã quên vĩnh viễn {forgotten_count} sự kiện nhạt nhẽo.{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi GC: {e}{Style.RESET_ALL}")

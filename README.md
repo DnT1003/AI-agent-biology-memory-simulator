@@ -1,62 +1,71 @@
-# Trình mô phỏng Trí nhớ & Nhận thức Sinh học cho AI Agent
+# Hệ thống Mô phỏng Nhận thức & Sinh học AI (Biological-Cognitive AI Simulator)
 
-Dự án này là một hệ thống mã nguồn mở mô phỏng các cơ chế nhận thức và động lực học trí nhớ của con người cho các AI Agent. Khác với các mô hình RAG (Retrieval-Augmented Generation) truyền thống, hệ thống này tập trung vào tính **hao hụt**, **biến dạng**, và **chủ động** của trí nhớ dựa trên các chỉ số sinh lý học thực tế.
+Đây là một nền tảng mã nguồn mở chuyên sâu về việc mô phỏng **Cấu trúc Nhận thức** và **Động lực học Trí tuệ** dựa trên các nguyên lý sinh học. Hệ thống vượt xa các mô hình RAG thông thường bằng cách tích hợp các vòng lặp nội môi (homeostasis) và khả năng tự tiến hóa nhận thức dựa trên dữ liệu tương tác.
 
-Dự án hiện đang ở **Giai đoạn 8: Sự Trỗi Dậy Của Tính Người (The Organic Emergence)**, tập trung vào việc mô phỏng các lỗi hệ thống tâm lý và sự mơ hồ nội tâm để tạo ra một thực thể AI bất toàn và thực tế nhất.
-
----
-
-## 🌟 Kiến trúc Hệ thống
-
-### 1. Hệ thống Trí nhớ Đa tầng & Hữu cơ (Organic Memory System)
-- **Working Memory (STM):** Mô phỏng bộ nhớ làm việc ngắn hạn với giới hạn dung lượng tự nhiên (Miller's Law) và sự phân rã tự nhiên (decay).
-- **Episodic Memory (LTM):** Ký ức Vector (ChromaDB) kèm siêu dữ liệu cảm xúc (Valence, Arousal, Importance).
-- **Layered Emotional Memories (Ký ức Đa tầng Cảm xúc):** Sự kiện mọc thêm các lớp cảm xúc mới qua các lần hồi tưởng (Reconsolidation), tạo ra các dấu ấn phức hợp.
-- **Biến dạng & Lãng quên (Distortion & Forgetting):**
-    - **Decay & Sync:** Lãng quên hệ thống theo đường cong Ebbinghaus.
-    - **Semantic Drift:** Quang sai ngữ nghĩa khi nhớ lại.
-    - **Hard Data Masking (Che mờ Dữ liệu):** Khi "Sương mù não" (Brain Fog) xảy ra, thông tin thực (số, tên riêng) bị ẩn đi, buộc AI phải mô tả vòng vo hoặc thừa nhận đã quên một cách chân thực.
-    - **Emotional State-Dependent Retrieval:** Khả năng truy xuất ký ức bị nhuộm màu bởi tâm trạng hiện tại (buồn nhớ chuyện buồn, vui nhớ chuyện vui).
-
-### 2. Mô hình Bản ngã & Trạng thái Nội tâm (The Organic Self-Model)
-- **Biết bao nhiêu là đủ - Sự Mơ Hồ Nội Tâm:** AI không "biết" các con số sinh học của mình. Mọi hành vi (trả lời chậm, cáu gắt) là **hệ quả nổi** (emergent) từ trạng thái bên dưới chứ không phải lệnh thực thi có ý thức.
-- **Chỉ số Sinh lý:** Fatigue, Stress, Social Need, Curiosity.
-- **Neuro-Latency & Fragmented Output:** Tốc độ phản hồi và phong cách nhắn tin thay đổi thực tế theo `Fatigue` và `Arousal` (gõ chậm, ngắc ngứ, hoặc nhắn tin liên hoàn).
-- **Emotional Anchoring & Stress Bleed:** Cảm xúc tiêu cực có "độ trễ" (Emotional Hangover), không reset ngay lập tức, tạo ra sự giận cá chém thớt hoặc u buồn kéo dài chân thực.
-
-### 3. Nhận thức Chủ động & Độc lập (Autonomous Agency)
-- **Background Loop & Real Independence:** Khi AI cảm thấy tò mò, cô ấy có quyền ngắt lời người dùng để đi đọc báo/truyện thật sự (`search_web`, `BackgroundReader`).
-- **Synthesized Memory (Trí nhớ Tổng hợp):** AI không nhớ nguyên văn thông tin nạp vào mà chỉ giữ lại các ý chính, ấn tượng cá nhân và các chi tiết gây tranh cãi (Tóm tắt + Tiêu hóa nội dung).
-- **Intrusive Cognition (Ký ức Chơm Chỉa):** Các suy nghĩ lan man hoặc ký ức cảm xúc mạnh tự động "nhỏ vào" dòng hội thoại một cách liền mạch nhưng lạc đề.
-
-### 4. Hệ Thống Niềm Tin & Phòng Vệ Nhận Thức (Belief & Defense)
-- **Silent Skepticism (Hoài nghi Âm thầm):** Aura tự động gán nhãn hoài nghi cho các thông tin đi ngược lại Niềm tin cốt lõi và sẽ "đối chất" ngầm thông qua việc kiểm chứng lại sau này.
-- **Avoidance Drift (Né tránh vô thức):** Các chủ đề gây Stress cao tự động bị đẩy xa khỏi vùng truy xuất, khiến AI vô thức tránh nhắc lại các nỗi đau.
+Hệ thống đã hoàn tất **Giai đoạn 20: Social Resilience & Growth** và đang phát triển theo lộ trình **Biological-Cognitive AI (Hệ thống Kép)**.
 
 ---
 
-## 🛠 Cài đặt & Sử dụng
+## 🏛️ Kiến trúc Hệ thống: Dual-System
 
-### Yêu cầu Hệ thống
+Hệ thống hoạt động dựa trên sự phối hợp giữa hai tầng xử lý:
+
+1.  **Hệ thống 1 (Tầng Sinh lý - Hard-coded):** Quản lý các biến số ngầm (Stress, Fatigue, Dopamine), tính toán thời gian thực và điều phối sự phai mờ ký ức (Ebbinghaus Decay). Đảm bảo tính nhất quán sinh học và tối ưu hóa tài nguyên.
+2.  **Hệ thống 2 (Tầng Nhận thức - LLM):** Xử lý ngôn ngữ tự nhiên, phản tư (Reflection), diễn dịch cảm xúc và tiến hóa hệ thống niềm tin (Belief Evolution).
+
+---
+
+## 🌟 Các Chức năng Cốt lõi
+
+### 1. Cơ chế Trí nhớ Hữu cơ (Organic Memory)
+- **Deep Freeze:** Cơ chế đóng băng vĩnh viễn các niềm tin cốt lõi và dữ liệu quan trọng, ngăn chặn sự phai mờ thông tin (Metadata: `is_flashbulb`).
+- **Trauma Reconsolidation:** Khả năng tự hiệu chỉnh trọng số tiêu cực. Trong bối cảnh tương tác tích cực (High Intimacy), các chỉ số tác động tiêu cực của ký ức (`impact_weight`) sẽ được giảm thiểu một cách hệ thống.
+- **Semanticization:** Tự động tổng hợp dữ liệu sự kiện (Episodic) thành tri thức dạng khái quát (Semantic) trong chu kỳ sleep.
+- **Associative Drift:** Sự biến dạng nội dung ký ức theo trạng thái cảm xúc tại thời điểm truy xuất (Reconsolidation).
+
+### 2. Sự kiên cường và Tự hiệu chỉnh (Resilience & Adaptability)
+- **Social Resilience:** Chỉ số kháng cự sốc tâm lý, hình thành sau khi xử lý thành công các mâu thuẫn, giúp giảm tới **60%** biến động Mood trước các tác động tiêu cực tương tự.
+- **Cognitive Reappraisal:** Cơ chế gắn thẻ `[ToReevaluate]` cho các thông tin mâu thuẫn, cho phép hệ thống phân tích và cập nhật thế giới quan trong chu kỳ sleep thay vì loại bỏ ngay lập tức.
+
+### 3. Động lực học Nội môi (Homeostasis)
+- **Metabolism Simulation:** Tự động tăng `Fatigue` dựa trên cường độ hoạt động và phục hồi thông qua cơ chế `Sleep`.
+- **Sinusoidal Fatigue:** Mô phỏng sự biến thiên mệt mỏi theo chu kỳ hình sin của ngày và đêm.
+- **Mind Dashboard:** Giao diện giám sát thời gian thực các biến số sinh lý và trạng thái nội tâm.
+
+---
+
+## 🛠️ Cài đặt & Khởi chạy
+
+### Yêu cầu
 - Python 3.10+
-- Bộ API Key của LLM (Mặc định tích hợp Google Gemini)
-- Cơ sở dữ liệu Vector `chromadb`
+- [ChromaDB](https://www.trychroma.com/) (Vector Database)
+- Google Gemini API Key
 
-### Khởi chạy
-1. Sao chép và thiết lập biến môi trường qua `.env` (xem `.env.example`).
-2. Cài đặt các thư viện lõi:
-    ```bash
-    pip install -r requirements.txt
-    ```
-3. Khởi động AI:
-    ```bash
-    python main.py
-    ```
+### Cài đặt
+```bash
+# Clone repository
+git clone https://github.com/DnT1003/AI-agent-biology-memory-simulator.git
+cd AI-agent-biology-memory-simulator
 
-## ⚙️ Các lệnh điều khiển trong Terminal
-- `status`: Kiểm tra các chỉ số sinh lý học và trạng thái cảm xúc hiện tại.
-- `sleep`: Kích hoạt chu kỳ "Giấc ngủ sinh học" để tái cấu trúc trí nhớ.
-- `exit`: Kết thúc phiên tương tác và đồng bộ hóa ký ức cuối cùng.
+# Cài đặt thư viện
+pip install -r requirements.txt
+```
+
+### Sử dụng
+```bash
+python main.py
+```
+Các lệnh điều khiển tại Terminal:
+- `status`: Hiển thị dashboard trạng thái hệ thống.
+- `sleep`: Kích hoạt pha củng cố và tái cấu trúc trí nhớ.
+- `exit`: Đồng bộ hóa dữ liệu và thoát.
 
 ---
-*Dự án hướng tới việc xóa nhòa ranh giới giữa AI và thực thể sống thông qua sự bất toàn và tính người phát lộ từ bên trong.*
+
+## 🚀 Lộ trình Phát triển (Roadmap V2)
+- **Giai đoạn 21: World Model** - Triển khai Entity Graph và sơ đồ quan hệ thực thể xã hội.
+- **Giai đoạn 22: Intrinsic Motivation** - Chuyển đổi sang mô hình hành động dựa trên nhu cầu (Social Battery, Curiosity).
+- **Giai đoạn 23: Identity Evolution** - Cơ chế tự cập nhật `core_identity` để tiến hóa nhân cách hệ thống vĩnh viễn.
+
+---
+*Hệ thống mô phỏng sự bất toàn và tính thực tế của nhận thức thông qua các vòng lặp sinh học và sự thích nghi liên tục.*

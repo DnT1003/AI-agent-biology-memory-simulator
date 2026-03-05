@@ -9,6 +9,16 @@ def get_semantic_drift_prompt(memory_content: str) -> str:
     Chỉ trả về nội dung đã viết lại, không giải thích gì thêm.
     """
 
+def get_reconsolidate_rewrite_prompt(memory_content: str, current_mood: float) -> str:
+    mood_str = "rất vui vẻ, hưng phấn" if current_mood > 0.3 else ("rất buồn bã, bi quan" if current_mood < -0.3 else "bình tĩnh")
+    return f"""
+    Dưới đây là một ký ức cũ: "{memory_content}"
+    Hiện tại, Aura đang có tâm trạng: {mood_str}.
+    Trong tâm lý học (False Memories), khi con người nhớ lại một sự việc trong một tâm trạng cực đoan, họ thường VÔ THỨC bóp méo ký ức đó để phù hợp với cảm xúc hiện tại.
+    Hãy viết lại ký ức trên, thay đổi cách dùng từ hoặc thêm thắt/lược bỏ 1-2 chi tiết nhỏ sao cho nó mang đậm màu sắc của tâm trạng hiện tại ({mood_str}), nhưng VẪN GIỮ NGUYÊN sự kiện gốc (ai làm gì).
+    CHỈ TRẢ VỀ NỘI DUNG KÝ ỨC ĐÃ VIẾT LẠI, tuyệt đối không thêm câu rào trước đón sau.
+    """
+
 def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "") -> str:
     history = chr(10).join(short_term_buffer)
     traumas_str = json.dumps(ego.traumas, ensure_ascii=False) if hasattr(ego, 'traumas') and ego.traumas else "Không có nỗi sợ hãi đặc biệt nào."
@@ -108,29 +118,28 @@ def get_sleep_dream_prompt(dream_context: str, is_hallucinating: bool = False) -
         """
         
     return f"""
-    Dưới đây là một số sự kiện (Episodic Memories) rời rạc bạn đã trải qua, kèm theo timestamp sinh học:
+    Dưới đây là một số sự kiện (Episodic Memories) đang phai mờ dần bạn đã trải qua, kèm theo timestamp sinh học:
     {dream_context}
     
-    TRONG LÚC NGỦ, não bộ con người thực hiện quá trình gán nhãn (Tagging) và liên kết chéo (Cross-referencing) các mảnh ký ức để tạo ra Suy luận logic (Reasoning) và rút ra Bài học cốt lõi (Semantic Memory).
+    TRONG LÚC NGỦ, não bộ con người thực hiện quá trình Semanticization. Bạn hãy phân tích các ký ức vụn vặt này để tổng hợp nên ĐỊNH LÝ, LUẬT LỆ hoặc BÀI HỌC CỐT LÕI MỚI (Semantic Memory) trước khi các ký ức yếu ớt này bị lãng quên vĩnh viễn.
     {hallucination_instruction}
     
     NHIỆM VỤ CỦA BẠN:
-    1. Đọc kỹ các sự kiện. Tưởng tượng gán cho chúng càng nhiều TAG phân loại càng tốt (ví dụ: đối tượng, kiến thức, xe cộ, đạo đức, môi trường, thời gian, địa điểm...).
-    2. Tìm kiếm CÁC MỐI LIÊN KẾT ẨN giữa các sự kiện thông qua các TAG này hoặc thông qua mốc thời gian/địa điểm (Ví dụ: Sự kiện A chỉ ra X. Sự kiện B chỉ ra Y. Suy ra Z).
-    3. Rút ra tối đa 2 KẾT LUẬN (hoặc sự thật ẩn/niềm tin cốt lõi mới) mà bạn ngộ ra nhờ việc xâu chuỗi các sự kiện này.
+    1. Tìm CÁC MỐI LIÊN KẾT ẨN giữa các mẩu thông tin trên dựa vào các mẫu hành vi (Patterns), sở thích, lịch trình, hoặc cảm xúc của Owner.
+    2. Rút ra tối đa 2 BÀI HỌC (kiến thức tổng hợp) có độ bền vững cao, áp dụng được cho tương lai.
     
     OUTPUT FORMAT YÊU CẦU:
     Bạn PHẢI trả lời hoàn toàn bằng định dạng JSON như sau (KHÔNG CÓ MARKDOWN, CHỈ CÓ JSON HỢP LỆ):
     [
         {{
-            "tags": ["đối tượng", "thời gian", "xã hội", ...],
-            "reasoning": "Sự kiện 1 nói rằng A đợi chợ lúc 9h. Sự kiện 2 nói rằng B gặp C nhưng C lại nói C ở chợ lúc 9h. Suy ra A và C có thể đã lướt qua nhau.",
-            "conclusion": "A và C có khả năng cao đã gặp nhau ở chợ.",
+            "tags": ["insight", "tính cách", "sức khỏe", ...],
+            "reasoning": "Tôi thấy Owner rất hay thức khuya để code, thường uống nhiều cà phê và than đau đầu hôm sau.",
+            "conclusion": "Owner là người rất đam mê code nhưng sinh hoạt không điều độ, hay bào mòn sức khỏe. Cần nhắc nhở kịp thời.",
             "is_hallucination": false
         }},
         ...
     ]
-    Nếu không thể suy luận ra bất cứ mối liên kết nào, hãy trả về mảng rỗng: []
+    Nếu các mẩu tin hoàn toàn vô nghĩa và không thể tổng hợp, trả về mảng rỗng: []
     """
 
 def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_term_buffer: list, idle_time: float) -> str:

@@ -86,10 +86,9 @@ class CognitiveEngine:
 
                 if self.state_machine.state == AgentState.READING:
                     self.ego.curiosity = max(0.0, self.ego.curiosity - 0.002 * dt / 60)
-                # Phase 13: Metabolic Cost — tieu ton nang luong khi suy nghi
-                # Moi LLM call o trang thai THINKING se dot fatigue truoc khi tra loi
+                # Giảm nhẹ trừ gốc (0.005 -> 0.001) chờ tích hợp Token-based cost bên trong `llm.py`
                 if self.state_machine.state == AgentState.THINKING:
-                    self.ego.fatigue = min(1.0, self.ego.fatigue + 0.005 * dt / 60)
+                    self.ego.fatigue = min(1.0, self.ego.fatigue + 0.001 * dt / 60)
 
                 self.ego.apply_circadian_rhythm()
 

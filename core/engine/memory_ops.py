@@ -96,7 +96,21 @@ class MemoryOperationsController:
 
         for m in recalled:
             is_associative = (chained_memory and m.id == chained_memory.id)
-            m.reconsolidate(self.engine.ego.mood, is_associative=is_associative)
+            needs_rewrite = m.reconsolidate(self.engine.ego.mood, is_associative=is_associative)
+            
+            # Phase 17B: True False Memories
+            if needs_rewrite:
+                try:
+                    from core.prompts import get_reconsolidate_rewrite_prompt
+                    prompt = get_reconsolidate_rewrite_prompt(m.content, self.engine.ego.mood)
+                    new_content = self.engine.llm.generate_text(prompt, temperature=0.7)
+                    if new_content and len(new_content) > 10 and new_content != m.content:
+                        print(f"{Fore.LIGHTRED_EX}🌀 [FALSE MEMORY]: Ký ức bị bóp méo do tâm trạng:\n   - Cũ: {m.content}\n   - Mới: {new_content}{Style.RESET_ALL}")
+                        m.content = new_content
+                        self.engine.memory.store.update_vector(m.id, self.engine.embedder.encode(new_content))
+                except Exception as e:
+                    print(f"{Fore.RED}Lỗi True False Memories: {e}{Style.RESET_ALL}")
+                    
             self.engine.memory.store.update_meta(m.id, m)
         return recalled
 
@@ -127,9 +141,10 @@ class MemoryOperationsController:
                 ans = self.engine.llm.generate_text(check_prompt, temperature=0.1).strip().upper()
                 # B15: dùng startswith thày 'in' — 'YES, because...' không bị detect lầm
                 if ans.startswith("YES"):
-                    print(f"{Fore.LIGHTYELLOW_EX}🤨 [SILENT SKEPTICISM]: Aura âm thầm hoài nghi thông tin này vì nó chọi lại Core Belief!{Style.RESET_ALL}")
-                    internal_thought += " [HOÀI NGHI: Thông tin này có vẻ sai hoặc lừa dối, không khớp với niềm tin của mình.]"
-                    new_valence = min(new_valence, -0.4) # Gắn cảm xúc tiêu cực, bài xích
+                    print(f"{Fore.LIGHTYELLOW_EX}🧐 [COGNITIVE REAPPRAISAL]: Aura nhận thấy mâu thuẫn với niềm tin. Gắn thẻ chờ đánh giá lại...{Style.RESET_ALL}")
+                    internal_thought += " [CÂN NHẮC: Thông tin này mâu thuẫn với niềm tin của mình. Cần suy nghĩ thêm khi ngủ.]"
+                    user_input = f"[ToReevaluate] {user_input}"
+                    new_valence = max(new_valence, -0.2) # Không còn bài xích cực đoan
             except Exception:
                 pass
         
@@ -165,11 +180,31 @@ class MemoryOperationsController:
         """Quản lý giấc ngủ: điều phối 3 phase riêng biệt. B12: split for clarity + testability."""
         print(f"\n{Fore.MAGENTA}💤 Aura đang ngủ... (Decay & Consolidation & Drift & Semanticization){Style.RESET_ALL}")
         self._dream_consolidation_phase()
-        self._decay_phase()
-        self._guilt_reflection_phase()
-        self.engine.memory.enforce_garbage_collection()
+        
+        # Lập chốt điểm dữ liệu trước khi sleep để tính Homeostasis Recovery (Phase 18)
+        old_stress = self.engine.ego.stress
+        old_fatigue = self.engine.ego.fatigue
+        
+        # Giảm stress và fatigue khi ngủ
         self.engine.ego.stress  = max(0.0, self.engine.ego.stress  - 0.3)
         self.engine.ego.fatigue = 0.0
+        
+        # Lượng phục hồi nội môi
+        stress_drop = max(0.0, old_stress - self.engine.ego.stress)
+        fatigue_drop = max(0.0, old_fatigue - self.engine.ego.fatigue)
+        
+        self._decay_phase(stress_drop, fatigue_drop)
+        self._guilt_reflection_phase()
+        self._cognitive_reappraisal_phase()
+        
+        # [Phase 19] Cập nhật Mood dựa trên tổng hòa ký ức đã được chữa lành
+        mems_after = self.engine.memory.get_all()
+        chronic_mood = self.engine.ego.calculate_chronic_mood(mems_after)
+        # Pha trộn Mood hiện tại với baseline từ ký ức (Giảm 50% nhiễu từ các mood swing trong ngày)
+        self.engine.ego.mood = self.engine.ego.mood * 0.5 + chronic_mood * 0.5
+        print(f"   -> Chronic Mood Baseline: {chronic_mood:+.2f} | Final Mood: {self.engine.ego.mood:+.2f}")
+        
+        self.engine.memory.enforce_garbage_collection()
         self.engine.ego.social_need = min(1.0, self.engine.ego.social_need + 0.4)
         self.engine.ego.curiosity   = min(1.0, self.engine.ego.curiosity   + 0.4)
         self.engine.ego.reroll_thresholds()
@@ -181,12 +216,16 @@ class MemoryOperationsController:
     # ------------------------------------------------------------------ #
 
     def _dream_consolidation_phase(self):
-        """Phase 1: Nhớ lại kyờ kẻ + sật ngộ ra → tạo semantic memory mới."""
+        """Phase 1: Semanticization (Gom nhóm mảnh ký ức yếu thành Semantic Memory - Phase 18)"""
         mems = self.engine.memory.get_all()
-        episodic_mems = [m for m in mems if m.type == MemoryType.EPISODIC]
-        if len(episodic_mems) < 5:
-            return
-        dream_mems = self.engine.autonomous._weighted_sample_memories(min(15, len(episodic_mems)), filter_type=MemoryType.EPISODIC)
+        # Lọc ký ức Episodic đang phai mờ (strength < 0.4) để cứu vãn cốt lõi trước khi GC xóa mất
+        weak_episodic = [m for m in mems if m.type == MemoryType.EPISODIC and m.strength < 0.4]
+        if len(weak_episodic) < 3:
+            return  # Không đủ rác để gom
+            
+        # Ưu tiên các ký ức yếu nhất để gộp (tối đa 15 mảnh) để xử lý triệt để
+        dream_mems = sorted(weak_episodic, key=lambda x: x.strength)[:15]
+        
         prompt = get_sleep_dream_prompt("\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems]))
         raw_response = self.engine.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
         json_str = raw_response.strip().replace("```json", "").replace("```", "").strip()
@@ -198,25 +237,44 @@ class MemoryOperationsController:
                     reasoning  = item.get('reasoning', '')
                     conclusion = item.get('conclusion', '')
                     if conclusion and reasoning:
-                        print(f"{Fore.GREEN}   ❇️ Ngộ ra: {conclusion}{Style.RESET_ALL}\n")
+                        print(f"{Fore.GREEN}   ❇️ NGỮ NGHĨA HÓA (Semanticization): {conclusion}{Style.RESET_ALL}\n")
                         self.engine.memory.add_memory(MemoryTrace(
-                            content=f"Suy luận logic ({', '.join(tags[:3])}): {conclusion} (Lý do: {reasoning})",
+                            content=f"Suy luận đúc kết ({', '.join(tags[:3])}): {conclusion} (Lý do: {reasoning})",
                             type=MemoryType.SEMANTIC,
                             valence=0.0, arousal=0.5, importance=1.0, is_flashbulb=True
                         ))
-                        # B9: Belief validation
-                        if (conclusion and len(conclusion) > 10
-                                and conclusion not in self.engine.ego.beliefs
-                                and len(self.engine.ego.beliefs) < 50):
-                            self.engine.ego.beliefs.append(conclusion)
+                        # Phase 20: Tích hợp Belief Evolution (Xóa bỏ ego.beliefs cũ)
+                        if conclusion and len(conclusion) > 10:
+                            # Tự động coi đây là một Semantic Memory loại Core
+                            self.engine.memory.add_memory(MemoryTrace(
+                                content=f"Niềm tin cốt lõi (Belief): {conclusion}",
+                                type=MemoryType.CORE,
+                                valence=0.5, arousal=0.2, importance=1.0, is_flashbulb=True
+                            ))
+                
+                # XÓA CÁC MẢNH RÁC SAU KHI ĐÃ GỘP THÀNH CÔNG (Thu gom Semanticization)
+                ids_to_delete = [m.id for m in dream_mems]
+                if ids_to_delete:
+                    for m_id in ids_to_delete:
+                        self.engine.memory.store.remove(m_id)
+                    print(f"{Fore.YELLOW}   🗑️ Đã xóa vĩnh viễn {len(ids_to_delete)} mảnh ký ức vụn vặt sau khi đúc kết Semantic.{Style.RESET_ALL}")
         except Exception:
             pass
 
-    def _decay_phase(self):
-        """Phase 2: Áp dụng decay + semantic drift lên toàn bộ kyờ kẻ."""
+    def _decay_phase(self, nightly_stress_drop=0.0, nightly_fatigue_drop=0.0):
+        """Phase 2: Áp dụng decay + semantic drift lên toàn bộ ký ức (có Homeostasis Recovery - Phase 18)."""
         mems = self.engine.memory.get_all()
         for m in mems:
-            m.decay(stress_level=self.engine.ego.stress)
+            m.decay(
+                stress_level=self.engine.ego.stress, 
+                elapsed_days=1.0, 
+                homeostasis_recovery=True,
+                nightly_stress_drop=nightly_stress_drop,
+                nightly_fatigue_drop=nightly_fatigue_drop
+            )
+            # [Phase 19] Tái cấu trúc nỗi đau (Trauma Healing)
+            self.engine.ego.process_trauma_healing(m)
+            
             self.apply_semantic_drift(m)
             self.engine.memory.update_memory(m)
 
@@ -247,3 +305,76 @@ class MemoryOperationsController:
                         )
                         self.engine.memory.add_memory(guilt_mem)
                         print(f"{Fore.MAGENTA}😔 [GUILT]: Aura cảm thấy hối hận vì: {guilt_reason}{Style.RESET_ALL}")
+    
+    def _cognitive_reappraisal_phase(self):
+        """Phase 4: [Phase 20] Cognitive Reappraisal — Đánh giá lại các mâu thuẫn để tiến hóa niềm tin."""
+        mems = self.engine.memory.get_all()
+        # Kiểm tra tag mâu thuẫn trong cả content và overlays
+        to_evaluate = []
+        for m in mems:
+            if "[ToReevaluate]" in m.content:
+                to_evaluate.append(m)
+            elif any("[ToReevaluate]" in ov for ov in m.overlays):
+                to_evaluate.append(m)
+                
+        if not to_evaluate:
+            return
+
+        print(f"\n{Fore.LIGHTBLUE_EX}🧠 [COGNITIVE REAPPRAISAL]: Aura đang chiêm nghiệm về {len(to_evaluate)} mâu thuẫn nhận thức...{Style.RESET_ALL}")
+        
+        for m in to_evaluate:
+            # Lấy các niềm tin hiện tại để đối chiếu
+            clean_content = m.content.replace("[ToReevaluate] ", "")
+            beliefs = self.engine.ego.get_active_beliefs(context_query=clean_content)
+            belief_str = "\n- ".join(beliefs) if beliefs else "Chưa có niềm tin cụ thể."
+            
+            prompt = f"""
+            Aura đang gặp mâu thuẫn giữa niềm tin cũ và thông tin mới nhận được.
+            
+            Niềm tin hiện tại:
+            - {belief_str}
+            
+            Thông tin mới gây mâu thuẫn:
+            '{clean_content}'
+            
+            Nhiệm vụ: Phân tích liệu Aura nên giữ vững niềm tin cũ hay 'tiến hóa' (thay đổi) niềm tin để phù hợp với thực tế mới.
+            
+            TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON:
+            {{
+                "action": "EVOLVE" | "SOFTEN" | "REJECT",
+                "reasoning": "Lý do ngắn gọn",
+                "new_belief": "Câu niềm tin mới (Belief: ...) nếu EVOLVE, nếu không thì để trống"
+            }}
+            """
+            try:
+                res_raw = self.engine.llm.generate_text(prompt, temperature=0.3)
+                import json
+                # Làm sạch chuỗi JSON
+                json_str = res_raw.strip().replace("```json", "").replace("```", "").strip()
+                data = json.loads(json_str)
+                
+                action = data.get("action", "REJECT")
+                reason = data.get("reasoning", "")
+                
+                if action == "EVOLVE" and data.get("new_belief"):
+                    new_b = data["new_belief"]
+                    print(f"{Fore.GREEN}🌱 [BELIEF EVOLUTION]: {reason}\n   -> Niềm tin mới: {new_b}{Style.RESET_ALL}")
+                    self.engine.memory.add_memory(MemoryTrace(
+                        content=f"Niềm tin cốt lõi (Belief): {new_b}",
+                        type=MemoryType.CORE,
+                        valence=0.5, arousal=0.3, importance=1.0, is_flashbulb=True
+                    ))
+                elif action == "SOFTEN":
+                    print(f"{Fore.CYAN}⚖️ [COGNITIVE SOFTENING]: {reason}{Style.RESET_ALL}")
+                    m.valence = 0.0 # Giảm bớt sự bài xích
+                else:
+                    print(f"{Fore.LIGHTBLACK_EX}🛡️ [BELIEF PRESERVATION]: {reason}{Style.RESET_ALL}")
+                    m.valence = -0.5 # Giữ nguyên sự hoài nghi
+            except Exception as e:
+                print(f"Lỗi phân tích mâu thuẫn: {e}")
+            
+            # Xóa tag sau khi xử lý (trong cả content và overlays)
+            m.content = clean_content
+            m.overlays = [ov.replace("[ToReevaluate] ", "").replace("[ToReevaluate]", "") for ov in m.overlays]
+            self.engine.memory.update_memory(m)
+

@@ -22,10 +22,12 @@ class VectorStore:
     thay vì load hết về Python rồi mới lọc (không hiệu quả với 100k+ memories).
     """
     def __init__(self):
-        if not os.path.exists("outputs/chroma_db"):
-            os.makedirs("outputs/chroma_db")
+        from config import Config
+        db_path = getattr(Config, 'CHROMA_DB_PATH', "outputs/chroma_db")
+        if not os.path.exists(db_path):
+            os.makedirs(db_path)
             
-        self.client = chromadb.PersistentClient(path="outputs/chroma_db")
+        self.client = chromadb.PersistentClient(path=db_path)
         self.collection = self.client.get_or_create_collection(
             name="aura_long_term_memory",
             metadata={"hnsw:space": "cosine"}
@@ -36,34 +38,43 @@ class VectorStore:
     # ─────────────────────────────────────────────────
 
     def _obj_to_dict(self, obj: Any) -> dict:
-        """Chuyển Object sang ChromaDB metadata.
-        
-        Các trường trong LIFTED_FIELDS được lưu thành top-level key riêng để
-        ChromaDB có thể filter mà không cần load JSON phụ.
-        """
+        """Phase 17B: Metadata Flattening - DB Optimization. Không dùng json.dumps."""
         raw = obj.__dict__.copy()
         meta = {
-            "data": json.dumps(raw, ensure_ascii=False),
-            "timestamp": float(getattr(obj, 'created_at', 0.0)),
-            "schema_version": "3",  # Phase 13: schema version bump for metadata lifting
+            "schema_version": "4",
+            "timestamp": float(getattr(obj, 'created_at', 0.0))
         }
-        # Lift các trường quan trọng ra ngoài JSON để ChromaDB index
-        for field in LIFTED_FIELDS:
-            val = raw.get(field)
-            if val is not None:
-                if isinstance(val, bool):
-                    meta[field] = int(val)  # ChromaDB không hỗ trợ bool trực tiếp
-                elif isinstance(val, (int, float, str)):
-                    meta[field] = val
+        for k, v in raw.items():
+            if v is None: continue
+            if isinstance(v, bool):
+                meta[k] = int(v)
+            elif isinstance(v, (int, float, str)):
+                meta[k] = v
+            elif isinstance(v, list):
+                if k == "overlays":
+                    meta[k] = "\n||\n".join(v)
                 else:
-                    meta[field] = str(val)  # enum → str
+                    meta[k] = str(v)
+            else:
+                meta[k] = str(v)
         return meta
 
     def _dict_to_obj(self, metadata_dict: dict) -> Any:
-        """Phục hồi Object từ JSON. Safe fallback nếu schema cũ."""
+        """Phục hồi Object từ metadata phẳng."""
         from core.memory import MemoryTrace
         try:
-            data = json.loads(metadata_dict["data"])
+            if metadata_dict.get("schema_version") in ["1", "2", "3"] and "data" in metadata_dict:
+                data = json.loads(metadata_dict["data"])
+            else:
+                data = metadata_dict.copy()
+                if "schema_version" in data: del data["schema_version"]
+                if "overlays" in data and isinstance(data["overlays"], str):
+                    data["overlays"] = data["overlays"].split("\n||\n") if data["overlays"] else []
+                if "is_flashbulb" in data: data["is_flashbulb"] = bool(data["is_flashbulb"])
+                if "type" in data:
+                    from core.memory import memory_type_from_str
+                    data["type"] = memory_type_from_str(data["type"])
+                    
             known_fields = {f.name for f in MemoryTrace.__dataclass_fields__.values()}
             data = {k: v for k, v in data.items() if k in known_fields}
             return MemoryTrace(**data)
@@ -75,22 +86,23 @@ class VectorStore:
     # WRITE OPERATIONS
     # ─────────────────────────────────────────────────
 
-    def add(self, record_id: str, vector: np.ndarray, meta: Any):
+    def add(self, record_id: str, vector, meta: Any):
         try:
+            vec = vector.tolist() if isinstance(vector, np.ndarray) else list(vector)
             self.collection.upsert(
                 ids=[record_id],
-                embeddings=[vector.tolist()],
+                embeddings=[vec],
                 metadatas=[self._obj_to_dict(meta)]
             )
         except Exception:
             logger.error(f"Failed to upsert vector {record_id}", exc_info=True)
 
-    def add_batch(self, record_ids: List[str], vectors: List[np.ndarray], metas: List[Any]):
+    def add_batch(self, record_ids: List[str], vectors, metas: List[Any]):
         """Batch upsert tối ưu cho tốc độ khi nạp data lớn."""
         try:
             self.collection.upsert(
                 ids=record_ids,
-                embeddings=[v.tolist() for v in vectors],
+                embeddings=[v.tolist() if isinstance(v, np.ndarray) else list(v) for v in vectors],
                 metadatas=[self._obj_to_dict(m) for m in metas]
             )
         except Exception:
@@ -116,6 +128,28 @@ class VectorStore:
 
     def remove(self, record_id: str):
         self.collection.delete(ids=[record_id])
+
+    def delete_weak_memories(self, threshold: float = 0.05) -> int:
+        """Phase 17B: Xóa mem yếu bằng API query thay vì while-loop.
+        Giữ lại CORE, SEMANTIC và FLASHBULB.
+        """
+        results = self.collection.get(
+            where={"strength": {"$lt": threshold}},
+            include=["metadatas"]
+        )
+        if not results or not results.get('ids'):
+            return 0
+            
+        ids_to_drop = []
+        for i, meta in enumerate(results['metadatas']):
+            if meta.get("is_flashbulb", 0) == 1: continue
+            if meta.get("type") in ["core", "semantic"]: continue
+            ids_to_drop.append(results['ids'][i])
+            
+        if ids_to_drop:
+            self.collection.delete(ids=ids_to_drop)
+            return len(ids_to_drop)
+        return 0
 
     def clear_all(self):
         logger.warning("clear_all() called! Dropping aura_long_term_memory collection.")

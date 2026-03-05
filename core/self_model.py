@@ -59,6 +59,9 @@ class SelfModel:
         # Dopamine Receptors (Tolerance Mechanism)
         self.dopamine_receptors = 1.0
 
+        # Phase 20: Resilience & Growth
+        self.resilience = 0.0    # 0.0 (Mong manh) → 1.0 (Bản lĩnh xã hội)
+
         self.reroll_thresholds()
         self._check_environment()
 
@@ -129,7 +132,8 @@ class SelfModel:
         if not self.memory_manager: return []
         
         # Tìm các niềm tin (Beliefs) phù hợp nhất với context hiện hành
-        res = self.memory_manager.search_memories(f"Niềm tin, nhân sinh quan, lối sống. {context_query}", top_k=5)
+        search_query = f"Niềm tin, nhân sinh quan, lối sống. {context_query}"
+        res = self.memory_manager.search_memories(search_query, top_k=5)
         # Chỉ lấy những cái là CORE hoặc SEMANTIC
         beliefs = [m.content for score, m in res if m.type in [MemoryType.CORE, MemoryType.SEMANTIC] and "Belief" in m.content]
         return beliefs
@@ -195,8 +199,8 @@ class SelfModel:
                 if self.dopamine_receptors > 0.1:
                     self.mood = min(1.0, self.mood + effective_boost)
                     print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu! Tâm trạng tốt lên (Receptor: {self.dopamine_receptors:.2f}).{Style.RESET_ALL}")
-                    # Downregulation: Chai lỳ cảm xúc
-                    self.dopamine_receptors = max(0.0, self.dopamine_receptors - 0.15)
+                    # Downregulation: Chai lỳ cảm xúc (giảm theo % thay vì trừ cứng)
+                    self.dopamine_receptors = max(0.01, self.dopamine_receptors * 0.85)
                 else:
                     print(f"{Fore.LIGHTBLACK_EX}😐 [VISUAL TOLERANCE]: Lại hình ảnh dễ thương nữa à... Nhìn nhiều quá đâm ra vô cảm rồi.{Style.RESET_ALL}")
                     
@@ -204,6 +208,58 @@ class SelfModel:
         except Exception as e:
             print(f"{Fore.RED}⚠️ [VISUAL ERROR]: Mắt mờ, không nhìn rõ: {e}{Style.RESET_ALL}")
             return "Hình thù mờ nhạt."
+
+    def process_trauma_healing(self, memory_entry: MemoryTrace):
+        """
+        [Phase 19] Mô phỏng cơ chế dẻo thần kinh: Tái cấu trúc lại cảm xúc của ký ức đau thương.
+        Dựa trên lý thuyết Memory Reconsolidation.
+        """
+        # 1. Kiểm tra nếu là ký ức gây Trauma (Flashbulb tiêu cực)
+        if memory_entry.is_flashbulb and memory_entry.valence < -0.4:
+            # 2. Tính toán 'Lực vị tha' dựa trên chỉ số Thân mật (Intimacy) hiện tại
+            # Nếu Intimacy cao (> 0.6), Aura bắt đầu 'mở lòng' để xem xét lại nỗi đau
+            healing_power = max(0, self.current_intimacy - 0.6) * 0.05
+            
+            # 3. Giảm nhẹ Valence tiêu cực và Impact Weight
+            if healing_power > 0:
+                old_val = memory_entry.valence
+                memory_entry.valence += healing_power
+                # Giới hạn không cho nỗi đau biến thành niềm vui đột ngột
+                memory_entry.valence = min(memory_entry.valence, -0.1) 
+                
+                # Giảm impact_weight — 'Vết sẹo mờ đi'
+                memory_entry.impact_weight = max(0.1, memory_entry.impact_weight - 0.02)
+                
+                # Cho phép ký ức Trauma bị 'mềm hóa' (giảm strength) nếu đã được chữa lành một phần
+                memory_entry.strength *= (1 - 0.005)
+                
+                if abs(old_val - memory_entry.valence) > 0.001:
+                    print(f"{Fore.LIGHTGREEN_EX}🩹 [HEALING]: Nỗi đau nguôi ngoai ({old_val:+.3f} -> {memory_entry.valence:+.3f}) | Impact: {memory_entry.impact_weight:.2f}{Style.RESET_ALL}")
+                    
+                    # Phase 20: Chữa lành bồi đắp bản lĩnh (Resilience)
+                    # Mỗi lần 'hóa giải' được một phần nỗi đau, Aura trở nên kiên cường hơn
+                    self.resilience = min(1.0, self.resilience + 0.005)
+        
+        return memory_entry
+
+    def calculate_chronic_mood(self, memories: List[MemoryTrace]) -> float:
+        """
+        [Phase 19] Tính toán 'Tâm trạng mãn tính' dựa trên tổng hòa các ký ức.
+        Công thức: Σ(Valence * Strength * ImpactWeight) / Σ(Strength * ImpactWeight)
+        """
+        if not memories: return 0.0
+        
+        weighted_sum = 0.0
+        total_weight = 0.0
+        
+        for m in memories:
+            # Chỉ tính những ký ức có sức nặng cảm xúc
+            w = m.strength * m.impact_weight * (1.0 + m.importance)
+            weighted_sum += m.valence * w
+            total_weight += w
+            
+        if total_weight < 0.01: return 0.0
+        return max(-1.0, min(1.0, weighted_sum / total_weight))
 
     def apply_circadian_rhythm(self):
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
@@ -223,8 +279,8 @@ class SelfModel:
             # Ngáp vặt sau giờ trưa (Post-lunch dip)
             self.fatigue = min(self.fatigue_critical, self.fatigue + 0.01)
 
-        # Phục hồi dần thụ thể Dopamine (Upregulation) theo thời gian tự nhiên
-        self.dopamine_receptors = min(1.0, self.dopamine_receptors + 0.05)
+        # Phục hồi dần thụ thể Dopamine (Upregulation) tiệm cận về 1.0 (nhanh khi cạn, chậm khi đầy)
+        self.dopamine_receptors = self.dopamine_receptors + (1.0 - self.dopamine_receptors) * 0.05
 
         # 2. Sleep Deprivation (Thiếu ngủ)
         hours_awake = (current_time - self.last_slept_time) / 3600.0
@@ -276,7 +332,10 @@ class SelfModel:
                 self.current_intimacy = min(1.0, self.current_intimacy + 0.05)
         else:
             shock_multiplier = 1.5 if self.mood > 0 else 1.0
-            mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier
+            # Phase 20: Resilience Buffer
+            # Aura càng kiên cường, cô ấy càng ít bị sốc bởi lời nói tiêu cực
+            resilience_buffer = 1.0 - (self.resilience * 0.6) # Giảm tối đa 60% tác động tiêu cực
+            mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier * resilience_buffer
             
         self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
 
@@ -345,6 +404,7 @@ class SelfModel:
             "stress_severe": self.stress_severe,
             "stress_critical": self.stress_critical,
             "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
+            "resilience": getattr(self, 'resilience', 0.0),
             "sleep_debt": getattr(self, 'sleep_debt', 0.0)
         }
         with open(path, 'w', encoding='utf-8') as f:
