@@ -160,6 +160,10 @@ class SelfModel:
 
         return is_shocked
 
+    def see(self, image_path: str, llm):
+        """Shortcut for process_visual_stimuli"""
+        return self.process_visual_stimuli(llm, image_path)
+
     def process_visual_stimuli(self, llm, image_path: str):
         """Xử lý hình ảnh (Vision) và ép trực tiếp vào cảm xúc sinh lý trước cả khi phân tích từ ngữ."""
         from colorama import Fore, Style

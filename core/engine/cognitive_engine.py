@@ -14,6 +14,7 @@ from config import Config
 from .memory_ops import MemoryOperationsController
 from .interaction import InteractionController
 from .autonomous import AutonomousController
+from .perception import PerceptionController
 from core.agent_state import StateMachine, AgentState
 
 logger = get_logger("cognitive_engine")
@@ -57,6 +58,7 @@ class CognitiveEngine:
         self.local_perception = LocalPerception()
 
         self.memory_ops = MemoryOperationsController(self)
+        self.perception_ops = PerceptionController(self)
         self.interaction = InteractionController(self)
         self.autonomous = AutonomousController(self)
 

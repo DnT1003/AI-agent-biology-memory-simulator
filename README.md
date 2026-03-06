@@ -1,7 +1,7 @@
-# 🧠 Biological-Cognitive AI Simulator (Project AURA)
+# 🧠 Biological-Cognitive AI Simulator (Project B.C.A.S)
 ## Mô phỏng Nhận thức & Sinh học Tiến hóa cho Tác nhân AI
 
-[![System Status](https://img.shields.io/badge/System-Phase_20_Complete-brightgreen.svg?style=for-the-badge&logo=cpu)](https://github.com/DnT1003/AI-agent-biology-memory-simulator)
+[![System Status](https://img.shields.io/badge/System-Phase_22_Complete-brightgreen.svg?style=for-the-badge&logo=cpu)](https://github.com/DnT1003/AI-agent-biology-memory-simulator)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)
 ![Audit](https://img.shields.io/badge/Audit-Passed-gold.svg?style=for-the-badge)
 
@@ -58,7 +58,8 @@ graph TD
 ### Yêu cầu
 - Python 3.10+
 - **Database**: ChromaDB (Lưu trữ Vector)
-- **LLM**: Google Gemini API (Cloud) hoặc Phi-3 (Local fallback)
+- **LLM**: Google Gemini API (Cloud) hoặc các mô hình Local (Phi-3/llama3 via Ollama)
+- **GPU**: Khuyến nghị NVIDIA để tối ưu hóa Local Perception (RoBERTa)
 
 ### Khởi chạy
 ```bash
@@ -86,8 +87,9 @@ Dự án đã hoàn tất các quy trình kiểm thử nghiêm ngặt:
 ---
 
 ## 🚀 Lộ trình Phát triển
-- **World Model Implementation**: Tích hợp đồ thị thực thể (Entity Relationship Graph).
-- **Physical Integration**: Kết nối với dữ liệu cảm biến đa giác quan.
+- **World Model Implementation**: Tích hợp đồ thị thực thể (Entity Relationship Graph). [Hoàn tất Phase 21]
+- **Intrinsic Motivation**: Hệ thống xung lực tự trị (Active Drives). [Hoàn tất Phase 22]
+- **Physical Integration**: Kết nối với dữ liệu cảm biến đa giác quan và kích ứng môi trường.
 - **Social Dynamic Simulation**: Mô phỏng sự tương tác giữa nhiều tác nhân trong cùng một môi trường.
 
 ---

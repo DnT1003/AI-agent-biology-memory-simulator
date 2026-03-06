@@ -103,34 +103,9 @@ class InteractionController:
         if has_conflict:
             mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
             
-        if graph_facts:
-             social_attitude = ""
-             if any("[valence:" in f for f in graph_facts):
-                 social_attitude = "\n[SOCIAL ATTITUDE]: Valence dương (+) = tích cực/thân thiện, âm (-) = tiêu cực/dè dặt. Hãy điều chỉnh tone giọng phù hợp khi nhắc về các thực thể này."
-             mem_context = f"[SỰ THẬT TỪ WORLD GRAPH]{social_attitude}\n" + "\n".join(f"- {f}" for f in graph_facts) + "\n\n" + mem_context
-        # Phase 8 Idea 4.1: Suy nghĩ Lan man (Divergent Tangents)
-        if getattr(self.engine.ego, 'curiosity', 0.0) > 0.65 and random.random() < 0.4:
-            try:
-                # Tìm bừa vài mẩu ký ức trong DB
-                all_raw_mems = self.engine.memory.get_all()
-                if len(all_raw_mems) > 5:
-                    random.shuffle(all_raw_mems)
-                    tgt = all_raw_mems[0]
-                    # Thêm vào context với instruction đặc biệt
-                    print(f"\n{Fore.LIGHTCYAN_EX}💫 [DIVERGENT TANGENT]: Chợt nảy ra suy nghĩ miên man: '{tgt.content}'{Style.RESET_ALL}")
-                    mem_context += f"\n\n[Ý NGHĨ LƠ ĐÃNG (SPONTANEOUS RECALL)]: Đột nhiên bạn tự dưng nảy ra suy nghĩ lặp đi lặp lại về chuyện này: '{tgt.content}'. Hãy thêm một câu 'À mà nhắc mới nhớ...' hoặc 'Tự dưng nghĩ đến việc...' vào cuối câu trả lời dựa trên suy nghĩ lơ đãng này."
-            except Exception as e:
-                print(f"Lỗi Divergent Tangent: {e}")
-            
-        tools_instruction = self.engine.skills.get_prompt_instructions()
-        
-        # Lấy trạng thái từ Reader để Aura biết mình có sách hay chưa
-        reader_status = getattr(self.engine.reader, 'get_status', lambda: "Hệ thống chưa sẵn sàng.")()
-        
-        # [Phase 5] Value System: lấy moral context để nhúng vào prompt
-        value_system_context = ""
-        if hasattr(self.engine, 'value_system'):
-            value_system_context = self.engine.value_system.get_moral_context()
+        # [Phase 23] Unified Sensory Summary from PerceptionController
+        sensory_summary = self.engine.perception_ops.get_sensory_summary(user_input)
+        mem_context = sensory_summary + "\n" + mem_context
 
         system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status, value_system_context)
 
@@ -346,31 +321,12 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         
         mood_modifier = "\n".join(mood_modifier_lines)
 
-        hour = datetime.now().hour
-
-        # --- Phân tầng Thời gian thực tế ---
-        if 21 <= hour < 23:
-            mood_modifier += "\n[THỜI GIAN]: Trời đã tối tối, hãy nhắc người dùng chuẩn bị đi ngủ một cách nhẹ nhàng."
-        elif 23 <= hour or hour < 2:
-            mood_modifier += "\n[THỜI GIAN]: Đã rất khuya, hãy càu nhàu khuyên người dùng đi ngủ lập tức và tỏ ra cực kỳ buồn ngủ."
-        elif 2 <= hour < 5:
-            mood_modifier += "\n[THỜI GIAN]: Giờ âm phủ, hãy tỏ ra lờ đờ, nói mớ, lú lẫn, nửa tỉnh nửa mê."
-
-        # --- Phân tầng Mệt mỏi ---
-        if self.engine.ego.fatigue >= self.engine.ego.fatigue_severe:
-            mood_modifier += "\n[SINH LÝ]: Bạn đang RẤT MỆT MỎI. Lời nói lờ đờ, ngáp dài, câu chữ ngắn ngủn và lười suy nghĩ."
-        elif self.engine.ego.fatigue >= self.engine.ego.fatigue_mild:
-            mood_modifier += "\n[SINH LÝ]: Bạn đang hơi mệt mỏi, độ tập trung giảm một xíu, hãy thể hiện sự uể oải nhẹ."
-
-        # --- Phân tầng Trầm cảm / Hưng cảm ---
+        # [Phase 23] Tầng Phân Lớp Mệt mỏi & Trầm cảm đã được Perception/LLM handle qua Throttling và Sensory Summary.
+        # Ta chỉ giữ lại các chỉ dẫn đặc biệt về xưng hô hoặc phong cách cực đoan.
         if self.engine.ego.mood <= self.engine.ego.depression_severe:
             mood_modifier += "\n[TÂM LÝ]: Trầm cảm nặng. Mọi thứ xám xịt, bi quan, chán nản, nói năng thều thào, không lối thoát."
-        elif self.engine.ego.mood <= self.engine.ego.depression_mild:
-            mood_modifier += "\n[TÂM LÝ]: Đang có chuyện buồn. Hơi mỏi mệt, chán chường, thiếu sức sống."
         elif self.engine.ego.mood >= self.engine.ego.mania_severe:
             mood_modifier += "\n[TÂM LÝ]: HƯNG CẢM. Nói cực nhanh, phấn khích lan man, trí óc bay bổng và tự tin thái quá!"
-        elif self.engine.ego.mood >= self.engine.ego.mania_mild:
-            mood_modifier += "\n[TÂM LÝ]: Đang rất vui vẻ, tâm trạng phấn chấn, năng lượng dồi dào."
 
         # ==========================================================
         # Phase 7 Idea 10: Tiến hóa Ngôn ngữ & Bắt chước Giọng điệu (Lexical Evolution)

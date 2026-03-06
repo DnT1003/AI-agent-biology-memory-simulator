@@ -10,6 +10,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 logger = logging.getLogger(__name__)
 
 from core.local_llm import LocalLLM
+import PIL.Image
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,10 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, force_local: bool = False) -> dict:
+    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
         if (self._should_use_local() or force_local) and not model_override:
+            if image_path:
+                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: {'Force Local' if force_local else 'Hệ thần kinh mệt mỏi'}. Sử dụng Local LLM (Phi-3).{Style.RESET_ALL}")
             return self.local_llm.generate_json(prompt, temperature)
 
@@ -59,9 +62,17 @@ class LLM:
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
+        contents = [prompt]
+        if image_path:
+            try:
+                img = PIL.Image.open(image_path)
+                contents.append(img)
+            except Exception as e:
+                logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
+
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(**config_params)
         )
         data = json.loads(resp.text)
@@ -69,10 +80,10 @@ class LLM:
             return data[0] if len(data) > 0 else {}
         return data
 
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False) -> dict:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
         prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
         try:
-            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens, force_local=force_local)
+            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens, force_local=force_local, image_path=image_path)
         except Exception as e:
             logger.error(f"Lỗi LLM JSON (đã retry 3 lần thất bại): {e}")
             # Fallback cuối cùng sang local nếu cloud chết
@@ -84,8 +95,10 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None) -> str:
+    def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, image_path: str = None) -> str:
         if self._should_use_local() and not model_override:
+            if image_path:
+                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: Hệ thần kinh mệt mỏi. Chuyển sang Local LLM (Phi-3) để phản xạ nhanh.{Style.RESET_ALL}")
             return self.local_llm.generate_text(prompt, temperature)
 
@@ -93,17 +106,25 @@ class LLM:
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
+        contents = [prompt]
+        if image_path:
+            try:
+                img = PIL.Image.open(image_path)
+                contents.append(img)
+            except Exception as e:
+                logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
+
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(**config_params)
         )
         return resp.text.strip()
 
-    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None) -> str:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None, image_path: str = None) -> str:
         prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
         try:
-            return self._generate_text_with_retry(prompt, temperature, model_override, max_output_tokens)
+            return self._generate_text_with_retry(prompt, temperature, model_override, max_output_tokens, image_path=image_path)
         except Exception as e:
             logger.error(f"Lỗi LLM Text (đã retry 3 lần thất bại): {e}")
             return self.local_llm.generate_text(prompt, temperature)
