@@ -143,12 +143,6 @@ class InteractionController:
         
         # [Phase 21] Biological Constraints: Giới hạn tokens và hành động
         max_tokens = None
-        atp = getattr(self.engine.ego, 'atp_level', 1.0)
-        fatigue = getattr(self.engine.ego, 'fatigue', 0.0)
-        
-        if fatigue > 0.8 or atp < 0.2:
-            max_tokens = 150 # Ép trả lời cực ngắn
-            system_prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang kiệt sức (ATP thấp/Fatigue cao). Hãy trả lời cực kỳ ngắn gọn và KHÔNG thực hiện bất kỳ hành động (Action) nào yêu cầu tìm kiếm hay đọc sách."
         
         while iterations < 5 and not self.is_interrupted:
             try:

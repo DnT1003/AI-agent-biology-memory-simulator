@@ -53,10 +53,29 @@ class AutonomousController:
 
             # drives đã được cập nhật tự động trong cognitive_tick gọi bởi engine
 
+            # Drive-based Decision Making (Phase 22)
+            drive_status = self.engine.ego.get_drive_status()
+            dominant = drive_status["dominant"]
+            val = drive_status["dominant_value"]
+
             # =====================================================
-            # NẾU NHÀN RỖI QUÁ LÂU -> SEPARATION ANXIETY (Idea 9)
+            # 1. HARD TRIGGERS (Cấp cứu sinh học)
             # =====================================================
-            # Trong môi trường test, giả lập 24h = 10 phút (600s)
+            if val >= 0.95:
+                if dominant == "fatigue":
+                    print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Kiệt sức tột độ. Aura buộc phải đi ngủ.{Style.RESET_ALL}")
+                    self.engine.memory_ops.sleep()
+                    continue
+                elif dominant == "social" or dominant == "loneliness":
+                    print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Quá cô đơn! Aura bắt buộc phải tìm người nói chuyện.{Style.RESET_ALL}")
+                    if self.engine.state_machine.transition(AgentState.THINKING):
+                        self._proactive_ping(idle_time)
+                        self.engine.state_machine.transition(AgentState.IDLE)
+                    continue
+
+            # =====================================================
+            # 2. SEPARATION ANXIETY (Idea 9) - Vẫn giữ logic thời gian
+            # =====================================================
             ANXIETY_THRESHOLD = Config.ANXIETY_THRESHOLD
             if idle_time > ANXIETY_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
                 if self.engine.state_machine.transition(AgentState.THINKING):
@@ -89,40 +108,31 @@ class AutonomousController:
                 continue
 
             # =====================================================
-            # NẾU NHÀN RỖI QUÁ 15 PHÚT → INTRINSIC GOAL GENERATION
+            # 3. DRIVE-DRIVEN ACTIONS (Hành động theo xung lực)
             # =====================================================
-            if idle_time >= Config.IDLE_READ_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
-                goals = self.engine.ego.get_active_goals()
-                if not goals:
-                    self._generate_goal()
-                else:
-                    self._execute_planning()
-                continue
-
-            # =====================================================
-            # NẾU NHÀN RỖI 60s-15min → PING HOẶC EXECUTE PLAN
-            # =====================================================
-            if Config.IDLE_PING_THRESHOLD < idle_time < Config.IDLE_READ_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
-                # [Phase 21] HardTrigger: Nếu nhu cầu giao tiếp đạt đỉnh, BẮT BUỘC phải ping
-                is_hard_trigger = (self.engine.ego.social_need >= 0.95)
+            if self.engine.state_machine.state == AgentState.IDLE:
+                if dominant == "curiosity" and val > 0.7:
+                    # Tò mò cao -> Ưu tiên đọc sách hoặc sinh mục tiêu
+                    if random.random() < 0.4:
+                        self.start_reading_task(reason="cảm thấy tò mò muốn khám phá")
+                    elif not self.engine.ego.get_active_goals():
+                        self._generate_goal()
                 
-                ping_chance = 0.3 if self.engine.ego.social_need > 0.8 else (0.1 if self.engine.ego.social_need > 0.5 else 0.0)
-                if self.engine.ego.curiosity > 0.8:
-                    ping_chance += 0.2
-                    
-                if is_hard_trigger or random.random() < ping_chance:
-                    if is_hard_trigger:
-                        print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Nhu cầu giao tiếp đạt đỉnh! Aura bắt buộc phải lên tiếng.{Style.RESET_ALL}")
-                        
-                    if self.engine.state_machine.transition(AgentState.THINKING):
-                        try:
+                elif dominant == "social" and val > 0.6:
+                    # Nhu cầu giao tiếp -> Tỉ lệ ping dựa trên Social Need
+                    if random.random() < (val - 0.5):
+                        if self.engine.state_machine.transition(AgentState.THINKING):
                             self._proactive_ping(idle_time)
-                        except Exception as e:
-                            print(f"Lỗi background ping: {e}")
-                        finally:
                             self.engine.state_machine.transition(AgentState.IDLE)
-                            self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.3)
-                            self.engine.last_interaction_time = time.time()
+                
+                elif dominant == "hunger" and val > 0.8:
+                    # Năng lượng thấp -> Aura lờ đờ, giảm hoạt động nền
+                    print(f"{Fore.LIGHTYELLOW_EX}🔋 [LOW ENERGY]: Aura đang lờ đờ vì đói năng lượng...{Style.RESET_ALL}")
+                    time.sleep(60) # Tạm dừng loop lâu hơn để "tiết kiệm"
+
+            # Reset logic cho Separation Anxiety để không lặp lại
+            if idle_time > ANXIETY_THRESHOLD:
+                 self.engine.last_interaction_time = time.time()
 
     def start_reading_task(self, reason="tự muốn đọc"):
         """Kích hoạt một phiên đọc sách (có thể gọi từ bên ngoài)."""

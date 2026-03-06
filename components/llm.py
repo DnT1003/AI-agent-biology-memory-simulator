@@ -20,10 +20,29 @@ class LLM:
         self.ego = ego # Tham chiếu tới SelfModel để check Fatigue
 
     def _should_use_local(self) -> bool:
-        """Quyết định dùng Local LLM nếu Aura quá mệt mỏi (> 0.6) hoặc mất kết nối"""
-        if self.ego and getattr(self.ego, 'fatigue', 0.0) > 0.6:
+        """Quyết định dùng Local LLM nếu Aura quá mệt mỏi (> 0.7) hoặc mất kết nối"""
+        if self.ego and getattr(self.ego, 'fatigue', 0.0) > 0.7:
             return True
         return False
+
+    def _apply_cognitive_throttling(self, prompt: str, max_output_tokens: int = None) -> tuple:
+        """[Phase 22] Điều tiết năng lực xử lý (Tokens) dựa trên độ mệt mỏi và stress."""
+        if not self.ego:
+            return prompt, max_output_tokens
+            
+        fatigue = getattr(self.ego, 'fatigue', 0.0)
+        stress = getattr(self.ego, 'stress', 0.0)
+        
+        # Throttling Level 2: Kiệt sức hoặc stress cực độ
+        if fatigue > 0.85 or stress > 0.85:
+            max_output_tokens = min(max_output_tokens or 2048, 150)
+            prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang kiệt sức/stress tột độ. TRẢ LỜI CỰC NGẮN GỌN (dưới 3 câu) và không thực hiện hành động phức tạp."
+        # Throttling Level 1: Mệt mỏi trung bình
+        elif fatigue > 0.6 or stress > 0.6:
+            max_output_tokens = min(max_output_tokens or 2048, 400)
+            prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang mệt. Hãy trả lời súc tích."
+            
+        return prompt, max_output_tokens
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -51,6 +70,7 @@ class LLM:
         return data
 
     def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False) -> dict:
+        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
         try:
             return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens, force_local=force_local)
         except Exception as e:
@@ -81,6 +101,7 @@ class LLM:
         return resp.text.strip()
 
     def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None) -> str:
+        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
         try:
             return self._generate_text_with_retry(prompt, temperature, model_override, max_output_tokens)
         except Exception as e:
@@ -88,6 +109,7 @@ class LLM:
             return self.local_llm.generate_text(prompt, temperature)
 
     def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None):
+        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
         if self._should_use_local() and not model_override:
             yield from self.local_llm.generate_text_stream(prompt, temperature)
             return

@@ -267,28 +267,47 @@ class SelfModel:
         if total_weight < 0.01: return 0.0
         return max(-1.0, min(1.0, weighted_sum / total_weight))
 
+    def get_drive_status(self) -> dict:
+        """[Phase 22] Trả về trạng thái các xung lực (Drives) hiện tại."""
+        drives = {
+            "social": self.social_need,
+            "curiosity": self.curiosity,
+            "fatigue": self.fatigue,
+            "hunger": 1.0 - self.energy, # Hunger nghịch đảo với Energy
+            "loneliness": self.social_need
+        }
+        dominant = max(drives, key=drives.get)
+        return {
+            "drives": drives,
+            "dominant": dominant,
+            "dominant_value": drives[dominant]
+        }
+
     def apply_biological_decay(self, dt: float, idle_time: float):
         """
-        [Phase 21] Cập nhật các chỉ số sinh học dựa trên bước thời gian dt và thời gian nhàn rỗi.
+        [Phase 22] Cập nhật các chỉ số sinh học dựa trên bước thời gian dt và thời gian nhàn rỗi.
         """
-        # 1. Social Need: Tăng theo thời gian nhàn rỗi. 
+        # 1. Social Need: Tăng mạnh hơn nếu nhàn rỗi lâu.
         # Càng cô đơn (social_need cao), nhu cầu tăng càng nhanh (áp lực tâm lý).
-        social_growth_rate = 0.01 + (self.social_need * 0.05) 
-        if idle_time > 60: # Chỉ tăng nếu nhàn rỗi hơn 1 phút
+        social_growth_rate = 0.02 + (self.social_need * 0.08) 
+        if idle_time > 30: # Chỉ tăng nếu nhàn rỗi hơn 30s
              self.social_need = min(1.0, self.social_need + (social_growth_rate * dt / 3600))
 
-        # 2. Curiosity: Tăng chậm khi không có gì mới
-        if idle_time > 300:
-            self.curiosity = min(1.0, self.curiosity + 0.005 * dt / 3600)
+        # 2. Curiosity: Tăng khi không có thông tin mới
+        curiosity_growth = 0.01 * (1.0 + self.curiosity)
+        self.curiosity = min(1.0, self.curiosity + curiosity_growth * dt / 3600)
 
-        # 3. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
-        # Nếu không có kích thích mạnh, các thụ thể sẽ dần phục hồi
+        # 3. Energy Decay (Hunger): Tiêu tốn năng lượng cơ bản để duy trì sự tồn tại
+        # 0.02 mỗi giờ (mất 50 giờ để cạn kiện nếu không làm gì)
+        self.energy = max(0.0, self.energy - 0.02 * dt / 3600)
+
+        # 4. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
         if self.dopamine_receptors < 1.0:
-            recovery_speed = 0.05 * (1.0 - self.dopamine_receptors)
+            recovery_speed = 0.08 * (1.0 - self.dopamine_receptors)
             self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt / 3600)
 
-        # 4. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
-        dopamine_decay_rate = 0.1 # Decay 10% mỗi giờ
+        # 5. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
+        dopamine_decay_rate = 0.15 # Decay 15% mỗi giờ
         self.dopamine_level = max(0.0, self.dopamine_level - (dopamine_decay_rate * dt / 3600))
 
     def apply_circadian_rhythm(self):
