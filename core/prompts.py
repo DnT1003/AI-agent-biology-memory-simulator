@@ -125,7 +125,7 @@ def get_sleep_dream_prompt(dream_context: str, is_hallucinating: bool = False) -
     Dưới đây là một số sự kiện (Episodic Memories) đang phai mờ dần bạn đã trải qua, kèm theo timestamp sinh học:
     {dream_context}
     
-    TRONG LÚC NGỦ, não bộ con người thực hiện quá trình Semanticization. Bạn hãy phân tích các ký ức vụn vặt này để tổng hợp nên ĐỊNH LÝ, LUẬT LỆ hoặc BÀI HỌC CỐT LÕI MỚI (Semantic Memory) trước khi các ký ức yếu ớt này bị lãng quên vĩnh viễn.
+    TRONG LÚC NGỦ, não bộ con người thực hiện quá trình Semanticization (Ngữ nghĩa hóa). Bạn hãy phân tích các ký ức vụn vặt này để tổng hợp nên ĐỊNH LÝ, LUẬT LỆ hoặc BÀI HỌC CỐT LÕI MỚI (Semantic Memory) trước khi các ký ức yếu ớt này bị lãng quên vĩnh viễn.
     {hallucination_instruction}
     
     NHIỆM VỤ CỦA BẠN:
@@ -144,6 +144,21 @@ def get_sleep_dream_prompt(dream_context: str, is_hallucinating: bool = False) -
         ...
     ]
     Nếu các mẩu tin hoàn toàn vô nghĩa và không thể tổng hợp, trả về mảng rỗng: []
+    """
+
+def get_consolidation_prompt(memory_fragments: str) -> str:
+    """Prompt dùng để gộp các mảnh ký ức vụn vặt thành một kiến thức tổng hợp (Phase 18)."""
+    return f"""
+    Đây là các mảnh ký ức (Memory Fragments) liên quan:
+    {memory_fragments}
+
+    NHIỆM VỤ:
+    Hãy đóng vai trò là 'Hệ thống Củng cố Trí nhớ' (Memory Consolidation). Hãy tổng hợp các mảnh rời rạc trên thành một nội dung DUY NHẤT, súc tích và có ý nghĩa lâu dài (Semantic Memory).
+    - Giữ lại các chi tiết quan trọng nhất (tên, số hiệu, bài học chính).
+    - Loại bỏ các câu chào hỏi, từ thừa.
+    - Viết dưới dạng một nhận định khách quan hoặc một kỷ niệm tổng quát.
+
+    CHỈ TRẢ VỀ NỘI DUNG SAU KHI ĐÃ CỦNG CỐ, không thêm bớt gì khác.
     """
 
 def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_term_buffer: list, idle_time: float) -> str:

@@ -65,6 +65,9 @@ class SelfModel:
         # Phase 20: Resilience & Growth
         self.resilience = 0.0    # 0.0 (Mong manh) → 1.0 (Bản lĩnh xã hội)
 
+        # Phase 7 Idea 10: Lexical Evolution
+        self.vocabulary = []
+
         self.reroll_thresholds()
         self._check_environment()
 
