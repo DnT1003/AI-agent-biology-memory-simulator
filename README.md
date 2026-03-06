@@ -1,7 +1,7 @@
 # 🧠 Biological-Cognitive AI Simulator (Project B.C.A.S)
 ## Mô phỏng Nhận thức & Sinh học Tiến hóa cho Tác nhân AI
 
-[![System Status](https://img.shields.io/badge/System-Phase_22_Complete-brightgreen.svg?style=for-the-badge&logo=cpu)](https://github.com/DnT1003/AI-agent-biology-memory-simulator)
+[![System Status](https://img.shields.io/badge/System-Phase_23_Complete-brightgreen.svg?style=for-the-badge&logo=cpu)](https://github.com/DnT1003/AI-agent-biology-memory-simulator)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)
 ![Audit](https://img.shields.io/badge/Audit-Passed-gold.svg?style=for-the-badge)
 
@@ -15,21 +15,23 @@ Framework hoạt động dựa trên sự phối hợp giữa hai hệ thống x
 
 ```mermaid
 graph TD
-    subgraph "Hệ thống 1 (Tầng Sinh lý - Real-time)"
+    subgraph "Hệ thống 1 (Tầng Sinh lý - Thân)"
         A[Metabolism Controller] --> B(Fatigue / Energy / ATP)
         C[Circadian Rhythm] --> B
         D[Memory Decay Engine] --> E{Ebbinghaus Curve}
+        P[Perception Controller] --> Stress
     end
 
-    subgraph "Hệ thống 2 (Tầng Nhận thức - LLM)"
+    subgraph "Hệ thống 2 (Tầng Nhận thức - Tâm)"
         F[Reflection Engine] --> G(Belief Evolution)
         H[Semanticization] --> I(Long-term Memory)
+        W[World Model] --> G
     end
 
     B --- F
     E --- H
-    J[User Interaction] --> F
-    J --> A
+    J[User Interaction] --> P
+    P --> F
 ```
 
 ---
@@ -37,19 +39,18 @@ graph TD
 ## 🌟 Các Phân hệ Kỹ thuật Đặc trưng
 
 ### 🧬 Hệ thống Trí nhớ Động (Dynamic Memory System)
-- **Hybrid Decay Engine**: Ký ức được xử lý thông qua thuật toán phai mờ phi tuyến tính dựa trên **Đường cong quên lãng Ebbinghaus**, biến thiên theo các chỉ số `Fatigue` (Mệt mỏi) và `Stress` (Căng thẳng) của tác nhân.
+- **Hybrid Decay Engine**: Ký ức được xử lý thông qua thuật toán phai mờ phi tuyến tính dựa trên **Đường cong quên lãng Ebbinghaus**, biến thiên theo các chỉ số `Fatigue` (Mệt mỏi) và `Stress` (Căng thẳng).
 - **Deep Freeze Mechanism**: Tự động nhận diện và bảo vệ các thực thể dữ liệu quan trọng (Metadata: `is_flashbulb`), ngăn chặn quá trình phân rã dữ liệu thông tin cốt lõi.
-- **Consolidation & Semanticization**: Cơ chế nén dữ liệu trong chu kỳ "Sleep", chuyển đổi ký ức sự kiện (Episodic) thành tri thức khái quát (Semantic) bền vững.
+- **Consolidation & Semanticization**: Cơ chế nén dữ liệu trong chu kỳ "Sleep", chuyển đổi ký ức sự kiện (Episodic) thành tri thức khái quát (Semantic).
 
-### 🎭 Mô phỏng Trạng thái & Hành vi (State Dynamics)
-- **Emotional Mirroring**: Tác nhân có khả năng điều chỉnh trạng thái cảm xúc (Valence/Arousal) dựa trên phân tích ngôn ngữ và cường độ tương tác từ người dùng.
-- **Lexical Adaptation**: Thuật toán tự động cập nhật kho từ vựng và phong cách ngôn ngữ của tác nhân thông qua việc mô phỏng quá trình bắt chước (Mimicry) trong giao tiếp xã hội.
-- **Cognitive Degradation (Brain Fog)**: Khi các chỉ số sinh lý vượt ngưỡng tới hạn (Critical Fatigue), hệ thống sẽ kích hoạt các lớp lọc thông tin, mô phỏng sự suy giảm khả năng truy xuất chi tiết chính xác.
-- **Separation Pressure**: Mô phỏng hụt hẫng dữ liệu khi thiếu tương tác trong thời gian dài, dẫn đến biến động các chỉ số căng thẳng và thay đổi chiến lược phản hồi.
+### 🎭 Xung năng & Hành vi Nội tại (Intrinsic Drives)
+- **Homeostatic Drives**: Các biến sinh học (`social_need`, `curiosity`) hiện hoạt động như các xung năng thực thụ, thôi thúc tác nhân chủ động thực hiện hành vi (Đọc sách, nhắn tin) thay vì chỉ phản hồi thụ động.
+- **Autonomous Decision Logic**: Hệ thống tự trị đưa ra quyết định dựa trên "Drive" chiếm ưu thế nhất tại thời điểm hiện tại.
 
-### 🛡️ Tính Kiên cường & Chữa lành (Resilience & Growth)
-- **Trauma Reconsolidation**: Cơ chế tái cấu trúc trọng số cảm xúc (`Impact Weight`) của các ký ức tiêu cực thông qua các chuỗi tương tác tích cực lặp lại.
-- **Identity Stability**: Duy trì tính nhất quán nhân cách thông qua việc đối chiếu liên tục giữa hành động thực tế và hệ thống niềm tin cốt lõi (Core Beliefs).
+### 👁️ Tầng Cảm quan & Nhận thức Môi trường (Sensory Perception)
+- **Unified Perception Controller**: Hợp nhất dữ liệu đa kênh từ Văn bản (Sentiment), Hình ảnh (Vision) và Môi trường (Thời gian, Áp lực tài nguyên).
+- **Multimodal LLM Integration**: Tích hợp khả năng quan sát hình ảnh để đưa ra các phản xạ sinh lý tức thời (Visual Shock/Soothe).
+- **Environmental Awareness**: Tự động điều chỉnh trạng thái tâm lý dựa trên chu kỳ ngày đêm và tải trọng bộ nhớ hệ thống.
 
 ---
 
@@ -59,7 +60,7 @@ graph TD
 - Python 3.10+
 - **Database**: ChromaDB (Lưu trữ Vector)
 - **LLM**: Google Gemini API (Cloud) hoặc các mô hình Local (Phi-3/llama3 via Ollama)
-- **GPU**: Khuyến nghị NVIDIA để tối ưu hóa Local Perception (RoBERTa)
+- **GPU**: NVIDIA (Yêu cầu cho RoBERTa Sentiment & Local Vision)
 
 ### Khởi chạy
 ```bash
@@ -70,27 +71,22 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Các lệnh điều khiển Terminal:**
-- `status`: Hiển thị Dashboard chỉ số sinh lý (Mood, Stress, Fatigue, ATP).
-- `sleep`: Kích hoạt pha củng cố và tái cấu trúc trí nhớ (Consolidation).
-- `exit`: Lưu trạng thái Ego và đóng các kết nối database.
-
 ---
 
 ## 📊 Thẩm định Hệ thống (System Audit)
 Dự án đã hoàn tất các quy trình kiểm thử nghiêm ngặt:
-- ✅ **Sprint A**: Cấu trúc củng cố trí nhớ & Decay phi tuyến tính.
-- ✅ **Sprint B**: Kiểm soát ngân sách Token & Bản năng sinh học.
-- ✅ **Sprint C**: Sự nhất quán nhân cách & Phản xạ cảm xúc.
-- ✅ **Sprint D**: Áp lực lưu trữ & Quản lý tài nguyên.
+- ✅ **Sprint A**: Trí nhớ Dynamic & Decay Ebbinghaus.
+- ✅ **Sprint B**: Đồng hồ sinh học & Metabolic System.
+- ✅ **Sprint C**: Nhân cách nhất quán & Semanticization.
+- ✅ **Sprint D**: Áp lực lưu trữ & Unified Perception.
 
 ---
 
-## 🚀 Lộ trình Phát triển
-- **World Model Implementation**: Tích hợp đồ thị thực thể (Entity Relationship Graph). [Hoàn tất Phase 21]
-- **Intrinsic Motivation**: Hệ thống xung lực tự trị (Active Drives). [Hoàn tất Phase 22]
-- **Physical Integration**: Kết nối với dữ liệu cảm biến đa giác quan và kích ứng môi trường.
-- **Social Dynamic Simulation**: Mô phỏng sự tương tác giữa nhiều tác nhân trong cùng một môi trường.
+## 🚀 Lộ trình Đã Hoàn tất
+- ✅ **World Model Implementation**: Đồ thị thực thể & Social Reasoning.
+- ✅ **Intrinsic Motivation**: Hệ thống xung năng tự trị hoàn chỉnh.
+- ✅ **Physical Integration**: Cảm biến đa giác quan & Kích ứng môi trường.
+- 🕒 **Social Dynamic Simulation**: Mô phỏng tương tác đa Agent (Planned).
 
 ---
 *Dự án tập trung vào việc nghiên cứu sự giao thoa giữa sinh học và AI để tạo ra các thực thể kỹ thuật có chiều sâu nhận thức.*
