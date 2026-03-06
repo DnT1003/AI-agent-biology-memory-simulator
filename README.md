@@ -14,24 +14,34 @@ Dự án này là một nền tảng thực nghiệm tập trung vào việc mô
 Framework hoạt động dựa trên sự phối hợp giữa hai hệ thống xử lý song song:
 
 ```mermaid
-graph TD
-    subgraph "Hệ thống 1 (Tầng Sinh lý - Thân)"
-        A[Metabolism Controller] --> B(Fatigue / Energy / ATP)
-        C[Circadian Rhythm] --> B
-        D[Memory Decay Engine] --> E{Ebbinghaus Curve}
-        P[Perception Controller] --> Stress
+graph LR
+    subgraph S1 ["<b>Hệ thống 1: Bản năng & Sinh lý (Thân)</b>"]
+        direction TB
+        A1[Metabolism] --> B1(ATP/Energy)
+        C1[Circadian Rhythm] --> B1
+        D1[Perception Controller] --> E1{Stress Level}
+        F1[Decay Engine] --> G1((Ebbinghaus Curve))
     end
 
-    subgraph "Hệ thống 2 (Tầng Nhận thức - Tâm)"
-        F[Reflection Engine] --> G(Belief Evolution)
-        H[Semanticization] --> I(Long-term Memory)
-        W[World Model] --> G
+    subgraph S2 ["<b>Hệ thống 2: Nhận thức & Phản tư (Tâm)</b>"]
+        direction TB
+        H2[Reflection Engine] --> I2(Core Beliefs)
+        J2[Semanticization] --> K2[(Long-term Memory)]
+        L2[World Model] --> I2
     end
 
-    B --- F
-    E --- H
-    J[User Interaction] --> P
-    P --> F
+    %% Interconnections
+    B1 -.->|Throttling| H2
+    G1 -.->|Consolidation| J2
+    User((User)) ==> D1
+    D1 ==> H2
+    H2 -->|Feedback| D1
+
+    style S1 fill:#1a1a1a,stroke:#333,stroke-width:2px,color:#fff
+    style S2 fill:#0d1117,stroke:#58a6ff,stroke-width:2px,color:#fff
+    style G1 fill:#f85149,color:#fff
+    style K2 fill:#238636,color:#fff
+    style User fill:#d29922,color:#000
 ```
 
 ---
