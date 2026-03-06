@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import spacy
 from typing import Dict, List, Set
 from colorama import Fore, Style
@@ -41,76 +42,82 @@ class WorldGraph:
 
     def update_from_text(self, text: str, llm):
         """
-        Kết hợp spaCy NER và LLM để xây dựng đồ thị quan hệ.
-        NER giúp LLM tập trung vào đúng thực thể.
+        Sử dụng LLM (Ưu tiên Local) để trích xuất các quan hệ xã hội phức tạp và thái độ.
+        Phù hợp với hướng tiến hóa: Social Reasoning.
         """
-        entities = self.extract_entities(text)
-        
-        # Mở rộng detection các đại từ nhân xưng (Phase 11 Optimization)
-        pronouns = ["User", "tớ", "mình", "tôi", "anh", "chị", "em", "bố", "mẹ"]
-        has_pronoun = any(p in text.lower() for p in pronouns)
-
-        if not entities and not has_pronoun: # Fallback cơ bản
-            return
-
-        ent_str = ", ".join([f"{e['text']} ({e['label']})" for e in entities])
+        # Phase 21 Optimization: Luôn ưu tiên Local LLM cho các tác vụ Extraction cấu trúc
+        # để tiết kiệm API và đảm bảo tính riêng tư dữ liệu xã hội.
+        use_local = True 
         
         prompt = f"""
-        Dựa trên câu nói của người dùng và các thực thể vừa trích xuất được.
+        Phân tích câu nói sau để trích xuất các thực thể (Tên người, tổ chức) và MỐI QUAN HỆ giữa chúng.
         Câu nói: "{text}"
-        Thực thể tiềm năng trích xuất bằng NER: {ent_str if ent_str else "Không tìm thấy thực thể rõ ràng"}
         
-        Nhiệm vụ: Trích xuất các quan hệ xã hội (Social Relations) hoặc sở hữu.
-        Nếu có thông tin, trả về JSON array:
+        Yêu cầu trích xuất theo định dạng JSON array:
         [
-            {{"source": "Entity A", "relation": "mối quan hệ", "target": "Entity B"}}
+            {{
+                "source": "Thực thể A (vd: User)", 
+                "relation": "mối quan hệ ngắn gọn", 
+                "target": "Thực thể B",
+                "valence": <float từ -1.0 (ghét/tiêu cực) đến 1.0 (yêu/tích cực)>
+            }}
         ]
-        - Ưu tiên dùng "User" làm source nếu người dùng nhắc về bản thân (x xưng tớ, mình, tôi...).
-        - Cố gắng tìm tên riêng ngay cả khi NER model bỏ sót.
-        - Nếu không có thông tin rõ ràng, trả về [].
+        - Nếu User nhắc về bản thân (xưng tôi, tớ, mình...), hãy dùng "User" làm source.
+        - Tên riêng phải viết hoa chữ cái đầu.
+        - Nếu không có thông tin quan hệ xã hội, trả về [].
         """
         
         try:
-            res = llm.generate_json(prompt, temperature=0.1)
+            # Ép dùng local nếu có thể (thông qua params giả định hoặc logic trong components/llm.py)
+            res = llm.generate_json(prompt, temperature=0.1, force_local=True)
             if isinstance(res, list):
                 for item in res:
-                    self.add_relation(item.get('source'), item.get('relation'), item.get('target'))
+                    self.add_relation(
+                        item.get('source'), 
+                        item.get('relation'), 
+                        item.get('target'),
+                        valence=item.get('valence', 0.0)
+                    )
         except Exception as e:
             logger.error(f"WorldGraph update error: {e}")
 
-    def add_relation(self, source: str, relation: str, target: str):
-        """Thêm một quan hệ vào đồ thị. Ví dụ: add_relation("User", "có mẹ là", "Cô Lan")"""
+    def add_relation(self, source: str, relation: str, target: str, valence: float = 0.0):
+        """Thêm quan hệ vào đồ thị kèm theo trọng số cảm xúc (Valence)."""
+        if not source or not target or not relation: return False
+        
         source, target = source.strip().title(), target.strip().title()
         
-        # Ngăn trùng lặp
+        # Cập nhật hoặc thêm mới
         for edge in self.edges:
-            if edge['source'] == source and edge['relation'] == relation and edge['target'] == target:
-                return False
+            if edge['source'] == source and edge['target'] == target and edge['relation'] == relation:
+                # Cập nhật valence mới nhất (có tính tích lũy nhẹ)
+                edge['valence'] = edge.get('valence', 0.0) * 0.7 + valence * 0.3
+                return True
                 
         self.edges.append({
             "source": source,
             "relation": relation,
-            "target": target
+            "target": target,
+            "valence": valence,
+            "timestamp": time.time()
         })
         
-        # Thêm nodes
-        if source not in self.nodes:
-            self.nodes[source] = {"type": "Person/Entity"}
-        if target not in self.nodes:
-            self.nodes[target] = {"type": "Person/Entity"}
+        if source not in self.nodes: self.nodes[source] = {"type": "Entity"}
+        if target not in self.nodes: self.nodes[target] = {"type": "Entity"}
             
-        print(f"{Fore.CYAN}🌐 [WORLD GRAPH]: Bản đồ xã hội cập nhật: {source} --({relation})--> {target}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}🌐 [WORLD GRAPH]: {source} --({relation}, val:{valence:+.1f})--> {target}{Style.RESET_ALL}")
         self.save()
         return True
 
     def query(self, entity_name: str) -> List[str]:
-        """Truy xuất thông tin liên quan đến một Entity"""
+        """Truy xuất thông tin liên quan đến một Entity kèm theo Valence."""
         results = []
         entity_name = entity_name.strip().title()
-        # Tìm các cạnh chứa entity
         for edge in self.edges:
             if entity_name in edge['source'] or entity_name in edge['target']:
-                results.append(f"{edge['source']} {edge['relation']} {edge['target']}")
+                v = edge.get('valence', 0.0)
+                v_str = f" [valence:{v:+.1f}]" if v != 0 else ""
+                results.append(f"{edge['source']} {edge['relation']} {edge['target']}{v_str}")
         return results
 
     def save(self):

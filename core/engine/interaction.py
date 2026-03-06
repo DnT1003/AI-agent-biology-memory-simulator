@@ -61,7 +61,7 @@ class InteractionController:
         # Phase 8 Idea 5.1: Tính Bất Toàn Trí Nhớ Nơ-ron (Brain Fog Masking)
         # Chỉ che mờ chuỗi văn bản gửi cho LLM, bảo toàn hoàn toàn object m.content gốc
         context_lines = []
-        is_foggy = hasattr(self, 'ego') and getattr(self.engine.ego, 'fatigue', 0.0) > 0.6
+        is_foggy = hasattr(self.engine, 'ego') and getattr(self.engine.ego, 'fatigue', 0.0) > 0.6
         if is_foggy and recalled_mems:
             print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Trí nhớ tạm thời bị sương mù che phủ do kiệt sức...{Style.RESET_ALL}")
             
@@ -104,7 +104,10 @@ class InteractionController:
             mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
             
         if graph_facts:
-             mem_context = "[CÁC SỰ THẬT TỪ ĐỒ THỊ XÃ HỘI (WORLD GRAPH)]\n" + "\n".join(f"- {f}" for f in graph_facts) + "\n\n" + mem_context
+             social_attitude = ""
+             if any("[valence:" in f for f in graph_facts):
+                 social_attitude = "\n[SOCIAL ATTITUDE]: Valence dương (+) = tích cực/thân thiện, âm (-) = tiêu cực/dè dặt. Hãy điều chỉnh tone giọng phù hợp khi nhắc về các thực thể này."
+             mem_context = f"[SỰ THẬT TỪ WORLD GRAPH]{social_attitude}\n" + "\n".join(f"- {f}" for f in graph_facts) + "\n\n" + mem_context
         # Phase 8 Idea 4.1: Suy nghĩ Lan man (Divergent Tangents)
         if getattr(self.engine.ego, 'curiosity', 0.0) > 0.65 and random.random() < 0.4:
             try:

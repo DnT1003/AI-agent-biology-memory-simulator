@@ -31,9 +31,9 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None) -> dict:
-        if self._should_use_local() and not model_override:
-            print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: Hệ thần kinh mệt mỏi. Chuyển sang Local LLM (Phi-3) để phản xạ nhanh.{Style.RESET_ALL}")
+    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, force_local: bool = False) -> dict:
+        if (self._should_use_local() or force_local) and not model_override:
+            print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: {'Force Local' if force_local else 'Hệ thần kinh mệt mỏi'}. Sử dụng Local LLM (Phi-3).{Style.RESET_ALL}")
             return self.local_llm.generate_json(prompt, temperature)
 
         config_params = {"response_mime_type": "application/json", "temperature": temperature}
@@ -50,9 +50,9 @@ class LLM:
             return data[0] if len(data) > 0 else {}
         return data
 
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None) -> dict:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False) -> dict:
         try:
-            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens)
+            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens, force_local=force_local)
         except Exception as e:
             logger.error(f"Lỗi LLM JSON (đã retry 3 lần thất bại): {e}")
             # Fallback cuối cùng sang local nếu cloud chết
