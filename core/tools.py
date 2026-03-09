@@ -113,4 +113,7 @@ def get_skill_registry() -> SkillRegistry:
         func=lambda x: "[HÀNH ĐỘNG]: Aura bắt đầu phiên đọc sách trong nền."
     ))
     
+    # --- Nạp các kỹ năng tự học (Self-Evolution) ---
+    registry.load_dynamic_skills()
+    
     return registry

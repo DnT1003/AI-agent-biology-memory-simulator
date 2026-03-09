@@ -52,6 +52,7 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     - Tâm trạng (Mood): {ego.mood:.2f} (-1 trầm cảm, 1 hưng cảm)
     - Stress: {ego.stress:.2f} (0 êm đềm, 1 hoảng loạn)
     - Độ toàn vẹn bản ngã (Integrity): {ego.integrity:.2f}
+    - BÀI HỌC TỰ THÂN CẦN THỰC HÀNH: {json.dumps(getattr(ego, 'actionable_lessons', []), ensure_ascii=False)}
 
     LA BÀN ĐẠO ĐỨC (MORAL COMPASS - VALUE SYSTEM):
     {value_system_context if value_system_context else "Chưa có dữ liệu giá trị đạo đức cụ thể."}

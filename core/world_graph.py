@@ -1,7 +1,11 @@
 import os
 import json
 import time
-import spacy
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except Exception:
+    SPACY_AVAILABLE = False
 from typing import Dict, List, Set
 from colorama import Fore, Style
 from core.logger import get_logger
@@ -17,11 +21,15 @@ class WorldGraph:
         self.edges = [] 
         
         # Load model NER Transformers (Phase 11)
-        try:
-            self.nlp = spacy.load("en_core_web_trf")
-            logger.info("WorldGraph: Loaded en_core_web_trf successfully.")
-        except Exception as e:
-            logger.error(f"WorldGraph: Failed to load spaCy model: {e}")
+        if SPACY_AVAILABLE:
+            try:
+                self.nlp = spacy.load("en_core_web_trf")
+                logger.info("WorldGraph: Loaded en_core_web_trf successfully.")
+            except Exception as e:
+                logger.error(f"WorldGraph: Failed to load spaCy model: {e}")
+                self.nlp = None
+        else:
+            logger.warning("WorldGraph: spaCy NOT AVAILABLE (Probably Pydantic v1 incompatibility on Python 3.14). Entity extraction disabled.")
             self.nlp = None
 
         self.load()
@@ -85,7 +93,7 @@ class WorldGraph:
         """Thêm quan hệ vào đồ thị kèm theo trọng số cảm xúc (Valence)."""
         if not source or not target or not relation: return False
         
-        source, target = source.strip().title(), target.strip().title()
+        source, target = source.strip(), target.strip()
         
         # Cập nhật hoặc thêm mới
         for edge in self.edges:
@@ -112,7 +120,7 @@ class WorldGraph:
     def query(self, entity_name: str) -> List[str]:
         """Truy xuất thông tin liên quan đến một Entity kèm theo Valence."""
         results = []
-        entity_name = entity_name.strip().title()
+        entity_name = entity_name.strip()
         for edge in self.edges:
             if entity_name in edge['source'] or entity_name in edge['target']:
                 v = edge.get('valence', 0.0)

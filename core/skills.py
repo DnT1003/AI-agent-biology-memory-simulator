@@ -2,6 +2,9 @@ from typing import List, Dict, Callable
 
 import time
 import random
+import os
+import importlib.util
+import inspect
 
 class Skill:
     def __init__(self, name: str, description: str, usage_format: str, func: Callable):
@@ -87,6 +90,44 @@ class SkillRegistry:
                 json.dump(data, f, indent=2)
         except Exception as e: 
             print(f"Lỗi save skills: {e}")
+
+    def load_dynamic_skills(self):
+        """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills."""
+        dynamic_dir = os.path.join(os.path.dirname(__file__), "dynamic_skills")
+        if not os.path.exists(dynamic_dir):
+            return
+
+        from colorama import Fore, Style
+        print(f"{Fore.CYAN}🔌 [DYNAMISM]: Đang kiểm tra các kỹ năng tự học trong {dynamic_dir}...{Style.RESET_ALL}")
+
+        for filename in os.listdir(dynamic_dir):
+            if filename.endswith(".py") and filename != "__init__.py":
+                module_name = f"core.dynamic_skills.{filename[:-3]}"
+                file_path = os.path.join(dynamic_dir, filename)
+                
+                try:
+                    spec = importlib.util.spec_from_file_location(module_name, file_path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    
+                    # Tìm các hàm có decorator hoặc định dạng đặc biệt, 
+                    # ở đây ta quy ước các hàm có docstring chứa 'AUTOGEN' hoặc đơn giản là export các hàm cụ thể.
+                    for name, func in inspect.getmembers(module, inspect.isfunction):
+                        if getattr(func, '__qualname__', '').startswith(name): # Tránh nạp các hàm import từ chỗ khác
+                            # Tạo Skill object từ metadata trong docstring hoặc hằng số trong module
+                            desc = getattr(module, "DESCRIPTION", "Kỹ năng tự học mới.")
+                            usage = getattr(module, "USAGE", f"ACTION: {name} | <tham số>")
+                            
+                            if name not in self.skills:
+                                self.register(Skill(
+                                    name=name,
+                                    description=desc,
+                                    usage_format=usage,
+                                    func=func
+                                ))
+                                print(f"{Fore.GREEN}   ✅ Đã nạp kỹ năng mới: {name}{Style.RESET_ALL}")
+                except Exception as e:
+                    print(f"{Fore.RED}   ❌ Lỗi khi nạp kỹ năng {filename}: {e}{Style.RESET_ALL}")
 
     def load(self):
         try:

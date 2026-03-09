@@ -143,36 +143,45 @@ class MemoryTrace:
 class MemoryManager:
     """Quản lý lớp Bộ nhớ, đóng gói VectorStore tương tự thư viện mem0"""
     def __init__(self, embedder: Embedder):
+        import threading
         self.store = VectorStore()
         self.embedder = embedder
+        self.lock = threading.Lock()
 
     def add_memory(self, trace: MemoryTrace):
-        vector = self.embedder.encode(trace.content)
-        self.store.add(trace.id, vector, trace)
+        with self.lock:
+            vector = self.embedder.encode(trace.content)
+            self.store.add(trace.id, vector, trace)
 
     def update_memory(self, trace: MemoryTrace):
         """Cập nhật đè lại Metadata vào Vector Store"""
-        self.store.update_meta(trace.id, trace)
+        with self.lock:
+            self.store.update_meta(trace.id, trace)
 
     def search_memories(self, query: str, top_k: int = 5, min_strength: float = 0.1) -> List[tuple[float, MemoryTrace]]:
         """Tim ky uc theo vector similarity. min_strength duoc day xuong DB layer (Phase 13)."""
-        query_vec = self.embedder.encode(query)
-        return self.store.search(query_vec, top_k=top_k, min_strength=min_strength)
+        with self.lock:
+            query_vec = self.embedder.encode(query)
+            return self.store.search(query_vec, top_k=top_k, min_strength=min_strength)
 
     def chronological_recall(self, start_time: float, end_time: float, limit: int = 10) -> List[MemoryTrace]:
-        return self.store.get_by_time_range(start_time, end_time, limit)
+        with self.lock:
+            return self.store.get_by_time_range(start_time, end_time, limit)
 
     def get_all(self) -> List[MemoryTrace]:
-        return self.store.get_all_metadata()
+        with self.lock:
+            return self.store.get_all_metadata()
     
     def remove(self, memory_id: str):
-        self.store.remove(memory_id)
+        with self.lock:
+            self.store.remove(memory_id)
 
     def enforce_garbage_collection(self):
         """Phase 17B: Xóa vĩnh viễn những ký ức đã phai mờ (strength < 0.05) bằng DB API query."""
-        try:
-            forgotten_count = self.store.delete_weak_memories(threshold=0.05)
-            if forgotten_count > 0:
-                print(f"{Fore.RED}🗑️ [GARBAGE COLLECTION]: Đã quên vĩnh viễn {forgotten_count} sự kiện nhạt nhẽo.{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}Lỗi GC: {e}{Style.RESET_ALL}")
+        with self.lock:
+            try:
+                forgotten_count = self.store.delete_weak_memories(threshold=0.05)
+                if forgotten_count > 0:
+                    print(f"{Fore.RED}🗑️ [GARBAGE COLLECTION]: Đã quên vĩnh viễn {forgotten_count} sự kiện nhạt nhẽo.{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}Lỗi GC: {e}{Style.RESET_ALL}")

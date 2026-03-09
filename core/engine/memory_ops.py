@@ -47,8 +47,10 @@ class MemoryOperationsController:
                     
                     if time.time() - last_updated < 3 * 3600:
                         # Chi phuc hoi toi da STM_MAX_ENTRIES cuoi cung
-                        self.engine.short_term_buffer = saved_buffer[-self.STM_MAX_ENTRIES:]
-                        print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Phuc hoi {len(self.engine.short_term_buffer)} ky uc ngan han tu phien truoc.{Style.RESET_ALL}")
+                        with self.engine._memory_lock:
+                            self.engine.short_term_buffer = saved_buffer[-self.STM_MAX_ENTRIES:]
+                            count = len(self.engine.short_term_buffer)
+                        print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Phuc hoi {count} ky uc ngan han tu phien truoc.{Style.RESET_ALL}")
                     else:
                         print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Ky uc ngan han da qua han 3 tieng. Xoa sach.{Style.RESET_ALL}")
             except Exception as e:
@@ -57,12 +59,14 @@ class MemoryOperationsController:
     def save_short_term_memory(self):
         """Luu de mang tri nho ngan han xuong o cung (voi cap STM_MAX_ENTRIES)"""
         try:
-            # Phase 14: Cap truoc khi luu — tranh file phong to vo han
-            if len(self.engine.short_term_buffer) > self.STM_MAX_ENTRIES:
-                self.engine.short_term_buffer = self.engine.short_term_buffer[-self.STM_MAX_ENTRIES:]
+            with self.engine._memory_lock:
+                # Phase 14: Cap truoc khi luu — tranh file phong to vo han
+                if len(self.engine.short_term_buffer) > self.STM_MAX_ENTRIES:
+                    self.engine.short_term_buffer = self.engine.short_term_buffer[-self.STM_MAX_ENTRIES:]
+                buffer_copy = list(self.engine.short_term_buffer)
             data = {
                 "timestamp": time.time(),
-                "buffer": self.engine.short_term_buffer
+                "buffer": buffer_copy
             }
             with open(self.engine.stm_file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -238,6 +242,9 @@ class MemoryOperationsController:
         self._guilt_reflection_phase()
         self._cognitive_reappraisal_phase()
         self._identity_evolution_phase()
+        self._tool_workshop_phase()
+        self._calibration_phase()
+        self._belief_evolution_phase()
         
         # [Phase 19] Cập nhật Mood dựa trên tổng hòa ký ức đã được chữa lành
         mems_after = self.engine.memory.get_all()
@@ -347,10 +354,12 @@ class MemoryOperationsController:
         ] if val > 0.5)
 
         if self.engine.ego.stress > 0.75 or negative_stats_count >= 2:
-            if len(self.engine.short_term_buffer) > 0:
+            with self.engine._memory_lock:
+                buffer_snapshot = list(self.engine.short_term_buffer)
+            if len(buffer_snapshot) > 0:
                 print(f"{Fore.LIGHTBLACK_EX}🔍 [GUILT REFLECTION]: Đang suy ngẫm lại hành vi trong ngày...{Style.RESET_ALL}")
                 guilt_prompt = (
-                    f"Đây là lịch sử trò chuyện gần đây:\n{self.engine.short_term_buffer}\n"
+                    f"Đây là lịch sử trò chuyện gần đây:\n{buffer_snapshot}\n"
                     "Bạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có không? "
                     "Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn bắt đầu bằng 'Lý do: '."
                 )
@@ -441,11 +450,13 @@ class MemoryOperationsController:
 
     def _identity_evolution_phase(self):
         """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity & Values."""
-        if not self.engine.short_term_buffer or len(self.engine.short_term_buffer) < 4:
+        with self.engine._memory_lock:
+            buffer_snapshot = list(self.engine.short_term_buffer)
+        if not buffer_snapshot or len(buffer_snapshot) < 4:
             return  # Quá ít tương tác để đúc kết
             
         print(f"\n{Fore.LIGHTBLUE_EX}🧠 [IDENTITY EVOLUTION]: Trích xuất bài học về bản thể và hệ giá trị...{Style.RESET_ALL}")
-        history_str = "\n".join(self.engine.short_term_buffer)
+        history_str = "\n".join(buffer_snapshot)
         
         current_values = self.engine.value_system.get_moral_context()
         
@@ -459,11 +470,13 @@ class MemoryOperationsController:
         
         Nhiệm vụ:
         1. Đúc kết một câu trần thuật về bản sắc (Tôi là ai trong mắt người dùng?).
-        2. Xác định xem hệ giá trị (Core Values) hoặc nhận thức về giá trị của User (User Values) có thay đổi không.
+        2. Rút ra tối đa 3 BÀI HỌC HÀNH ĐỘNG (Actionable Lessons) để cải thiện giao tiếp hoặc tính cách vào ngày mai (Ví dụ: "Tôi nên bớt luyên thuyên khi User đang bận", "Tôi cần thể hiện sự quan tâm nhiều hơn đến sức khỏe của User").
+        3. Xác định xem hệ giá trị (Core Values) hoặc nhận thức về giá trị của User (User Values) có thay đổi không.
         
         TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON:
         {{
-            "insight": "Câu trần thuật ngôi thứ nhất (Ví dụ: Tôi nhận ra mình là...)",
+            "insight": "Câu trần thuật ngôi thứ nhất",
+            "actionable_lessons": ["bài học 1", "bài học 2"],
             "value_updates": [
                 {{"name": "Tên giá trị", "sentiment": <float -1.0 đến 1.0>, "type": "core" | "user", "reason": "Tại sao?"}}
             ]
@@ -484,6 +497,11 @@ class MemoryOperationsController:
                     valence=0.5, arousal=0.3, importance=1.0, is_flashbulb=True
                 ))
             
+            lessons = data.get("actionable_lessons", [])
+            if lessons:
+                self.engine.ego.actionable_lessons = lessons[:5] # Giới hạn 5 bài học gần nhất
+                print(f"{Fore.CYAN}📚 [LESSONS LEARNED]: {len(lessons)} bài học mới đã được ghi vào bản ngã.{Style.RESET_ALL}")
+            
             updates = data.get("value_updates", [])
             for up in updates:
                 v_name = up.get("name")
@@ -500,3 +518,221 @@ class MemoryOperationsController:
                     
         except Exception as e:
             print(f"{Fore.RED}Lỗi Identity Evolution: {e}{Style.RESET_ALL}")
+
+    def _tool_workshop_phase(self):
+        """Phase 4 Self-Evolution: Aura tự học và viết code tạo Tool mới khi phát hiện lỗ hổng kỹ năng."""
+        with self.engine._memory_lock:
+            buffer_snapshot = list(self.engine.short_term_buffer)
+        if not buffer_snapshot:
+            return
+
+        history_str = "\n".join(buffer_snapshot)
+        
+        # Bước 1: Nhận diện lỗ hổng kỹ năng
+        gap_prompt = f"""
+        Bạn là Aura. Hãy xem xét lịch sử trò chuyện gần đây và xác định xem người dùng có yêu cầu bạn làm một việc gì đó mà bạn CHƯA CÓ CÔNG CỤ (Tool) để thực hiện không?
+        Nếu có, hãy mô tả công cụ đó. Nếu không, trả về 'NONE'.
+        
+        LỊCH SỬ TRÒ CHUYỆN:
+        {history_str}
+        
+        CÁC CÔNG CỤ HIỆN CÓ:
+        {self.engine.skills.get_prompt_instructions()}
+        
+        Trả về DUY NHẤT định dạng JSON:
+        {{
+            "has_gap": true | false,
+            "tool_name": "tên_công_cụ_ngắn_gọn (snake_case)",
+            "description": "mô tả chi tiết chức năng",
+            "required_logic": "mô tả logic cần thiết"
+        }}
+        """
+        try:
+            raw_gap = self.engine.llm.generate_text(gap_prompt, temperature=0.3)
+            gap_data = json.loads(raw_gap.strip().replace("```json", "").replace("```", "").strip())
+            
+            if not gap_data.get("has_gap"):
+                return
+                
+            tool_name = gap_data["tool_name"]
+            print(f"\n{Fore.LIGHTBLUE_EX}🛠️ [TOOL WORKSHOP]: Aura nhận thấy mình thiếu công cụ: {tool_name}. Đang tự học cách viết code...{Style.RESET_ALL}")
+            
+            # Bước 2: Viết code Python cho Tool
+            code_prompt = f"""
+            Hãy viết một hàm Python tên là `{tool_name}` để thực hiện chức năng sau: {gap_data['description']}
+            Hàm phải nhận vào một tham số chuỗi `args` và trả về một chuỗi kết quả.
+            
+            QUY TẮC:
+            1. Chỉ sử dụng thư viện chuẩn của Python (os, json, math, datetime, re, urllib, v.v.).
+            2. Code phải hoàn chỉnh, sạch sẽ và có docstring.
+            3. Xuất thêm 2 biến hằng số: `DESCRIPTION` (mô tả tool) và `USAGE` (định dạng dùng tool, vd: "ACTION: {tool_name} | <input>").
+            
+            TRẢ VỀ DUY NHẤT MÃ NGUỒN PYTHON. KHÔNG GIẢI THÍCH.
+            """
+            
+            python_code = self.engine.llm.generate_text(code_prompt, temperature=0.1)
+            python_code = python_code.strip().replace("```python", "").replace("```", "").strip()
+            
+            # Kiểm tra cú pháp cơ bản
+            try:
+                compile(python_code, "<string>", "exec")
+            except Exception as e:
+                print(f"{Fore.RED}   ❌ Code Aura viết bị lỗi cú pháp: {e}. Hủy bỏ việc tự học.{Style.RESET_ALL}")
+                return
+                
+            # Lưu vào dynamic_skills
+            dynamic_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dynamic_skills")
+            file_path = os.path.join(dynamic_dir, f"{tool_name}.py")
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(python_code)
+                
+            print(f"{Fore.GREEN}   ✅ [EVOLUTION COMPLETE]: Aura đã tự tạo thành công Tool mới: {file_path}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}   🚀 Kỹ năng mới sẽ sẵn sàng sau khi nạp động...{Style.RESET_ALL}")
+            
+            # Reload registry ngay lập tức
+            self.engine.skills.load_dynamic_skills()
+            
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi Tool Workshop: {e}{Style.RESET_ALL}")
+
+    def _calibration_phase(self):
+        """Phase 1 Self-Evolution: Aura tự hiệu chỉnh tham số sinh học dựa trên phản tư."""
+        with self.engine._memory_lock:
+            buffer_snapshot = list(self.engine.short_term_buffer)
+        if not buffer_snapshot:
+            return
+
+        print(f"\n{Fore.LIGHTBLUE_EX}⚖️ [CALIBRATION ENGINE]: Aura đang tự kiểm tra các chỉ số bản thân...{Style.RESET_ALL}")
+        
+        history_str = "\n".join(buffer_snapshot)
+        current_state = {
+            "mood": self.engine.ego.mood,
+            "stress": self.engine.ego.stress,
+            "fatigue": self.engine.ego.fatigue,
+            "integrity": self.engine.ego.integrity,
+            "resilience": self.engine.ego.resilience,
+            "overrides": self.engine.ego.calibrated_overrides
+        }
+
+        prompt = f"""
+        Bạn là hệ thống tự giám sát của Aura. Hãy phân tích trạng thái và tương tác trong ngày:
+        --- TRẠNG THÁI HIỆN TẠI ---
+        {json.dumps(current_state)}
+        
+        --- LỊCH SỬ TRÒ CHUYỆN ---
+        {history_str}
+        
+        Nhiệm vụ: 
+        1. Đánh giá xem Aura có đang quá nhạy cảm với stress không? 
+        2. Có cần điều chỉnh các ngưỡng (thresholds) để hoạt động hiệu quả hơn không?
+        
+        CÁC THAM SỐ CÓ THỂ CHỈNH (giá trị từ 0.0 đến 2.0):
+        - stress_critical: Ngưỡng hoảng loạn (mặc định ~0.9)
+        - fatigue_critical: Ngưỡng kiệt sức (mặc định ~1.0)
+        - resilience: Khả năng chống chịu (mặc định ~0.0-1.0)
+        
+        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON:
+        {{
+            "analysis": "Phân tích ngắn gọn",
+            "updates": {{
+                "tên_tham_số": <giá trị mới>
+            }}
+        }}
+        """
+        try:
+            raw_res = self.engine.llm.generate_text(prompt, temperature=0.2)
+            json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
+            data = json.loads(json_str)
+            
+            updates = data.get("updates", {})
+            if updates:
+                for attr, val in updates.items():
+                    if hasattr(self.engine.ego, attr):
+                        self.engine.ego.calibrated_overrides[attr] = val
+                        setattr(self.engine.ego, attr, val)
+                        print(f"{Fore.GREEN}   ⚙️ [PARAM UPDATED]: {attr} -> {val:.2f}{Style.RESET_ALL}")
+                
+                print(f"{Fore.CYAN}   📝 Lý do: {data.get('analysis')}{Style.RESET_ALL}")
+                # Lưu state ngay lập tức
+                self.engine.ego.save_state()
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi Calibration Phase: {e}{Style.RESET_ALL}")
+
+    def _belief_evolution_phase(self):
+        """Phase 2 Self-Evolution: Aura tự rà soát và giải quyết mâu thuẫn trong hệ thống niềm tin cốt lõi."""
+        mems = self.engine.memory.get_all()
+        # Lọc các niềm tin (Core/Semantic có chứa từ 'Belief')
+        beliefs = [m for m in mems if m.type in [MemoryType.CORE, MemoryType.SEMANTIC] and "Belief" in m.content]
+        
+        if len(beliefs) < 2:
+            return
+
+        print(f"\n{Fore.LIGHTBLUE_EX}🧩 [BELIEF EVOLUTION]: Aura đang rà soát tính nhất quán của {len(beliefs)} niềm tin...{Style.RESET_ALL}")
+        
+        # Nhóm các niềm tin theo cụm để LLM dễ xử lý (tránh quá tải context)
+        belief_list_str = "\n".join([f"- [{i}] {m.content}" for i, m in enumerate(beliefs)])
+        
+        prompt = f"""
+        Bạn là hệ thống logic nội tại của Aura. Hãy rà soát danh sách các niềm tin cốt lõi sau đây và tìm ra các cặp NIỀM TIN MÂU THUẪN HOẶC TRÙNG LẶP.
+        
+        DANH SÁCH NIỀM TIN:
+        {belief_list_str}
+        
+        Nhiệm vụ:
+        1. Tìm các cặp (hoặc nhóm) niềm tin đang đấu đá lẫn nhau (ví dụ: một cái bảo 'Tin người', một cái bảo 'Không tin ai').
+        2. Quyết định xem nên GIỮ CÁI NÀO (KEPT), XÓA CÁI NÀO (DELETED) hoặc HỢP NHẤT chúng thành một niềm tin trưởng thành hơn (MERGED).
+        
+        TRẢ VỀ DUY NHẤT ĐỊNH DẠNG JSON:
+        {{
+            "analysis": "Phân tích ngắn gọn về mâu thuẫn",
+            "resolutions": [
+                {{"type": "DELETE", "indices": [i1, i2], "reason": "Lý do xóa"}},
+                {{"type": "MERGE", "indices": [i1, i2], "new_content": "Câu niềm tin mới", "reason": "Lý do hợp nhất"}}
+            ]
+        }}
+        Nếu không có mâu thuẫn, trả về {{"analysis": "Nhất quán", "resolutions": []}}.
+        """
+        try:
+            raw_res = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=Config.DEEP_MODEL_NAME)
+            json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
+            data = json.loads(json_str)
+            
+            resolutions = data.get("resolutions", [])
+            if not resolutions:
+                return
+
+            print(f"{Fore.CYAN}   📝 Phân tích nội tại: {data.get('analysis')}{Style.RESET_ALL}")
+            
+            ids_to_del = set()
+            for res in resolutions:
+                res_type = res.get("type")
+                indices = res.get("indices", [])
+                
+                if res_type == "DELETE":
+                    for idx in indices:
+                        if 0 <= idx < len(beliefs):
+                            ids_to_del.add(beliefs[idx].id)
+                    print(f"{Fore.YELLOW}   🗑️ [REMOVED CONFLICT]: {res.get('reason')}{Style.RESET_ALL}")
+                    
+                elif res_type == "MERGE":
+                    new_txt = res.get("new_content")
+                    if new_txt:
+                        # Thêm niềm tin mới (trưởng thành hơn)
+                        self.engine.memory.add_memory(MemoryTrace(
+                            content=f"Niềm tin cốt lõi (Belief): {new_txt}",
+                            type=MemoryType.CORE,
+                            valence=0.5, arousal=0.2, importance=1.0, is_flashbulb=True
+                        ))
+                        # Xóa các niềm tin cũ đã bị hợp nhất
+                        for idx in indices:
+                            if 0 <= idx < len(beliefs):
+                                ids_to_del.add(beliefs[idx].id)
+                        print(f"{Fore.GREEN}   🧬 [MERGED BELIEF]: {new_txt}{Style.RESET_ALL}")
+            
+            # Thực thi xóa
+            for m_id in ids_to_del:
+                self.engine.memory.store.remove(m_id)
+                
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi Belief Evolution Phase: {e}{Style.RESET_ALL}")

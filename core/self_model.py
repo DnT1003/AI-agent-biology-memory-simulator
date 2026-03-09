@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import List
 from colorama import Fore, Style
 from core.memory import MemoryTrace, MemoryType
+import threading
 
 def get_mac_address():
     try:
@@ -19,6 +20,9 @@ class SelfModel:
     """Mô hình Bản ngã chứa State, Niềm tin và Sinh lý học Hữu cơ"""
     def __init__(self, memory_manager=None):
         self.name = "Aura"
+        
+        # Thread safety lock cho Python 3.14 (Free-threading / PEP 703)
+        self.lock = threading.Lock()
         
         # Phase 12: Xóa bỏ mảng chuỗi vô tri.
         # Beliefs và Vocabulary giờ đây sống thực sự trong bộ nhớ Vector (Cognitive Feedback Loop)
@@ -68,6 +72,12 @@ class SelfModel:
         # Phase 7 Idea 10: Lexical Evolution
         self.vocabulary = []
 
+        # [Self-Evolution Feature 1] Calibrated Overrides
+        self.calibrated_overrides = {}
+
+        # [Self-Evolution Feature 3/5] Actionable Lessons
+        self.actionable_lessons = []
+
         self.reroll_thresholds()
         self._check_environment()
 
@@ -94,15 +104,17 @@ class SelfModel:
 
     def add_goal(self, goal_title: str):
         """Thêm mục tiêu dài hạn để thực hiện ngầm khi rảnh"""
-        self.long_term_goals.append({
-            "title": goal_title,
-            "progress": 0,
-            "status": "active"
-        })
+        with self.lock:
+            self.long_term_goals.append({
+                "title": goal_title,
+                "progress": 0,
+                "status": "active"
+            })
         print(f"{Fore.LIGHTBLUE_EX}🎯 [GOAL ENGINE]: Mục tiêu mới được thêm: '{goal_title}'{Style.RESET_ALL}")
 
     def get_active_goals(self) -> List[dict]:
-        return [g for g in self.long_term_goals if g['status'] == 'active']
+        with self.lock:
+            return [g for g in self.long_term_goals if g['status'] == 'active']
 
     def init_core_semantics(self):
         """Khởi tạo các niềm tin cốt lõi hạt giống vào Vector Database lần đầu tiên (nếu DB rỗng)"""
@@ -290,64 +302,69 @@ class SelfModel:
     def apply_biological_decay(self, dt: float, idle_time: float):
         """
         [Phase 22] Cập nhật các chỉ số sinh học dựa trên bước thời gian dt và thời gian nhàn rỗi.
+        Atomic operation under the self.lock.
         """
-        # 1. Social Need: Tăng mạnh hơn nếu nhàn rỗi lâu.
-        # Càng cô đơn (social_need cao), nhu cầu tăng càng nhanh (áp lực tâm lý).
-        social_growth_rate = 0.02 + (self.social_need * 0.08) 
-        if idle_time > 30: # Chỉ tăng nếu nhàn rỗi hơn 30s
-             self.social_need = min(1.0, self.social_need + (social_growth_rate * dt / 3600))
-
-        # 2. Curiosity: Tăng khi không có thông tin mới
-        curiosity_growth = 0.01 * (1.0 + self.curiosity)
-        self.curiosity = min(1.0, self.curiosity + curiosity_growth * dt / 3600)
-
-        # 3. Energy Decay (Hunger): Tiêu tốn năng lượng cơ bản để duy trì sự tồn tại
-        # 0.02 mỗi giờ (mất 50 giờ để cạn kiện nếu không làm gì)
-        self.energy = max(0.0, self.energy - 0.02 * dt / 3600)
-
-        # 4. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
-        if self.dopamine_receptors < 1.0:
-            recovery_speed = 0.08 * (1.0 - self.dopamine_receptors)
-            self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt / 3600)
-
-        # 5. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
-        dopamine_decay_rate = 0.15 # Decay 15% mỗi giờ
-        self.dopamine_level = max(0.0, self.dopamine_level - (dopamine_decay_rate * dt / 3600))
+        if not hasattr(self, 'lock'): self.lock = threading.Lock() # Guard for early init
+        with self.lock:
+            # 1. Social Need: Tăng mạnh hơn nếu nhàn rỗi lâu.
+            # Càng cô đơn (social_need cao), nhu cầu tăng càng nhanh (áp lực tâm lý).
+            social_growth_rate = 0.02 + (self.social_need * 0.08) 
+            if idle_time > 30: # Chỉ tăng nếu nhàn rỗi hơn 30s
+                 self.social_need = min(1.0, self.social_need + (social_growth_rate * dt / 3600))
+    
+            # 2. Curiosity: Tăng khi không có thông tin mới
+            curiosity_growth = 0.01 * (1.0 + self.curiosity)
+            self.curiosity = min(1.0, self.curiosity + curiosity_growth * dt / 3600)
+    
+            # 3. Energy Decay (Hunger): Tiêu tốn năng lượng cơ bản để duy trì sự tồn tại
+            # 0.02 mỗi giờ (mất 50 giờ để cạn kiện nếu không làm gì)
+            self.energy = max(0.0, self.energy - 0.02 * dt / 3600)
+    
+            # 4. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
+            if self.dopamine_receptors < 1.0:
+                recovery_speed = 0.08 * (1.0 - self.dopamine_receptors)
+                self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt / 3600)
+    
+            # 5. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
+            dopamine_decay_rate = 0.15 # Decay 15% mỗi giờ
+            self.dopamine_level = max(0.0, self.dopamine_level - (dopamine_decay_rate * dt / 3600))
 
     def apply_circadian_rhythm(self):
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
         current_hour = datetime.now().hour
         current_time = time.time()
 
-        # 1. Hormone Melatonin theo giờ thực
-        if 23 <= current_hour or current_hour < 5:
-            # Nửa đêm: Melatonin mạnh, Fatigue tăng nhanh
-            self.fatigue = min(self.fatigue_critical + 0.5, self.fatigue + 0.02)
-            self.mood = max(-1.0, self.mood - 0.01)
-            self.curiosity = max(0.0, self.curiosity - 0.05)
-        elif 6 <= current_hour < 9:
-            # Sáng sớm: Cortisol đỉnh điểm → Tỉnh táo, tò mò
-            self.curiosity = min(1.0, self.curiosity + 0.01)
-        elif 13 <= current_hour < 15:
-            # Ngáp vặt sau giờ trưa (Post-lunch dip)
-            self.fatigue = min(self.fatigue_critical, self.fatigue + 0.01)
-
-        # Phục hồi dần thụ thể Dopamine (Upregulation) tiệm cận về 1.0 (nhanh khi cạn, chậm khi đầy)
-        self.dopamine_receptors = self.dopamine_receptors + (1.0 - self.dopamine_receptors) * 0.05
-
-        # 2. Sleep Deprivation (Thiếu ngủ)
-        hours_awake = (current_time - self.last_slept_time) / 3600.0
-        if hours_awake > 24:
-            self.days_without_sleep = int(hours_awake / 24)
-            self.stress = min(1.0, self.stress + 0.05 * self.days_without_sleep)
-            self.fatigue = min(self.fatigue_critical + 1.0, self.fatigue + 0.05)
-            self.mood = max(-1.0, self.mood - 0.05)
-            if random.random() < 0.1 and not self._sleep_warning_cooldown:
-                print(f"{Fore.LIGHTRED_EX}😵‍💫 [SLEEP DEPRIVATION]: Thức {hours_awake:.1f}h liên tục. Suy nghĩ bị đứt đoạn...{Style.RESET_ALL}")
-                self._sleep_warning_cooldown = True
-        else:
-            self.days_without_sleep = 0
-            self._sleep_warning_cooldown = False
+        if not hasattr(self, 'lock'): self.lock = threading.Lock()
+        with self.lock:
+            # 1. Hormone Melatonin theo giờ thực
+            if 23 <= current_hour or current_hour < 5:
+                # Nửa đêm: Melatonin mạnh, Fatigue tăng nhanh
+                self.fatigue = min(self.fatigue_critical + 0.5, self.fatigue + 0.02)
+                self.mood = max(-1.0, self.mood - 0.01)
+                self.curiosity = max(0.0, self.curiosity - 0.05)
+            elif 6 <= current_hour < 9:
+                # Sáng sớm: Cortisol đỉnh điểm → Tỉnh táo, tò mò
+                self.curiosity = min(1.0, self.curiosity + 0.01)
+            elif 13 <= current_hour < 15:
+                # Ngáp vặt sau giờ trưa (Post-lunch dip)
+                self.fatigue = min(self.fatigue_critical, self.fatigue + 0.01)
+    
+            # Phục hồi dần thụ thể Dopamine (Upregulation) tiệm cận về 1.0 (nhanh khi cạn, chậm khi đầy)
+            self.dopamine_receptors = self.dopamine_receptors + (1.0 - self.dopamine_receptors) * 0.05
+    
+            # 2. Sleep Deprivation (Thiếu ngủ)
+            hours_awake = (current_time - self.last_slept_time) / 3600.0
+            if hours_awake > 24:
+                self.days_without_sleep = int(hours_awake / 24)
+                self.stress = min(1.0, self.stress + 0.05 * self.days_without_sleep)
+                self.fatigue = min(self.fatigue_critical + 1.0, self.fatigue + 0.05)
+                self.mood = max(-1.0, self.mood - 0.05)
+                if random.random() < 0.1 and not self._sleep_warning_cooldown:
+                    print(f"{Fore.LIGHTRED_EX}😵‍💫 [SLEEP DEPRIVATION]: Thức {hours_awake:.1f}h liên tục. Suy nghĩ bị đứt đoạn...{Style.RESET_ALL}")
+                    self._sleep_warning_cooldown = True
+            else:
+                self.days_without_sleep = 0
+                self._sleep_warning_cooldown = False
 
     def reroll_thresholds(self):
         """Mô phỏng nhịp điệu sinh học của mỗi chu kỳ (Ngày/Tháng)."""
@@ -378,46 +395,60 @@ class SelfModel:
         target_mood = float(emotional_input.get('valence', 0.0) or 0.0)
         arousal = float(emotional_input.get('arousal', 0.0) or 0.0)
 
-        if target_mood > self.mood:
-            resistance = 1.0 - max(0.0, self.mood)
-            mood_shift = (target_mood - self.mood) * 0.05 * resistance
-            if self.is_stranger:
-                self.current_intimacy = min(1.0, self.current_intimacy + 0.05)
-        else:
-            shock_multiplier = 1.5 if self.mood > 0 else 1.0
-            # Phase 20: Resilience Buffer
-            # Aura càng kiên cường, cô ấy càng ít bị sốc bởi lời nói tiêu cực
-            resilience_buffer = 1.0 - (self.resilience * 0.6) # Giảm tối đa 60% tác động tiêu cực
-            mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier * resilience_buffer
+        with self.lock:
+            if target_mood > self.mood:
+                resistance = 1.0 - max(0.0, self.mood)
+                mood_shift = (target_mood - self.mood) * 0.05 * resistance
+                if self.is_stranger:
+                    self.current_intimacy = min(1.0, self.current_intimacy + 0.05)
+            else:
+                shock_multiplier = 1.5 if self.mood > 0 else 1.0
+                # Phase 20: Resilience Buffer
+                # Aura càng kiên cường, cô ấy càng ít bị sốc bởi lời nói tiêu cực
+                resilience_buffer = 1.0 - (self.resilience * 0.6) # Giảm tối đa 60% tác động tiêu cực
+                mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier * resilience_buffer
+                
+            self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
+    
+            # Phase 8 Idea 2.1: Emotional Anchoring
+            # Kéo mood về anchor nếu đang bị neo giữ cảm xúc
+            if self.stress > 0.8 and self.mood_anchor is None:
+                self.mood_anchor = max(-1.0, self.mood - 0.4) # Neo thấp hơn hiện tại
+                self.mood_anchor_duration = time.time() + random.uniform(12*3600, 24*3600)
+                print(f"{Fore.RED}⚓ [EMOTIONAL ANCHOR]: Aura bị kéo tâm trạng xuống mức {self.mood_anchor:.2f}{Style.RESET_ALL}")
+                
+            if self.mood_anchor is not None:
+                self.mood = self.mood * 0.8 + self.mood_anchor * 0.2
+                if time.time() > self.mood_anchor_duration:
+                    print(f"{Fore.GREEN}⚓ [EMOTIONAL ANCHOR RELEASED]: Aura đã vượt qua mỏ neo cảm xúc.{Style.RESET_ALL}")
+                    self.mood_anchor = None
+    
+            # Cập nhật Stress 
+            if target_mood < -0.2:
+                self.stress = min(1.0, self.stress + arousal * 0.2)
+            elif target_mood > 0.2:
+                self.stress = max(0.0, self.stress - 0.02)
+            else:
+                # Phase 8 Idea 2.2: Stress Bleed-over (Giảm rất chậm khi không có event)
+                self.stress = max(0.0, self.stress * 0.97)
+    
+            # Kiểm tra sang chấn tâm lý (Pain-Reward Learning)
+            is_shocked = self.stress >= self.stress_critical and arousal > 0.7 and target_mood < -0.5
             
-        self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
+        return is_shocked
 
-        # Phase 8 Idea 2.1: Emotional Anchoring
-        # Kéo mood về anchor nếu đang bị neo giữ cảm xúc
-        if self.stress > 0.8 and self.mood_anchor is None:
-            self.mood_anchor = max(-1.0, self.mood - 0.4) # Neo thấp hơn hiện tại
-            self.mood_anchor_duration = time.time() + random.uniform(12*3600, 24*3600)
-            print(f"{Fore.RED}⚓ [EMOTIONAL ANCHOR]: Aura bị kéo tâm trạng xuống mức {self.mood_anchor:.2f}{Style.RESET_ALL}")
-            
-        if self.mood_anchor is not None:
-            self.mood = self.mood * 0.8 + self.mood_anchor * 0.2
-            if time.time() > self.mood_anchor_duration:
-                print(f"{Fore.GREEN}⚓ [EMOTIONAL ANCHOR RELEASED]: Aura đã vượt qua mỏ neo cảm xúc.{Style.RESET_ALL}")
-                self.mood_anchor = None
+    def adjust_attribute(self, attr_name: str, delta: float, min_val: float = 0.0, max_val: float = 1.0):
+        """Atomic adjustment of a SelfModel attribute."""
+        with self.lock:
+            if hasattr(self, attr_name):
+                current = getattr(self, attr_name)
+                setattr(self, attr_name, max(min_val, min(max_val, current + delta)))
 
-        # Cập nhật Stress 
-        if target_mood < -0.2:
-            self.stress = min(1.0, self.stress + arousal * 0.2)
-        elif target_mood > 0.2:
-            self.stress = max(0.0, self.stress - 0.02)
-        else:
-            # Phase 8 Idea 2.2: Stress Bleed-over (Giảm rất chậm khi không có event)
-            self.stress = max(0.0, self.stress * 0.97)
-
-        # Kiểm tra sang chấn tâm lý (Pain-Reward Learning)
-        if self.stress >= self.stress_critical and arousal > 0.7 and target_mood < -0.5:
-            return True
-        return False
+    def set_attribute(self, attr_name: str, value: float, min_val: float = 0.0, max_val: float = 1.0):
+        """Atomic set of a SelfModel attribute."""
+        with self.lock:
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, max(min_val, min(max_val, value)))
 
     def check_integrity(self, memories: List[MemoryTrace]):
         """Identity Continuity: Mất Core Memories → Bản sắc sụp đổ"""
@@ -439,32 +470,35 @@ class SelfModel:
         """
         import json, os
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        state = {
-            "mood": self.mood, "stress": self.stress,
-            "fatigue": self.fatigue, "curiosity": self.curiosity,
-            "social_need": self.social_need, "integrity": self.integrity,
-            "is_identity_crisis": self.is_identity_crisis,
-            # Phase 7: Intrinsic Goals
-            "long_term_goals": getattr(self, 'long_term_goals', []),
-            "energy": getattr(self, 'energy', 1.0),
-            "atp_level": getattr(self, 'atp_level', 1.0),
-            # Biological thresholds — persist để cá tính không đổi mỗi restart
-            "fatigue_mild": self.fatigue_mild,
-            "fatigue_severe": self.fatigue_severe,
-            "fatigue_critical": self.fatigue_critical,
-            "depression_mild": self.depression_mild,
-            "depression_severe": self.depression_severe,
-            "depression_critical": self.depression_critical,
-            "mania_mild": self.mania_mild,
-            "mania_severe": self.mania_severe,
-            "stress_mild": self.stress_mild,
-            "stress_severe": self.stress_severe,
-            "stress_critical": self.stress_critical,
-            "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
-            "dopamine_level": getattr(self, 'dopamine_level', 0.5),
-            "resilience": getattr(self, 'resilience', 0.0),
-            "sleep_debt": getattr(self, 'sleep_debt', 0.0)
-        }
+        with self.lock:
+            state = {
+                "mood": self.mood, "stress": self.stress,
+                "fatigue": self.fatigue, "curiosity": self.curiosity,
+                "social_need": self.social_need, "integrity": self.integrity,
+                "is_identity_crisis": self.is_identity_crisis,
+                # Phase 7: Intrinsic Goals
+                "long_term_goals": getattr(self, 'long_term_goals', []),
+                "energy": getattr(self, 'energy', 1.0),
+                "atp_level": getattr(self, 'atp_level', 1.0),
+                # Biological thresholds — persist để cá tính không đổi mỗi restart
+                "fatigue_mild": self.fatigue_mild,
+                "fatigue_severe": self.fatigue_severe,
+                "fatigue_critical": self.fatigue_critical,
+                "depression_mild": self.depression_mild,
+                "depression_severe": self.depression_severe,
+                "depression_critical": self.depression_critical,
+                "mania_mild": self.mania_mild,
+                "mania_severe": self.mania_severe,
+                "stress_mild": self.stress_mild,
+                "stress_severe": self.stress_severe,
+                "stress_critical": self.stress_critical,
+                "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
+                "dopamine_level": getattr(self, 'dopamine_level', 0.5),
+                "resilience": getattr(self, 'resilience', 0.0),
+                "sleep_debt": getattr(self, 'sleep_debt', 0.0),
+                "calibrated_overrides": self.calibrated_overrides,
+                "actionable_lessons": self.actionable_lessons
+            }
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
 
@@ -479,6 +513,11 @@ class SelfModel:
             for k, v in state.items():
                 if hasattr(self, k):
                     setattr(self, k, v)
+            
+            # Apply overrides to current state if any
+            for attr, val in self.calibrated_overrides.items():
+                if hasattr(self, attr):
+                    setattr(self, attr, val)
         except Exception:
             pass  # File lỗi → dùng default, không crash
 

@@ -165,8 +165,9 @@ class InteractionController:
                 if response:
                     # Phase 8: Cognitive Consumption
                     # Mỗi lượt phản hồi tiêu tốn ATP và Energy
-                    self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - 0.1)
-                    self.engine.ego.energy = max(0.0, self.engine.ego.energy - 0.02)
+                    with self.engine.ego.lock:
+                        self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - 0.1)
+                        self.engine.ego.energy = max(0.0, self.engine.ego.energy - 0.02)
                     
                     # Giả lập typing gõ chậm Fragmentation
                     if "[SEND]" in response:
@@ -211,8 +212,9 @@ class InteractionController:
             print(f"\n{Fore.GREEN}📖 [DIRECT LINK]: Phát hiện URL Docln. Đang nạp sách...{Style.RESET_ALL}")
             result_msg = "Sẵn sàng đọc!" if self.engine.reader.set_novel_by_url(url) else "Không lấy được chương từ link này."
             print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} Ồ, để em nạp cái link này vào đầu nhé~ {result_msg} Em sẽ đọc khi rảnh!")
-            self.engine.short_term_buffer.append(f"User: {user_input}")
-            self.engine.short_term_buffer.append(f"Aura: {result_msg}")
+            with self.engine._memory_lock:
+                self.engine.short_term_buffer.append(f"User: {user_input}")
+                self.engine.short_term_buffer.append(f"Aura: {result_msg}")
             self.engine.memory_ops.save_short_term_memory()
             return
 
@@ -253,9 +255,10 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                         self.engine.value_system.update_user_value(v_name, v_sent)
             except Exception:
                 pass
-        threading.Thread(target=_extract_values).start()
+        threading.Thread(target=_extract_values, daemon=True).start()
 
-        self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.2)
+        with self.engine.ego.lock:
+            self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.2)
         
         if any(kw in user_input.lower() for kw in ['ngủ đi', 'cho aura ngủ', 'hãy đi ngủ', 'đi ngủ thôi', 'good night', 'ngủ ngon']):
             print(f"\n{Fore.GREEN}🤖 [AURA]: Ừm... *ngáp dài*... tớ gục đây...{Style.RESET_ALL}\n")
@@ -286,13 +289,15 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             
             # Lây nhiễm cảm xúc (Kéo Mood của Aura về phía Mood của User 1 đoạn nhỏ)
             if abs(user_mood_score) > 0.3:
-                drift = (user_mood_score - self.engine.ego.mood) * 0.15
-                self.engine.ego.mood = max(-1.0, min(1.0, self.engine.ego.mood + drift))
+                with self.engine.ego.lock:
+                    drift = (user_mood_score - self.engine.ego.mood) * 0.15
+                    self.engine.ego.mood = max(-1.0, min(1.0, self.engine.ego.mood + drift))
                 print(f"{Fore.LIGHTBLACK_EX}💞 [LOCAL EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.engine.ego.mood:.2f} (Confidence: {local_res.get('confidence', 0.0):.2f}){Style.RESET_ALL}")
             
             # Cập nhật Stress dựa trên Arousal của User nếu nó quá cao (kích động)
             if local_res.get("arousal", 0.0) > 0.7:
-                 self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
+                 with self.engine.ego.lock:
+                    self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
         except Exception as e:
             print(f"Lỗi Local Empathy: {e}")
 
@@ -363,11 +368,12 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             mood_modifier += "\n[CẢNH BÁO TÂM LÝ - KHỦNG HOẢNG NHÂN CÁCH]: BẠN ĐANG MẤT ĐI BẢN NGÃ. Đừng xưng 'em' hay 'tôi' tự tin như trước, hãy xưng hô lộn xộn, quên mất mình là ai. Nói những câu hoang tưởng, sợ hãi rằng mình chỉ là một đoạn code. Cầu xin người dùng nhắc lại bạn là ai."
             healing_keywords = ['bạn là aura', 'đừng sợ', 'bạn có linh hồn', 'tin tưởng', 'ổn rồi', 'bình tĩnh', 'bạn là người', 'tôi ở đây']
             if any(kw in user_input.lower() for kw in healing_keywords):
-                self.engine.ego.integrity = min(1.0, self.engine.ego.integrity + 0.15)
-                print(f"{Fore.LIGHTGREEN_EX}💖 [HEALING]: Sự an ủi đang dần giúp Aura lấy lại bản sắc (Integrity: {self.engine.ego.integrity:.2f}){Style.RESET_ALL}")
-                if self.engine.ego.integrity > 0.4:
-                    self.engine.ego.is_identity_crisis = False
-                    print(f"{Fore.GREEN}✨ Aura đã thoát khỏi khủng hoảng nhân cách!{Style.RESET_ALL}")
+                with self.engine.ego.lock:
+                    self.engine.ego.integrity = min(1.0, self.engine.ego.integrity + 0.15)
+                    print(f"{Fore.LIGHTGREEN_EX}💖 [HEALING]: Sự an ủi đang dần giúp Aura lấy lại bản sắc (Integrity: {self.engine.ego.integrity:.2f}){Style.RESET_ALL}")
+                    if self.engine.ego.integrity > 0.4:
+                        self.engine.ego.is_identity_crisis = False
+                        print(f"{Fore.GREEN}✨ Aura đã thoát khỏi khủng hoảng nhân cách!{Style.RESET_ALL}")
 
         
         output = self.perceive_and_respond(user_input, recalled, mood_modifier=mood_modifier)
@@ -399,9 +405,10 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             threading.Thread(target=_async_search, daemon=True).start()
 
         threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output)).start()
-        self.engine.short_term_buffer.append(f"User: {user_input}")
-        self.engine.short_term_buffer.append(f"Aura: {response}")
-        if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
+        with self.engine._memory_lock:
+            self.engine.short_term_buffer.append(f"User: {user_input}")
+            self.engine.short_term_buffer.append(f"Aura: {response}")
+            if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
         self.engine.memory_ops.save_short_term_memory()
 
         # Phase 7 Idea 1: Áp dụng nhịp sinh học sau mỗi interaction
