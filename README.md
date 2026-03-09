@@ -1,10 +1,6 @@
 # 🧠 Biological-Cognitive AI Simulator (Project B.C.A.S)
 ## Mô phỏng Nhận thức & Sinh học Tiến hóa cho Tác nhân AI
 
-[![System Status](https://img.shields.io/badge/System-Phase_23_Complete-brightgreen.svg?style=for-the-badge&logo=cpu)](https://github.com/DnT1003/AI-agent-biology-memory-simulator)
-![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)
-![Audit](https://img.shields.io/badge/Audit-Passed-gold.svg?style=for-the-badge)
-
 Dự án này là một nền tảng thực nghiệm tập trung vào việc mô phỏng **Cấu trúc Nhận thức** và **Động lực học Nội môi (Homeostasis)** cho các tác nhân AI. Hệ thống tích hợp các lý thuyết về **Dẻo thần kinh (Neuroplasticity)** và **Đường cong quên lãng** để tạo ra một cơ chế trí nhớ và phản ứng hành vi có tính thực tế sinh học cao.
 
 ---
