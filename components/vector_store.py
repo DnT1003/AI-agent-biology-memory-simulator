@@ -1,37 +1,56 @@
 import os
-import chromadb
 import json
-from chromadb.config import Settings
 import numpy as np
+import requests
 from typing import List, Tuple, Any, Dict, Optional
-
 from colorama import Fore, Style
 from core.logger import get_logger
 
 logger = get_logger("vector_store")
-
-# Các trường được "lift" ra top-level metadata (indexable, filterable)
 LIFTED_FIELDS = {"type", "valence", "importance", "strength", "is_flashbulb"}
 
+from components.chroma_rest_client import ChromaRestClient
 
 class VectorStore:
-    """Kho lưu trữ vector nội bộ sử dụng ChromaDB cho khả năng Scale lớn và Persistence
-    
-    Phase 13: Metadata Lifting — các trường quan trọng (type, strength, valence, ...)
-    được lưu thành top-level keys riêng trong ChromaDB metadata, cho phép filter ở tầng DB
-    thay vì load hết về Python rồi mới lọc (không hiệu quả với 100k+ memories).
-    """
     def __init__(self):
         from config import Config
-        db_path = getattr(Config, 'CHROMA_DB_PATH', "outputs/chroma_db")
-        if not os.path.exists(db_path):
-            os.makedirs(db_path)
+        import sys
+        
+        is_py314 = sys.version_info.major == 3 and sys.version_info.minor == 14
+
+        if Config.USE_CHROMA_SERVER or is_py314:
+            if is_py314:
+                print(f"{Fore.YELLOW}🐍 [VECTOR STORE]: Python 3.14 detected. Switching to ChromaRestClient (REST Mode) to avoid Pydantic v1 issues.{Style.RESET_ALL}")
             
-        self.client = chromadb.PersistentClient(path=db_path)
-        self.collection = self.client.get_or_create_collection(
-            name="aura_long_term_memory",
-            metadata={"hnsw:space": "cosine"}
-        )
+            print(f"{Fore.CYAN}🌐 [VECTOR STORE]: Connecting to Chroma Server at {Config.CHROMA_SERVER_HOST}:{Config.CHROMA_SERVER_PORT}...{Style.RESET_ALL}")
+            self.client = ChromaRestClient(host=Config.CHROMA_SERVER_HOST, port=Config.CHROMA_SERVER_PORT)
+        else:
+            try:
+                import chromadb
+                db_path = getattr(Config, 'CHROMA_DB_PATH', "outputs/chroma_db")
+                if not os.path.exists(db_path):
+                    os.makedirs(db_path)
+                self.client = chromadb.PersistentClient(path=db_path)
+            except ImportError:
+                print(f"{Fore.RED}❌ [VECTOR STORE]: chromadb not installed. Please use USE_CHROMA_SERVER=True or install it.{Style.RESET_ALL}")
+                raise
+
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name="aura_long_term_memory",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except Exception as e:
+            print(f"{Fore.RED}⚠️ [VECTOR STORE]: Could not connect to Chroma Server: {e}{Style.RESET_ALL}")
+            # Mock collection to allow system to start without crashing
+            self.collection = type('MockCollection', (), {
+                'upsert': lambda *args, **kwargs: None,
+                'update': lambda *args, **kwargs: None,
+                'delete': lambda *args, **kwargs: None,
+                'get': lambda *args, **kwargs: {'ids': [], 'metadatas': []},
+                'query': lambda *args, **kwargs: {'ids': [[]], 'metadatas': [[]], 'distances': [[]]},
+                'count': lambda: 0
+            })()
 
     # ─────────────────────────────────────────────────
     # INTERNAL SERIALIZATION / DESERIALIZATION

@@ -32,10 +32,9 @@ class CognitiveEngine:
         self.ego      = ego      or SelfModel(memory_manager=self.memory)
         self.llm      = llm      or LLM(ego=self.ego)
 
-        # Thread Safety: RLock (reentrant) — cùng thread có thể acquire nhiều lần
-        self._ego_lock    = threading.RLock()
-        self._memory_lock = threading.RLock()
-
+        # Thread Safety: Standardizing on object-level locks (ego.lock, memory.lock)
+        # to prevent deadlock and ensure compatibility with Python 3.14 free-threading.
+        
         self.short_term_buffer: List[str] = []
         self.stm_file_path = Config.STM_FILE  # Phase 15: dung Config thay hardcode
         self.last_interaction_time = time.time()
@@ -66,7 +65,7 @@ class CognitiveEngine:
             os.makedirs("outputs")
 
         # B4: Tải lại identity từ lần chạy trước (nếu có)
-        with self._ego_lock:
+        with self.ego.lock:
             self.ego.load_state()
             self.ego.init_core_semantics()
         logger.info("CognitiveEngine initialized. Ego state loaded and core semantics seeded.")
@@ -79,8 +78,8 @@ class CognitiveEngine:
         """
         try:
             # 1 & 2. Biological decay + Circadian rhythm
-            # Gộp thành 1 Big RLock cho Ego để đảm bảo tính Atomic (không hở sườn giữa chừng)
-            with self._ego_lock:
+            # Using self.ego.lock to ensure atomic biological updates
+            with self.ego.lock:
                 # Phase 14: Non-linear Metabolism (Exponential Biological Curves)
                 # Fatigue tang nhanh hon khi da met (kieu quadratic resistance)
                 # f_new = f + rate * dt * (1 + f) — cang met cang mat suc nhanh
@@ -140,8 +139,8 @@ class CognitiveEngine:
                 self.ego.apply_circadian_rhythm()
 
             # 3 & 4. Memory decay + Garbage collection
-            # Gộp thành 1 Big RLock cho Memory 
-            with self._memory_lock:
+            # Using self.memory.lock for atomic memory operations
+            with self.memory.lock:
                 import random
                 mems = self.memory.get_all()
                 if mems:
@@ -164,7 +163,7 @@ class CognitiveEngine:
         self.stop()  # Dừng background_loop từ AutonomousMixin
         if hasattr(self, 'reader') and getattr(self.reader, 'stop', None):
             self.reader.stop()
-        with self._ego_lock:
+        with self.ego.lock:
             self.ego.save_state()
         logger.info("CognitiveEngine shutdown complete. Ego state saved.")
 

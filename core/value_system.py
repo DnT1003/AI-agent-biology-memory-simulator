@@ -25,7 +25,7 @@ class ValueSystem:
 
     def update_core_value(self, value_name: str, sentiment: float, learning_rate: float = 0.1):
         """Tiến hóa (Evolve) giá trị cốt lõi của Aura dựa trên trải nghiệm."""
-        value_name = value_name.strip().title()
+        value_name = value_name.strip()
         if value_name in self.core_values:
             # Shift value slowly
             current = self.core_values[value_name]
@@ -38,7 +38,7 @@ class ValueSystem:
 
     def update_user_value(self, value_name: str, sentiment: float, learning_rate: float = 0.2):
         """Ghi nhận giá trị mà User đề cao/phản đối."""
-        value_name = value_name.strip().title()
+        value_name = value_name.strip()
         if value_name in self.user_values:
             current = self.user_values[value_name]
             self.user_values[value_name] = max(-1.0, min(1.0, current + (sentiment - current) * learning_rate))

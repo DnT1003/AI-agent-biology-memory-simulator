@@ -17,6 +17,9 @@ class Config:
     # DUONG DAN ĐAU RA (OUTPUT PATHS) — Phase 15: tap trung, thay vi hardcode khap noi
     OUTPUT_DIR = os.getenv("AURA_OUTPUT_DIR", "outputs")
     CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")
+    CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "127.0.0.1")
+    CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
+    USE_CHROMA_SERVER = os.getenv("USE_CHROMA_SERVER", "True").lower() == "true"
     STM_FILE = os.path.join(OUTPUT_DIR, "short_term.json")
     MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
     EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")

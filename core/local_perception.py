@@ -1,5 +1,9 @@
-import torch
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+try:
+    import torch
+    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+    TRANSFORMERS_AVAILABLE = True
+except Exception:
+    TRANSFORMERS_AVAILABLE = False
 from core.gpu_config import get_max_memory_map
 import os
 from colorama import Fore, Style
@@ -11,25 +15,20 @@ class LocalPerception:
     cảm xúc và sắc thái ngay lập tức mà không cần gọi LLM API.
     """
     def __init__(self, model_name="cardiffnlp/twitter-roberta-base-sentiment"):
-        self.model_name = model_name
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.sentiment_analyzer = None
-        
-        print(f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: Đang khởi tạo mô hình {model_name} trên {self.device.upper()} (Sử dụng nhân Tensor)...{Style.RESET_ALL}")
-        try:
-            # Khởi tạo pipeline sentiment phân tích sắc thái với Device Map CUDA
-            # device_map="cuda" tự động tối ưu hóa nhân Tensor (FP16/INT8 nếu được cấu hình)
-            self.sentiment_analyzer = pipeline(
-                "sentiment-analysis", 
-                model=self.model_name, 
-                device=0 if self.device == "cuda" else -1
-            )
-            # Lưu ý: Pipeline tiêu chuẩn không hỗ trợ max_memory trực tiếp như AutoModel, 
-            # nhưng giới hạn process của gpu_config sẽ bảo vệ VRAM.
-            
-            print(f"{Fore.GREEN}✅ [LOCAL PERCEPTION]: Engine sẵn sàng.{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}❌ [LOCAL PERCEPTION]: Lỗi khi nạp mô hình: {e}{Style.RESET_ALL}")
+        print(f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: Đang khởi tạo mô hình {model_name}...{Style.RESET_ALL}")
+        if TRANSFORMERS_AVAILABLE:
+            try:
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.sentiment_analyzer = pipeline(
+                    "sentiment-analysis", 
+                    model=self.model_name, 
+                    device=0 if self.device == "cuda" else -1
+                )
+                print(f"{Fore.GREEN}✅ [LOCAL PERCEPTION]: Engine sẵn sàng trên {self.device.upper()}.{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}❌ [LOCAL PERCEPTION]: Lỗi khi nạp mô hình: {e}{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers/Torch NOT AVAILABLE (Python 3.14 incompatibility). Sentiment analysis disabled.{Style.RESET_ALL}")
 
     def analyze(self, text: str) -> dict:
         """

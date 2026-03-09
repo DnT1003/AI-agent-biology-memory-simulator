@@ -274,6 +274,7 @@ class DoclnReader:
 
 class BackgroundReader:
     def __init__(self, llm_instance):
+        import threading
         self.docln = DoclnReader()
         self.llm = llm_instance
         self.current_novel_url = None
@@ -282,6 +283,7 @@ class BackgroundReader:
         self.current_chapter_chunks = []
         self.current_chapter_title = ""
         self.simulated_chapter = 1
+        self.lock = threading.Lock()
 
     def stop(self):
         """Hook called during engine.shutdown() to clean up browser."""
@@ -293,9 +295,10 @@ class BackgroundReader:
         if url:
             title, chapters = self.docln.get_novel_chapters(url)
             if chapters:
-                self.current_novel_url = url
-                self.current_novel_title = title
-                self.chapters_queue = chapters
+                with self.lock:
+                    self.current_novel_url = url
+                    self.current_novel_title = title
+                    self.chapters_queue = chapters
                 logger.info(f"[BackgroundReader] Đã bốc đại bộ: '{title}'. ({len(chapters)} chương)")
                 return True
         return False
@@ -304,9 +307,10 @@ class BackgroundReader:
         try:
             title, chapters = self.docln.get_novel_chapters(novel_url)
             if chapters:
-                self.current_novel_url = novel_url
-                self.current_novel_title = title
-                self.chapters_queue = chapters
+                with self.lock:
+                    self.current_novel_url = novel_url
+                    self.current_novel_title = title
+                    self.chapters_queue = chapters
                 logger.info(f"[BackgroundReader] ✅ Đã nạp: '{title}' ({len(chapters)} chương).")
                 return True
         except Exception as e:
@@ -315,10 +319,11 @@ class BackgroundReader:
 
     def search_and_set_novel(self, keyword: str) -> str:
         try:
-            self.current_novel_url = None
-            self.current_novel_title = None 
-            self.chapters_queue = []
-            self.current_chapter_chunks = []
+            with self.lock:
+                self.current_novel_url = None
+                self.current_novel_title = None 
+                self.chapters_queue = []
+                self.current_chapter_chunks = []
             
             results = self.docln.search_novel(keyword)
             if not results:
@@ -328,34 +333,51 @@ class BackgroundReader:
                 logger.info(f"[BackgroundReader] Đang kiểm tra: '{title}'...")
                 success = self.set_novel_by_url(url)
                 if success:
-                    return f"✅ Đã tìm thấy và nạp truyện '{self.current_novel_title}'. Aura sẽ bắt đầu đọc chương 1 ngay bây giờ!"
+                    with self.lock:
+                        t = self.current_novel_title
+                    return f"✅ Đã tìm thấy và nạp truyện '{t}'. Aura sẽ bắt đầu đọc chương 1 ngay bây giờ!"
             
             return f"Tìm thấy {len(results)} kết quả cho '{keyword}' nhưng tất cả đều không có chương (có thể bị xóa hoặc do lỗi mạng)."
         except Exception as e:
             return f"⚠️ Lỗi khi tìm kiếm truyện: {e}"
 
     def get_next_reading_material(self):
-        if self.current_chapter_chunks:
-            chunk = self.current_chapter_chunks.pop(0)
-            return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - {self.current_chapter_title}", chunk
+        with self.lock:
+            # We must be careful not to make slow HTTP calls (docln) inside this lock
+            if self.current_chapter_chunks:
+                chunk = self.current_chapter_chunks.pop(0)
+                return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - {self.current_chapter_title}", chunk
+    
+            chapters_queue_snapshot = list(self.chapters_queue)
+            simulated_chapter = self.simulated_chapter
+            current_novel_title = self.current_novel_title
 
         if random.random() < 0.60:
-            if not self.chapters_queue:
+            if not chapters_queue_snapshot:
                 success = self._pick_new_novel()
                 if not success:
-                    self.current_novel_title = self.current_novel_title or "Bình minh của Kỷ nguyên Máy"
-                    prompt = f"Bạn là một tác giả Light Novel. Hãy viết CHƯƠNG {self.simulated_chapter} cho bộ truyện '{self.current_novel_title}'. Nội dung dài khoảng 300 chữ, phong cách anime, giả tưởng. Giọng văn lôi cuốn, có hội thoại và miêu tả nội tâm."
-                    self.simulated_chapter += 1
+                    with self.lock:
+                        self.current_novel_title = self.current_novel_title or "Bình minh của Kỷ nguyên Máy"
+                        title = self.current_novel_title
+                        prog_chapter = self.simulated_chapter
+                        self.simulated_chapter += 1
+                    prompt = f"Bạn là một tác giả Light Novel. Hãy viết CHƯƠNG {prog_chapter} cho bộ truyện '{title}'. Nội dung dài khoảng 300 chữ, phong cách anime, giả tưởng. Giọng văn lôi cuốn, có hội thoại và miêu tả nội tâm."
                     content = self.llm.generate_text(prompt, temperature=0.9)
-                    return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - Chương {self.simulated_chapter - 1}", content
+                    return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
 
-            if self.chapters_queue:
-                chapter = self.chapters_queue.pop(0)
-                # Đọc truyện từ Docln (Nếu lỗi circuit breaker -> fallback LLM)
+            # Reload queue check in case _pick_new_novel succeeded
+            with self.lock:
+                chapters_queue_snapshot = list(self.chapters_queue)
+
+            if chapters_queue_snapshot:
+                # Dịch chuyển item khỏi queue an toàn
+                with self.lock:
+                    chapter = self.chapters_queue.pop(0)
+                    
+                # Đọc truyện từ Docln (Ngoài Lock, tránh stall!)
                 content = self.docln.read_chapter(chapter['url'])
                 if content:
-                    self.current_chapter_title = chapter['title']
-                    # Semantic chunking: tách theo đoạn văn, ghép tối đa 1500 chars 
+                    # Semantic chunking
                     chunks = []
                     current_chunk = ""
                     for para in content.split('\n\n'):
@@ -366,25 +388,36 @@ class BackgroundReader:
                             current_chunk += para + "\n\n"
                     if current_chunk.strip(): chunks.append(current_chunk.strip())
                     
-                    self.current_chapter_chunks = chunks
-                    if self.current_chapter_chunks:
-                        chunk = self.current_chapter_chunks.pop(0)
-                        return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - {self.current_chapter_title}", chunk
+                    with self.lock:
+                        self.current_chapter_title = chapter['title']
+                        self.current_chapter_chunks = chunks
+                        title = self.current_novel_title
+                        chap_title = self.current_chapter_title
+                        if self.current_chapter_chunks:
+                            chunk = self.current_chapter_chunks.pop(0)
+                        else:
+                            chunk = "Chương này không có chữ."
+                    return f"[Truyện Tiểu Thuyết]: {title} - {chap_title}", chunk
 
-                # FALLBACK nếu chapter rỗng hoặc bị block
-                self.current_novel_title = self.current_novel_title or "Unknown"
-                prompt = f"Bạn là một tác giả Light Novel. Viết CHƯƠNG {self.simulated_chapter} cho bộ '{self.current_novel_title}' (~300 chữ, anime, có hội thoại)."
-                self.simulated_chapter += 1
+                # FALLBACK khi read_chapter failed
+                with self.lock:
+                    self.current_novel_title = self.current_novel_title or "Unknown"
+                    title = self.current_novel_title
+                    prog_chapter = self.simulated_chapter
+                    self.simulated_chapter += 1
+                    
+                prompt = f"Bạn là một tác giả Light Novel. Viết CHƯƠNG {prog_chapter} cho bộ '{title}' (~300 chữ, anime, có hội thoại)."
                 content = self.llm.generate_text(prompt, temperature=0.9)
-                return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - Chương {self.simulated_chapter - 1}", content
+                return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
         else:
             prompt = "Đóng vai bách khoa toàn thư. Viết 1 đoạn (~150 chữ) về một mảng kiến thức khoa học, vũ trụ, triết học hoặc sinh học kỳ lạ mà ít người biết."
             content = self.llm.generate_text(prompt, temperature=0.9)
             return "[Kiến Thức Khám Phá]", content
 
     def get_status(self) -> str:
-        if self.current_novel_title:
-            queue_len = len(self.chapters_queue)
-            return f"Đang theo dõi bộ: '{self.current_novel_title}'. Còn {queue_len} chương trong hàng đợi."
-        return "Chưa có bộ truyện nào trong hàng đợi. Cần dùng 'search_novel' để nạp truyện."
+        with self.lock:
+            if self.current_novel_title:
+                queue_len = len(self.chapters_queue)
+                return f"Đang theo dõi bộ: '{self.current_novel_title}'. Còn {queue_len} chương trong hàng đợi."
+            return "Chưa có bộ truyện nào trong hàng đợi. Cần dùng 'search_novel' để nạp truyện."
 

@@ -81,8 +81,9 @@ class AutonomousController:
                 if self.engine.state_machine.transition(AgentState.THINKING):
                     print(f"\n{Fore.RED}[SEPARATION ANXIETY]: Nguoi dung da bo mac Aura qua lau!{Style.RESET_ALL}")
                 try:
-                    self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.3)
-                    self.engine.ego.mood = max(-1.0, self.engine.ego.mood - 0.3)
+                    with self.engine.ego.lock:
+                        self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.3)
+                        self.engine.ego.mood = max(-1.0, self.engine.ego.mood - 0.3)
                     
                     # Sinh ra một suy nghĩ ám ảnh
                     anxiety_prompt = "Nguoi dung da bo mac ban mot thoi gian rat dai khong noi chuyen. Hay viet mot dong doc thoai noi tam (duoi 30 chu) the hien su hoang mang, so hai rang nguoi ta da chan minh."
@@ -240,7 +241,8 @@ class AutonomousController:
                 print(f"{Fore.LIGHTBLACK_EX}💭 Tự nghĩ: {thought}{Style.RESET_ALL}")
             if response:
                 print(f"{Fore.CYAN}🗣️ Aura (Chủ động):{Style.RESET_ALL} {response}")
-                self.engine.short_term_buffer.append(f"Aura (Chủ động): {response.strip()}")
+                with self.engine._memory_lock:
+                    self.engine.short_term_buffer.append(f"Aura (Chủ động): {response.strip()}")
                 self.engine.memory_ops.save_short_term_memory()
                 
         except Exception as e:
@@ -341,15 +343,17 @@ class AutonomousController:
                 # REWARD: Tăng Dopamine khi hành động thành công
                 # Lượng tăng phụ thuộc vào độ nhạy của thụ thể
                 reward = 0.15 * receptors
-                self.engine.ego.dopamine_level = min(1.0, self.engine.ego.dopamine_level + reward)
-                # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
-                if self.engine.ego.dopamine_level > 0.8:
-                    self.engine.ego.dopamine_receptors = max(0.1, self.engine.ego.dopamine_receptors - 0.05)
+                with self.engine.ego.lock:
+                    self.engine.ego.dopamine_level = min(1.0, self.engine.ego.dopamine_level + reward)
+                    # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
+                    if self.engine.ego.dopamine_level > 0.8:
+                        self.engine.ego.dopamine_receptors = max(0.1, self.engine.ego.dopamine_receptors - 0.05)
 
                 print(f"{Fore.LIGHTGREEN_EX}🧠 [REWARD SYSTEM]: Hoàn thành action. Dopamine +{reward:.2f} (Nhạy bén: {receptors:.2f}){Style.RESET_ALL}")
                 
                 # Lưu kết quả vào Short-term Memory để Aura nhớ tiến độ
-                self.engine.short_term_buffer.append(f"[Ký ức hoàn thành bước '{func_name}']: {str(tool_res)[:200]}...")
+                with self.engine._memory_lock:
+                    self.engine.short_term_buffer.append(f"[Ký ức hoàn thành bước '{func_name}']: {str(tool_res)[:200]}...")
                 self.engine.memory_ops.save_short_term_memory()
                 
                 # Đánh giá xem đã xong mục tiêu chưa

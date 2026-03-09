@@ -9,7 +9,7 @@ EMBEDDING_DIM = 1024  # MRL: Giảm chiều Vector xuống 1024 (Phase 17B)
 
 class Embedder:
     def __init__(self):
-        print(f"{Fore.CYAN}⏳ Đang kết nối lên Gemini Embedding ({Config.EMBEDDING_MODEL}, {EMBEDDING_DIM}D MRL)...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}[WAIT] Connecting to Gemini Embedding ({Config.EMBEDDING_MODEL}, {EMBEDDING_DIM}D MRL)...{Style.RESET_ALL}")
         self.client = genai.Client(api_key=Config.API_KEY)
         self._cache = {} # Bộ đệm Vector
 
