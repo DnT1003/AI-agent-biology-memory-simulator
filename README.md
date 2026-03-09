@@ -64,7 +64,7 @@ graph TD
 
 Aura được xây dựng trên một ngăn xếp công nghệ tối ưu cho hiệu năng và trí tuệ:
 - **Ngôn ngữ**: Python 3.14 (Tối ưu Free-threading / GIL-free).
-- **Bộ não**: Google Gemini Pro 1.5 (Long-context & Multimodal).
+- **Bộ não**: Google Gemini 3.0 Flash & 3.1 Pro (Long-context & Multimodal).
 - **Trí nhớ**: ChromaDB (Vector Search) & World Graph (Entity Relationship).
 - **Xử lý Đồ họa (Local)**: NVIDIA RTX 3060 (RoBERTa Sentiment & Vision Mirroring).
 - **Thư viện Sinh học**: VADER Sentiment, TextBlob, Logic Fuzzy.

@@ -5,8 +5,8 @@ load_dotenv()
 
 class Config:
     API_KEY = os.getenv("API_KEY", "")
-    MODEL_NAME = os.getenv("MODEL_NAME", "gemini-1.5-flash")
-    DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-1.5-pro")
+    MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.0-flash-exp")
+    DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-2.0-pro-exp")
     EMBEDDING_MODEL = "models/gemini-embedding-001"
 
     # GIOI HAN SINH HOC (BOUNDED MEMORY)
