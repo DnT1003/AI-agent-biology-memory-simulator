@@ -14,6 +14,8 @@ class MemoryOperationsController:
 
     def __init__(self, engine):
         self.engine = engine
+        from core.engine.integrity_filter import IntegrityFilter
+        self.integrity_filter = IntegrityFilter(engine)
 
     def _apply_fog_masking(self, content: str) -> str:
         """[Phase 21] Che mờ các chi tiết cụ thể nếu Aura đang mệt mỏi hoặc stress."""
@@ -181,6 +183,15 @@ class MemoryOperationsController:
             belief_str = ", ".join(beliefs)
             check_prompt = f"Câu nói sau của User có ĐI NGƯỢC LẠI, MÂU THUẪN HOÀN TOÀN, hay PHỦ NHẬN các niềm tin cốt lõi sau đây không? Niềm tin: {belief_str}. Câu nói: '{user_input}'. Chỉ trả lời YES hoặc NO."
             try:
+                # [Phase 23] Neuro-Symbolic Integrity Filter (System 1)
+                integrity_check = self.integrity_filter.check_contradiction(user_input, new_valence)
+                if integrity_check["conflict"]:
+                    print(f"{Fore.LIGHTYELLOW_EX}🧐 [HYBRID CONFLICT]: {integrity_check['reason']}{Style.RESET_ALL}")
+                    internal_thought += f" [MÂU THUẪN: {integrity_check['reason']}]"
+                    new_importance = min(1.0, new_importance * integrity_check["impact_multiplier"])
+                    # Gắn flag để LLM supervisor xử lý sau
+                    user_input = f"[Conflict] {user_input}"
+                
                 ans = self.engine.llm.generate_text(check_prompt, temperature=0.1).strip().upper()
                 # B15: dùng startswith thày 'in' — 'YES, because...' không bị detect lầm
                 if ans.startswith("YES"):
@@ -241,7 +252,16 @@ class MemoryOperationsController:
         self._decay_phase(stress_drop, fatigue_drop)
         self._guilt_reflection_phase()
         self._cognitive_reappraisal_phase()
-        self._identity_evolution_phase()
+        # [Phase 23] Neuro-Symbolic System 2: Conscious Supervisor
+        bio_report = f"""
+        Báo cáo tình trạng sinh học:
+        - ATP: {self.engine.ego.atp_level:.2f}
+        - Energy: {self.engine.ego.energy:.2f}
+        - Stress Sensitivity: {self.engine.ego.bio_controller.sensitivities.get('stress', 1.0):.2f}
+        - Fatigue Critical: {self.engine.ego.fatigue_critical:.2f}
+        """
+        
+        self._identity_evolution_phase(bio_report)
         self._tool_workshop_phase()
         self._calibration_phase()
         self._belief_evolution_phase()

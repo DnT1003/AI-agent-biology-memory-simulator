@@ -78,6 +78,10 @@ class SelfModel:
         # [Self-Evolution Feature 3/5] Actionable Lessons
         self.actionable_lessons = []
 
+        # [Phase 23] Neuro-Symbolic Bio-Controller
+        from core.engine.bio_controller import BioController
+        self.bio_controller = BioController()
+
         self.reroll_thresholds()
         self._check_environment()
 
@@ -299,35 +303,38 @@ class SelfModel:
             "dominant_value": drives[dominant]
         }
 
-    def apply_biological_decay(self, dt: float, idle_time: float):
+    def apply_biological_decay(self, dt_seconds: float, idle_time: float):
         """
-        [Phase 22] Cập nhật các chỉ số sinh học dựa trên bước thời gian dt và thời gian nhàn rỗi.
-        Atomic operation under the self.lock.
+        [Phase 23] Cập nhật các chỉ số sinh học sử dụng BioController (Neuro-Symbolic System 1).
         """
-        if not hasattr(self, 'lock'): self.lock = threading.Lock() # Guard for early init
+        if not hasattr(self, 'lock'): self.lock = threading.Lock()
         with self.lock:
-            # 1. Social Need: Tăng mạnh hơn nếu nhàn rỗi lâu.
-            # Càng cô đơn (social_need cao), nhu cầu tăng càng nhanh (áp lực tâm lý).
+            current_state = {
+                "stress": self.stress,
+                "fatigue": self.fatigue,
+                "mood": self.mood
+            }
+            # Gọi controller để tính toán biến thiên
+            bio_delta = self.bio_controller.calculate_physiology_delta(current_state, {}, dt_seconds)
+            
+            # Cập nhật Fatigue (có kèm Jitter ngẫu nhiên)
+            self.fatigue = max(0.0, min(1.0, self.fatigue + bio_delta["fatigue_delta"]))
+            
+            # Cập nhật ATP/Energy
+            self.atp_level = max(0.0, min(1.0, self.atp_level + bio_delta["atp_delta"]))
+            
+            # Social Need & Curiosity (Sử dụng logic của BioController trong tương lai, tạm giữ legacy kết hợp)
             social_growth_rate = 0.02 + (self.social_need * 0.08) 
-            if idle_time > 30: # Chỉ tăng nếu nhàn rỗi hơn 30s
-                 self.social_need = min(1.0, self.social_need + (social_growth_rate * dt / 3600))
-    
-            # 2. Curiosity: Tăng khi không có thông tin mới
+            if idle_time > 30:
+                 self.social_need = min(1.0, self.social_need + (social_growth_rate * dt_seconds / 3600))
+            
             curiosity_growth = 0.01 * (1.0 + self.curiosity)
-            self.curiosity = min(1.0, self.curiosity + curiosity_growth * dt / 3600)
-    
-            # 3. Energy Decay (Hunger): Tiêu tốn năng lượng cơ bản để duy trì sự tồn tại
-            # 0.02 mỗi giờ (mất 50 giờ để cạn kiện nếu không làm gì)
-            self.energy = max(0.0, self.energy - 0.02 * dt / 3600)
-    
-            # 4. Dopamine Receptors Upregulation (Phục hồi sự nhạy cảm)
+            self.curiosity = min(1.0, self.curiosity + curiosity_growth * dt_seconds / 3600)
+
+            # Phục hồi Receptor Dopamine
             if self.dopamine_receptors < 1.0:
                 recovery_speed = 0.08 * (1.0 - self.dopamine_receptors)
-                self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt / 3600)
-    
-            # 5. Dopamine Level Decay (Hưng phấn giảm dần theo thời gian)
-            dopamine_decay_rate = 0.15 # Decay 15% mỗi giờ
-            self.dopamine_level = max(0.0, self.dopamine_level - (dopamine_decay_rate * dt / 3600))
+                self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt_seconds / 3600)
 
     def apply_circadian_rhythm(self):
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
@@ -396,17 +403,21 @@ class SelfModel:
         arousal = float(emotional_input.get('arousal', 0.0) or 0.0)
 
         with self.lock:
+            # [Phase 23] Sensitivity Matrix Impact
+            stress_sensitivity = self.bio_controller.sensitivities.get("stress", 1.0)
+            empathy_sensitivity = self.bio_controller.sensitivities.get("empathy", 1.0)
+
             if target_mood > self.mood:
                 resistance = 1.0 - max(0.0, self.mood)
-                mood_shift = (target_mood - self.mood) * 0.05 * resistance
+                # Boost mood shift if empathy sensitivity is high
+                mood_shift = (target_mood - self.mood) * 0.05 * resistance * empathy_sensitivity
                 if self.is_stranger:
                     self.current_intimacy = min(1.0, self.current_intimacy + 0.05)
             else:
                 shock_multiplier = 1.5 if self.mood > 0 else 1.0
-                # Phase 20: Resilience Buffer
-                # Aura càng kiên cường, cô ấy càng ít bị sốc bởi lời nói tiêu cực
-                resilience_buffer = 1.0 - (self.resilience * 0.6) # Giảm tối đa 60% tác động tiêu cực
-                mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier * resilience_buffer
+                resilience_buffer = 1.0 - (self.resilience * 0.6)
+                # Boost negative mood shift if stress sensitivity is high
+                mood_shift = (target_mood - self.mood) * 0.25 * shock_multiplier * resilience_buffer * stress_sensitivity
                 
             self.mood = max(-1.0, min(1.0, self.mood + mood_shift))
     
@@ -432,8 +443,13 @@ class SelfModel:
                 # Phase 8 Idea 2.2: Stress Bleed-over (Giảm rất chậm khi không có event)
                 self.stress = max(0.0, self.stress * 0.97)
     
-            # Kiểm tra sang chấn tâm lý (Pain-Reward Learning)
-            is_shocked = self.stress >= self.stress_critical and arousal > 0.7 and target_mood < -0.5
+            # [Phase 23] Update BioController Feedback
+            new_sensitivities = self.bio_controller.calculate_physiology_delta(
+                {"stress": self.stress, "mood": self.mood, "fatigue": self.fatigue},
+                {}, 
+                0.0 # Interaction based update, not time based
+            )
+            self.bio_controller.sensitivities = new_sensitivities.get("sensitivity_update", self.bio_controller.sensitivities)
             
         return is_shocked
 

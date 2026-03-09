@@ -9,6 +9,10 @@ class InteractionController:
     def __init__(self, engine):
         self.engine = engine
         self.is_interrupted = False
+        from core.engine.sensory_preprocessor import SensoryPreprocessor
+        from core.engine.reflex_gate import ReflexGate
+        self.sensory_preprocessor = SensoryPreprocessor()
+        self.reflex_gate = ReflexGate(engine)
     def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "") -> dict:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         import random
@@ -107,6 +111,16 @@ class InteractionController:
         sensory_summary = self.engine.perception_ops.get_sensory_summary(user_input)
         mem_context = sensory_summary + "\n" + mem_context
 
+        # [Phase 23] Neuro-Symbolic System 1: Reflex Check
+        # Nếu áp lực sinh học quá cao, Aura phản ứng ngay lập tức
+        reflex = self.reflex_gate.evaluate_reflexes()
+        if reflex["triggered"]:
+            print(f"{Fore.MAGENTA}⚡ [REFLEX ACTIVATED]: {reflex['reason']}{Style.RESET_ALL}")
+            if reflex["action"] == "sleep":
+                self.engine.memory_ops.sleep()
+                return {"response": "Em... em mệt quá... xin lỗi, em phải chợp mắt một lát...", "valence": -0.2, "arousal": -0.5}
+            # Thêm các reflex khác ở đây
+
         system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status, value_system_context)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
@@ -163,11 +177,14 @@ class InteractionController:
                 continue
             else:
                 if response:
-                    # Phase 8: Cognitive Consumption
-                    # Mỗi lượt phản hồi tiêu tốn ATP và Energy
+                    # [Phase 23] Neuro-Symbolic Cognitive Consumption
+                    # Tính toán chi phí thực tế dựa trên input và output
+                    total_tokens = len(prompt_in_use.split()) + len(response.split())
+                    costs = self.engine.ego.bio_controller.calculate_interaction_cost(total_tokens, sensory_vector)
+                    
                     with self.engine.ego.lock:
-                        self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - 0.1)
-                        self.engine.ego.energy = max(0.0, self.engine.ego.energy - 0.02)
+                        self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - costs["atp_cost"])
+                        self.engine.ego.energy = max(0.0, self.engine.ego.energy - costs["energy_cost"])
                     
                     # Giả lập typing gõ chậm Fragmentation
                     if "[SEND]" in response:
@@ -279,9 +296,18 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             print(f"{Fore.GREEN}🤖 [AURA]: ... (Im lặng, mắt nhìn xa xăm){Style.RESET_ALL}\n")
             return
 
-        # ==========================================================
-        # Phase 8: Local Perception Engine (Local Empathy Mirroring)
-        # ==========================================================
+        # [Phase 23] Neuro-Symbolic System 0: Sensory Preprocessor
+        sensory_evaluation = self.sensory_preprocessor.evaluate_input(user_input)
+        sensory_vector = sensory_evaluation.get("vector", {})
+        sensory_summary = sensory_evaluation.get("summary", "")
+        print(f"{Fore.LIGHTCYAN_EX}📡 {sensory_summary}{Style.RESET_ALL}")
+        
+        # Cập nhật state vật lý dựa trên vector cảm thấu
+        with self.engine.ego.lock:
+            # Tự động điều chỉnh Stress dựa trên Urgency và Arousal của đầu vào
+            stress_impact = (sensory_vector.get('arousal', 0.0) * 0.2) + (sensory_vector.get('urgency', 0.0) * 0.3)
+            self.engine.ego.stress = min(1.0, self.engine.ego.stress + stress_impact)
+            
         try:
             # Phân tích Valence/Arousal bằng mô hình RoBERTa cục bộ trên RTX 3060
             local_res = self.engine.local_perception.analyze(user_input)
