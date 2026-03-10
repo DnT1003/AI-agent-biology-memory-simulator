@@ -44,12 +44,12 @@ class VectorStore:
             print(f"{Fore.RED}⚠️ [VECTOR STORE]: Could not connect to Chroma Server: {e}{Style.RESET_ALL}")
             # Mock collection to allow system to start without crashing
             self.collection = type('MockCollection', (), {
-                'upsert': lambda *args, **kwargs: None,
-                'update': lambda *args, **kwargs: None,
-                'delete': lambda *args, **kwargs: None,
-                'get': lambda *args, **kwargs: {'ids': [], 'metadatas': []},
-                'query': lambda *args, **kwargs: {'ids': [[]], 'metadatas': [[]], 'distances': [[]]},
-                'count': lambda: 0
+                'upsert': lambda self, *args, **kwargs: None,
+                'update': lambda self, *args, **kwargs: None,
+                'delete': lambda self, *args, **kwargs: None,
+                'get': lambda self, *args, **kwargs: {'ids': [], 'metadatas': []},
+                'query': lambda self, *args, **kwargs: {'ids': [[]], 'metadatas': [[]], 'distances': [[]]},
+                'count': lambda self, *args, **kwargs: 0
             })()
 
     # ─────────────────────────────────────────────────

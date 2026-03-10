@@ -15,6 +15,7 @@ from .memory_ops import MemoryOperationsController
 from .interaction import InteractionController
 from .autonomous import AutonomousController
 from .perception import PerceptionController
+from .slm_core import SLMCore
 from core.agent_state import StateMachine, AgentState
 
 logger = get_logger("cognitive_engine")
@@ -60,6 +61,7 @@ class CognitiveEngine:
         self.perception_ops = PerceptionController(self)
         self.interaction = InteractionController(self)
         self.autonomous = AutonomousController(self)
+        self.slm = SLMCore()
 
         if not os.path.exists("outputs"):
             os.makedirs("outputs")

@@ -7,7 +7,7 @@ except ImportError:
 try:
     import spacy
     SPACY_AVAILABLE = True
-except ImportError:
+except Exception:
     SPACY_AVAILABLE = False
 import logging
 from colorama import Fore, Style

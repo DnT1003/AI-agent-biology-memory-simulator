@@ -401,6 +401,7 @@ class SelfModel:
         """Cập nhật trạng thái sinh lý. Trả về True nếu bị sang chấn tâm lý."""
         target_mood = float(emotional_input.get('valence', 0.0) or 0.0)
         arousal = float(emotional_input.get('arousal', 0.0) or 0.0)
+        is_shocked = False
 
         with self.lock:
             # [Phase 23] Sensitivity Matrix Impact

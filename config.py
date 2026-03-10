@@ -8,6 +8,11 @@ class Config:
     MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.0-flash")
     DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-3.1-pro")
     EMBEDDING_MODEL = "models/gemini-embedding-001"
+    
+    # HYBRID MODE CONFIG
+    USE_HYBRID = True                # Cho phép tự động chuyển đổi Cloud/Local
+    USE_LOCAL_ONLY = False           # Nếu True, ngắt hoàn toàn Gemini
+    FORCE_LOCAL_COMMANDS = ["/local", "offline"] # Câu lệnh ép dùng local
 
     # GIOI HAN SINH HOC (BOUNDED MEMORY)
     FORGETTING_RATE = 0.05          # Toc do quen co ban
@@ -37,6 +42,18 @@ class Config:
     # LOCAL LLM (OLLAMA)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api")
     LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "phi3:mini")
+    
+    # CUSTOM SLM (Aura-Flash Core)
+    SLM_DIR = os.path.join(os.path.dirname(__file__), "core", "engine", "nanogpt")
+    SLM_ENABLED = True
+    
+    # AURA-FLASH 1B MoE CONFIG (~1B Parameters)
+    SLM_D_MODEL = 896
+    SLM_N_LAYERS = 24
+    SLM_N_HEADS = 16
+    SLM_N_KV_HEADS = 4  # GQA
+    SLM_N_EXPERTS = 8   # MoE
+    SLM_TOP_K = 2
 
     # STORAGE LIMITS (Phase 9 - Sprint D)
     MAX_STORAGE_SIZE = 500 * 1024 * 1024  # 500MB

@@ -121,6 +121,9 @@ class InteractionController:
                 return {"response": "Em... em mệt quá... xin lỗi, em phải chợp mắt một lát...", "valence": -0.2, "arousal": -0.5}
             # Thêm các reflex khác ở đây
 
+        tools_instruction = self.engine.skills.get_prompt_instructions() if hasattr(self.engine, 'skills') else ""
+        reader_status = self.engine.reader.get_status() if hasattr(self.engine, 'reader') else ""
+        value_system_context = self.engine.value_system.get_moral_context() if hasattr(self.engine, 'value_system') else ""
         system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status, value_system_context)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
@@ -229,7 +232,7 @@ class InteractionController:
             print(f"\n{Fore.GREEN}📖 [DIRECT LINK]: Phát hiện URL Docln. Đang nạp sách...{Style.RESET_ALL}")
             result_msg = "Sẵn sàng đọc!" if self.engine.reader.set_novel_by_url(url) else "Không lấy được chương từ link này."
             print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} Ồ, để em nạp cái link này vào đầu nhé~ {result_msg} Em sẽ đọc khi rảnh!")
-            with self.engine._memory_lock:
+            with self.engine.memory.lock:
                 self.engine.short_term_buffer.append(f"User: {user_input}")
                 self.engine.short_term_buffer.append(f"Aura: {result_msg}")
             self.engine.memory_ops.save_short_term_memory()
@@ -431,7 +434,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             threading.Thread(target=_async_search, daemon=True).start()
 
         threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output)).start()
-        with self.engine._memory_lock:
+        with self.engine.memory.lock:
             self.engine.short_term_buffer.append(f"User: {user_input}")
             self.engine.short_term_buffer.append(f"Aura: {response}")
             if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]

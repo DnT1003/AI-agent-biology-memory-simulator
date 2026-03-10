@@ -20,8 +20,15 @@ class LLM:
         self.local_llm = LocalLLM()
         self.ego = ego # Tham chiếu tới SelfModel để check Fatigue
 
-    def _should_use_local(self) -> bool:
-        """Quyết định dùng Local LLM nếu Aura quá mệt mỏi (> 0.7) hoặc mất kết nối"""
+    def _should_use_local(self, prompt: str = "") -> bool:
+        """Quyết định dùng Local LLM dựa trên: Config, Fatigue, lệnh đặc thù hoặc mất mạng"""
+        if Config.USE_LOCAL_ONLY:
+            return True
+            
+        # Kiểm tra lệnh đặc thù ép dùng local
+        if prompt and any(cmd in prompt.lower() for cmd in Config.FORCE_LOCAL_COMMANDS):
+            return True
+            
         if self.ego and getattr(self.ego, 'fatigue', 0.0) > 0.7:
             return True
         return False
@@ -52,7 +59,7 @@ class LLM:
         reraise=True
     )
     def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
-        if (self._should_use_local() or force_local) and not model_override:
+        if (self._should_use_local(prompt) or force_local) and not model_override:
             if image_path:
                 print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: {'Force Local' if force_local else 'Hệ thần kinh mệt mỏi'}. Sử dụng Local LLM (Phi-3).{Style.RESET_ALL}")
@@ -96,7 +103,7 @@ class LLM:
         reraise=True
     )
     def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, image_path: str = None) -> str:
-        if self._should_use_local() and not model_override:
+        if self._should_use_local(prompt) and not model_override:
             if image_path:
                 print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: Hệ thần kinh mệt mỏi. Chuyển sang Local LLM (Phi-3) để phản xạ nhanh.{Style.RESET_ALL}")
@@ -131,7 +138,7 @@ class LLM:
 
     def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None):
         prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
-        if self._should_use_local() and not model_override:
+        if self._should_use_local(prompt) and not model_override:
             yield from self.local_llm.generate_text_stream(prompt, temperature)
             return
 

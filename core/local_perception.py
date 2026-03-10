@@ -16,6 +16,8 @@ class LocalPerception:
     """
     def __init__(self, model_name="cardiffnlp/twitter-roberta-base-sentiment"):
         print(f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: Đang khởi tạo mô hình {model_name}...{Style.RESET_ALL}")
+        self.model_name = model_name
+        self.sentiment_analyzer = None
         if TRANSFORMERS_AVAILABLE:
             try:
                 self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,7 +30,7 @@ class LocalPerception:
             except Exception as e:
                 print(f"{Fore.RED}❌ [LOCAL PERCEPTION]: Lỗi khi nạp mô hình: {e}{Style.RESET_ALL}")
         else:
-            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers/Torch NOT AVAILABLE (Python 3.14 incompatibility). Sentiment analysis disabled.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice on port 8001.{Style.RESET_ALL}")
 
     def analyze(self, text: str) -> dict:
         """
@@ -38,6 +40,16 @@ class LocalPerception:
         - Neutral  -> Valence trung bình (0.0), Arousal thấp (0.2)
         - Positive -> Valence cao (0.7), Arousal trung bình (0.5)
         """
+        if not TRANSFORMERS_AVAILABLE:
+            import requests
+            try:
+                resp = requests.post("http://127.0.0.1:8001/analyze", json={"text": text}, timeout=5)
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception as e:
+                pass
+            return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+
         if not self.sentiment_analyzer:
             return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
 

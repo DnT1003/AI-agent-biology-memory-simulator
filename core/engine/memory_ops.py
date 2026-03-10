@@ -7,6 +7,7 @@ from colorama import Fore, Style
 from config import Config
 from core.memory import MemoryTrace, MemoryType
 from core.prompts import get_semantic_drift_prompt, get_sleep_dream_prompt
+from core.agent_state import AgentState
 
 class MemoryOperationsController:
     # Phase 14: Sliding Context Window cap
@@ -15,7 +16,9 @@ class MemoryOperationsController:
     def __init__(self, engine):
         self.engine = engine
         from core.engine.integrity_filter import IntegrityFilter
+        from core.engine.slm_trainer import SLMTrainer
         self.integrity_filter = IntegrityFilter(engine)
+        self.slm_trainer = SLMTrainer(engine)
 
     def _apply_fog_masking(self, content: str) -> str:
         """[Phase 21] Che mờ các chi tiết cụ thể nếu Aura đang mệt mỏi hoặc stress."""
@@ -49,7 +52,7 @@ class MemoryOperationsController:
                     
                     if time.time() - last_updated < 3 * 3600:
                         # Chi phuc hoi toi da STM_MAX_ENTRIES cuoi cung
-                        with self.engine._memory_lock:
+                        with self.engine.memory.lock:
                             self.engine.short_term_buffer = saved_buffer[-self.STM_MAX_ENTRIES:]
                             count = len(self.engine.short_term_buffer)
                         print(f"{Fore.LIGHTBLACK_EX}[WORKING MEMORY]: Phuc hoi {count} ky uc ngan han tu phien truoc.{Style.RESET_ALL}")
@@ -61,7 +64,7 @@ class MemoryOperationsController:
     def save_short_term_memory(self):
         """Luu de mang tri nho ngan han xuong o cung (voi cap STM_MAX_ENTRIES)"""
         try:
-            with self.engine._memory_lock:
+            with self.engine.memory.lock:
                 # Phase 14: Cap truoc khi luu — tranh file phong to vo han
                 if len(self.engine.short_term_buffer) > self.STM_MAX_ENTRIES:
                     self.engine.short_term_buffer = self.engine.short_term_buffer[-self.STM_MAX_ENTRIES:]
@@ -265,6 +268,7 @@ class MemoryOperationsController:
         self._tool_workshop_phase()
         self._calibration_phase()
         self._belief_evolution_phase()
+        self.slm_trainer.distill_memories_to_dataset()
         
         # [Phase 19] Cập nhật Mood dựa trên tổng hòa ký ức đã được chữa lành
         mems_after = self.engine.memory.get_all()
@@ -374,7 +378,7 @@ class MemoryOperationsController:
         ] if val > 0.5)
 
         if self.engine.ego.stress > 0.75 or negative_stats_count >= 2:
-            with self.engine._memory_lock:
+            with self.engine.memory.lock:
                 buffer_snapshot = list(self.engine.short_term_buffer)
             if len(buffer_snapshot) > 0:
                 print(f"{Fore.LIGHTBLACK_EX}🔍 [GUILT REFLECTION]: Đang suy ngẫm lại hành vi trong ngày...{Style.RESET_ALL}")
@@ -470,7 +474,7 @@ class MemoryOperationsController:
 
     def _identity_evolution_phase(self):
         """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity & Values."""
-        with self.engine._memory_lock:
+        with self.engine.memory.lock:
             buffer_snapshot = list(self.engine.short_term_buffer)
         if not buffer_snapshot or len(buffer_snapshot) < 4:
             return  # Quá ít tương tác để đúc kết
@@ -541,7 +545,7 @@ class MemoryOperationsController:
 
     def _tool_workshop_phase(self):
         """Phase 4 Self-Evolution: Aura tự học và viết code tạo Tool mới khi phát hiện lỗ hổng kỹ năng."""
-        with self.engine._memory_lock:
+        with self.engine.memory.lock:
             buffer_snapshot = list(self.engine.short_term_buffer)
         if not buffer_snapshot:
             return
@@ -618,7 +622,7 @@ class MemoryOperationsController:
 
     def _calibration_phase(self):
         """Phase 1 Self-Evolution: Aura tự hiệu chỉnh tham số sinh học dựa trên phản tư."""
-        with self.engine._memory_lock:
+        with self.engine.memory.lock:
             buffer_snapshot = list(self.engine.short_term_buffer)
         if not buffer_snapshot:
             return

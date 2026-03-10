@@ -241,7 +241,7 @@ class AutonomousController:
                 print(f"{Fore.LIGHTBLACK_EX}💭 Tự nghĩ: {thought}{Style.RESET_ALL}")
             if response:
                 print(f"{Fore.CYAN}🗣️ Aura (Chủ động):{Style.RESET_ALL} {response}")
-                with self.engine._memory_lock:
+                with self.engine.memory.lock:
                     self.engine.short_term_buffer.append(f"Aura (Chủ động): {response.strip()}")
                 self.engine.memory_ops.save_short_term_memory()
                 
@@ -352,7 +352,7 @@ class AutonomousController:
                 print(f"{Fore.LIGHTGREEN_EX}🧠 [REWARD SYSTEM]: Hoàn thành action. Dopamine +{reward:.2f} (Nhạy bén: {receptors:.2f}){Style.RESET_ALL}")
                 
                 # Lưu kết quả vào Short-term Memory để Aura nhớ tiến độ
-                with self.engine._memory_lock:
+                with self.engine.memory.lock:
                     self.engine.short_term_buffer.append(f"[Ký ức hoàn thành bước '{func_name}']: {str(tool_res)[:200]}...")
                 self.engine.memory_ops.save_short_term_memory()
                 
