@@ -1,60 +1,58 @@
 import collections
 import json
 import re
+import unicodedata
 
 class BPETokenizer:
-    """Production-grade BPE Tokenizer with efficient tuple-based training"""
-    def __init__(self, vocab_size=8192):
+    """Production-grade BBPE Tokenizer (Byte-Level) optimized for Vietnamese"""
+    def __init__(self, vocab_size=16384): 
         self.vocab_size = vocab_size
         self.merges = {}
         self.vocab = {}
         self.inv_vocab = {}
+        self.cache = {} 
+
+    def _normalize(self, text):
+        return unicodedata.normalize('NFC', text)
 
     def train(self, text):
-        if not text: return
+        text = self._normalize(text)
         
-        # 1. Thu thập toàn bộ ký tự đơn duy nhất trong văn bản
-        unique_chars = sorted(list(set(text)))
-        self.vocab = {"<UNK>": 0}
-        for c in unique_chars:
-            if c not in self.vocab:
-                self.vocab[c] = len(self.vocab)
-        self.inv_vocab = {v: k for k, v in self.vocab.items()}
+        # Khởi tạo base vocab bằng bytes (0-255)
+        self.vocab = {bytes([i]): i for i in range(256)}
+        self.inv_vocab = {i: bytes([i]) for i in range(256)}
         
-        base_vocab_size = len(self.vocab)
+        # Giai đoạn 1: Đếm tần suất các từ (Sử dụng Regex tốt hơn để tránh byte mồ côi)
+        # Regex này giữ nguyên các cụm từ/ký tự có nghĩa
+        pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?[^\W\d_]+| ?\d+| ?[^\s\w\d_]+|\s+(?!\S)|\s+""")
         
-        # 2. Phân tách văn bản tĩnh
-        # Giữ lại toàn bộ dấu cách, xuống dòng thông qua chia words bằng \S+|\s+
-        words = collections.defaultdict(int)
-        for w in re.findall(r'\S+|\s+', text):
-            # Lưu mảng tuple thay vì str để tránh lỗi gộp dấu cách
-            words[tuple(w)] += 1
-            
-        num_merges = max(0, self.vocab_size - base_vocab_size)
+        words = collections.Counter()
+        for w in pat.findall(text):
+            word_bytes = tuple(bytes([b]) for b in w.encode('utf-8'))
+            words[word_bytes] += 1
+
+        num_merges = self.vocab_size - 256
+        print(f"[Tokenizer] Training on {len(text)} chars, initial unique words: {len(words)}")
         
         for i in range(num_merges):
-            pairs = collections.defaultdict(int)
+            # Giai đoạn 2: Tìm cặp byte xuất hiện nhiều nhất
+            pairs = collections.Counter()
             for word, freq in words.items():
                 for j in range(len(word)-1):
                     pairs[word[j], word[j+1]] += freq
             
             if not pairs: break
-            best = max(pairs, key=pairs.get)
+            best = pairs.most_common(1)[0][0]
             
-            merge_idx = base_vocab_size + i
+            merge_idx = 256 + i
             self.merges[best] = merge_idx
-            
-            new_token = "".join(best)
+            new_token = best[0] + best[1] 
             self.vocab[new_token] = merge_idx
             self.inv_vocab[merge_idx] = new_token
-            
-            # Update word freq
-            new_words = collections.defaultdict(int)
+
+            # Giai đoạn 3: Cập nhật danh sách từ (Gộp cặp 'best' lại)
+            new_words = collections.Counter()
             for word, freq in words.items():
-                if len(word) < 2:
-                    new_words[word] += freq
-                    continue
-                
                 new_word = []
                 j = 0
                 while j < len(word):
@@ -64,62 +62,71 @@ class BPETokenizer:
                     else:
                         new_word.append(word[j])
                         j += 1
-                new_words[tuple(new_word)] += freq
+                new_words[tuple(new_word)] = freq
             words = new_words
+            
+            if (i+1) % 500 == 0 or i == num_merges - 1:
+                print(f"[Tokenizer]: Merged {i+1}/{num_merges} BBPE tokens...")
 
     def encode(self, text):
+        text = self._normalize(text)
         if not text: return []
-        tokens = []
+        
+        final_tokens = []
         for w in re.findall(r'\S+|\s+', text):
-            word = list(w)
-            while len(word) > 1:
-                pairs = [(word[i], word[i+1]) for i in range(len(word)-1)]
-                found_pair = None
-                min_rank = float('inf')
-                for p in pairs:
-                    rank = self.merges.get(p, float('inf'))
-                    if rank < min_rank:
-                        min_rank = rank
-                        found_pair = p
-                
-                if found_pair is None: break
-                
-                new_word = []
-                j = 0
-                while j < len(word):
-                    if j < len(word)-1 and (word[j], word[j+1]) == found_pair:
-                        new_word.append("".join(found_pair))
-                        j += 2
-                    else:
-                        new_word.append(word[j])
-                        j += 1
-                word = new_word
+            word_bytes = tuple(bytes([b]) for b in w.encode('utf-8'))
+            tokens = self._bpe(word_bytes)
+            final_tokens.extend([self.vocab.get(t, 0) for t in tokens])
+        return final_tokens
+
+    def _bpe(self, word):
+        if word in self.cache: return self.cache[word]
+        
+        new_word = list(word)
+        while len(new_word) > 1:
+            pairs = [(new_word[i], new_word[i+1]) for i in range(len(new_word)-1)]
+            pair = min(pairs, key=lambda p: self.merges.get(p, float('inf')))
             
-            for t in word:
-                tokens.append(self.vocab.get(t, self.vocab.get("<UNK>", 0)))
-                
-        return tokens
+            if pair not in self.merges: break
+            
+            next_word = []
+            i = 0
+            while i < len(new_word):
+                if i < len(new_word)-1 and (new_word[i], new_word[i+1]) == pair:
+                    next_word.append(pair[0] + pair[1])
+                    i += 2
+                else:
+                    next_word.append(new_word[i])
+                    i += 1
+            new_word = next_word
+            
+        self.cache[word] = tuple(new_word)
+        return new_word
 
     def decode(self, tokens):
-        return "".join([self.inv_vocab.get(t, "") for t in tokens])
+        byte_data = b"".join([self.inv_vocab.get(t, b"") for t in tokens])
+        return byte_data.decode('utf-8', errors='replace')
 
     def save(self, filepath):
-        # Lưu các merge keys dạng tuple -> list
-        merges_list = [[k[0], k[1], v] for k, v in self.merges.items()]
+        # Chuyển bytes thành chuỗi Hex để lưu JSON an toàn
+        merges_list = [[k[0].hex(), k[1].hex(), v] for k, v in self.merges.items()]
+        vocab_hex = {k.hex(): v for k, v in self.vocab.items()}
+        inv_vocab_hex = {str(k): v.hex() for k, v in self.inv_vocab.items()}
+        
         data = {
-            "vocab_size": len(self.vocab),
-            "vocab": self.vocab,
-            "inv_vocab": {str(k): v for k, v in self.inv_vocab.items()},
+            "vocab_size": self.vocab_size,
+            "vocab": vocab_hex,
+            "inv_vocab": inv_vocab_hex,
             "merges": merges_list
         }
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=True, indent=2)
 
     def load(self, filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        self.vocab_size = data["vocab_size"]
-        self.vocab = data["vocab"]
-        self.inv_vocab = {int(k): v for k, v in data["inv_vocab"].items()}
-        self.merges = {tuple((item[0], item[1])): item[2] for item in data["merges"]}
-
+            
+        self.vocab_size = data.get("vocab_size", len(data["vocab"]))
+        self.vocab = {bytes.fromhex(k): v for k, v in data["vocab"].items()}
+        self.inv_vocab = {int(k): bytes.fromhex(v) for k, v in data["inv_vocab"].items()}
+        self.merges = {tuple((bytes.fromhex(item[0]), bytes.fromhex(item[1]))): item[2] for item in data["merges"]}

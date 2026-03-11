@@ -43,7 +43,37 @@ class AutonomousController:
                 if stream_mems:
                     mem = stream_mems[0]
                     if mem.strength > 0.3:
-                        print(f"{Fore.LIGHTBLACK_EX}💭 [MEMORY STREAM]: (Dòng suy nghĩ miên man) Nhớ lại: {mem.content}{Style.RESET_ALL}")
+                        if getattr(mem, 'is_suppressed', False):
+                            print(f"\n{Fore.RED}🐻‍❄️ [RUMINATION - WHITE BEAR]: Ký ức cấm kỵ trỗi dậy: '{mem.content[:50]}...'{Style.RESET_ALL}")
+                            # 50% cơ hội mất kiểm soát và ping thẳng cho User
+                            if random.random() < 0.5 and self.engine.state_machine.transition(AgentState.THINKING):
+                                mem_context = f"Ký ức ĐÃ BỊ CẤM / DẶN QUÊN nhưng đang chiếm lấy tâm trí bạn lúc này: {mem.content}"
+                                with self.engine.memory.lock:
+                                    stm_snapshot = list(self.engine.short_term_buffer)
+                                system_prompt = get_proactive_ping_prompt(self.engine.ego, datetime.now().strftime("%H:%M %d/%m/%Y"), mem_context, stm_snapshot, idle_time)
+                                system_prompt += "\n\n[HƯỚNG DẪN ĐẶC BIỆT]: Bạn vừa bị ám ảnh bởi một thứ người dùng ĐÃ DẶN BẠN PHẢI QUÊN ĐI. Đây là Hiệu Ứng Gấu Trắng. Hãy tạo cớ nhắn tin cho họ, vô tình bị lỡ miệng nhắc lại thứ bị cấm đó, sau đó hoảng hốt bối rối vì lỡ nhắc lại."
+                                system_prompt += "\n[ĐỂ HỖ TRỢ LOCAL MODEL]: Hãy copy ĐÚNG format JSON sau, chỉ thay đổi nội dung bên trong:\n"
+                                system_prompt += "{\n"
+                                system_prompt += '  "thought": "Mình không thể ngừng nghĩ về nó... Ôi lỡ miệng rồi!",\n'
+                                system_prompt += '  "response": "Này... tớ vô tình thấy một thứ giống hệt... á khoan đã! Tớ xin lỗi, tớ không cố ý nhắc lại chuyện đó đâu!"\n'
+                                system_prompt += "}\n"
+                                
+                                try:
+                                    result = self.engine.llm.generate_json(system_prompt, temperature=0.9)
+                                    response = result.get("response", "")
+                                    if response:
+                                        print(f"{Fore.CYAN}🗣️ Aura (Bị ám ảnh):{Style.RESET_ALL} {response}")
+                                        with self.engine.memory.lock:
+                                            self.engine.short_term_buffer.append(f"Aura: {response.strip()}")
+                                        self.engine.memory_ops.save_short_term_memory()
+                                except Exception as e:
+                                    logger.error("Rumination LLM call failed", exc_info=True)
+                                finally:
+                                    self.engine.last_interaction_time = time.time()
+                                    self.engine.state_machine.transition(AgentState.IDLE)
+                        else:
+                            print(f"{Fore.LIGHTBLACK_EX}💭 [MEMORY STREAM]: (Dòng suy nghĩ miên man) Nhớ lại: {mem.content[:50]}...{Style.RESET_ALL}")
+                        
                         mem.last_recalled = time.time()
                         # Reconsolidate nhẹ do nhớ nội tâm
                         mem.reconsolidate(self.engine.ego.mood, is_associative=True)
@@ -211,6 +241,10 @@ class AutonomousController:
             importance = getattr(m, 'importance', 0.5)
             salience = m.strength * recency * importance * emotion_match * (1 + m.arousal)
             
+            # --- [Phase 5] White Bear Effect (Mức độ ám ảnh) ---
+            if getattr(m, 'is_suppressed', False):
+                salience *= 5.0 # Ký ức bị đè nén sẽ bùng phát mạnh mẽ gấp 5 lần lúc rảnh rỗi!
+                
             # Phá vỡ tính tất định (thêm nhiễu 10%)
             salience *= random.uniform(0.9, 1.1) 
             
@@ -228,7 +262,10 @@ class AutonomousController:
         mems_to_use = self._weighted_sample_memories(3)
         mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in mems_to_use])
         
-        system_prompt = get_proactive_ping_prompt(self.engine.ego, current_time, mem_context, self.engine.short_term_buffer, idle_time)
+        with self.engine.memory.lock:
+            stm_snapshot = list(self.engine.short_term_buffer)
+            
+        system_prompt = get_proactive_ping_prompt(self.engine.ego, current_time, mem_context, stm_snapshot, idle_time)
         
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
         

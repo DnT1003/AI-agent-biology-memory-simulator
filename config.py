@@ -47,13 +47,13 @@ class Config:
     SLM_DIR = os.path.join(os.path.dirname(__file__), "core", "engine", "nanogpt")
     SLM_ENABLED = True
     
-    # AURA-FLASH 1B MoE CONFIG (~1B Parameters)
-    SLM_D_MODEL = 896
-    SLM_N_LAYERS = 24
+    # AURA-FLASH LITE CONFIG (~425M Parameters - Sweet Spot for 6GB VRAM)
+    SLM_D_MODEL = 1024
+    SLM_N_LAYERS = 36    # Tăng độ sâu (Lý luận tốt hơn)
     SLM_N_HEADS = 16
-    SLM_N_KV_HEADS = 4  # GQA
-    SLM_N_EXPERTS = 8   # MoE
-    SLM_TOP_K = 2
+    SLM_N_KV_HEADS = 4   # GQA
+    SLM_N_EXPERTS = 0    # Đã tháo dỡ MoE
+    SLM_TOP_K = 0
 
     # STORAGE LIMITS (Phase 9 - Sprint D)
     MAX_STORAGE_SIZE = 500 * 1024 * 1024  # 500MB

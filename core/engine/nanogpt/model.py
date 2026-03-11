@@ -7,34 +7,26 @@ import sys
 
 # Hỗ trợ chạy trực tiếp và import từ engine
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
-try:
-    from config import Config
-except ImportError:
-    class Config:
-        SLM_D_MODEL = 1024
-        SLM_N_LAYERS = 24
-        SLM_N_HEADS = 16
-        SLM_N_KV_HEADS = 4
-        SLM_N_EXPERTS = 8
-        SLM_TOP_K = 2
+import config as slm_config
 
-# --- Aura-Flash V5.4 (Ring Attention) Hyperparameters ---
-batch_size = 8          # Giảm batch size để bù cho Context cực dài
-block_size = 4096       # NÂNG CẤP: Context 4096 nhờ Ring-Blockwise Attention
-max_iters = 5000
-eval_interval = 500
-learning_rate = 1e-4    
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 50
-n_embd = Config.SLM_D_MODEL
-n_layer = Config.SLM_N_LAYERS
-n_head = Config.SLM_N_HEADS
-n_kv_head = Config.SLM_N_KV_HEADS
-n_experts = Config.SLM_N_EXPERTS
-top_k = Config.SLM_TOP_K
-window_size = 512       # Tăng cửa sổ trượt
-attn_block_size = 512   # Kích thước khối khi tính Ring Attention
-dropout = 0.0          
+# --- Aura-MoE 700M (Pocket AI) Hyperparameters ---
+batch_size = slm_config.batch_size
+block_size = slm_config.block_size
+max_iters = slm_config.max_iters
+eval_interval = slm_config.eval_interval
+learning_rate = slm_config.learning_rate    
+device = slm_config.device
+eval_iters = slm_config.eval_iters
+
+n_embd = slm_config.d_model
+n_layer = slm_config.n_layers
+n_head = slm_config.n_heads
+n_kv_head = slm_config.n_kv_heads
+n_experts = slm_config.n_experts
+top_k = slm_config.top_k
+window_size = 512       
+attn_block_size = 512   
+dropout = slm_config.dropout          
 # ------------
 
 torch.manual_seed(1337)
@@ -49,7 +41,7 @@ class RMSNorm(nn.Module):
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
     def forward(self, x):
-        return self._norm(x.float()).type_as(x) * self.weight
+        return self._norm(x) * self.weight
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings=8192, base=10000):
@@ -74,12 +66,14 @@ def apply_rotary_pos_emb(q, k, cos, sin):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-# --- MIXTURE OF EXPERTS (MoE) ---
+# --- MIXTURE OF EXPERTS (AuraMoE Pocket AI) ---
 
 class AuraExpert(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
+        # SwiGLU hidden dim
         hidden_dim = int(2 * 4 * n_embd / 3) 
+        # Survival Mode: bias=False bắt buộc
         self.w1 = nn.Linear(n_embd, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, n_embd, bias=False)
         self.w3 = nn.Linear(n_embd, hidden_dim, bias=False)
@@ -89,51 +83,70 @@ class AuraExpert(nn.Module):
 class AuraMoE(nn.Module):
     def __init__(self, n_embd, n_experts, top_k):
         super().__init__()
-        self.experts = nn.ModuleList([AuraExpert(n_embd) for _ in range(n_experts)])
-        self.router = nn.Linear(n_embd, n_experts, bias=False)
+        self.n_experts = n_experts
         self.top_k = top_k
+        self.router = nn.Linear(n_embd, n_experts, bias=False)
+        self.experts = nn.ModuleList([AuraExpert(n_embd) for _ in range(n_experts)])
+        
     def forward(self, x):
+        # x shape: (B, T, C)
         B, T, C = x.shape
-        x_flat = x.view(-1, C) 
-        logits = self.router(x_flat) 
-        probs = F.softmax(logits, dim=-1)
-        scores, indices = torch.topk(probs, self.top_k, dim=-1) 
+        x_flat = x.view(-1, C) # (B*T, C)
         
-        scores = scores / scores.sum(dim=-1, keepdim=True)
+        # Routing logits
+        router_logits = self.router(x_flat) # (B*T, n_experts)
+        routing_probs = F.softmax(router_logits, dim=1)
         
-        output = torch.zeros_like(x_flat)
+        # Chọn top_k expert
+        routing_weights, selected_experts = torch.topk(routing_probs, self.top_k, dim=-1) # (B*T, top_k)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True) # Normalize top_k weights
         
-        # --- Chunk-based MoE Processing to prevent OOM ---
-        chunk_size = 1024
-        num_tokens = x_flat.size(0)
+        # Tạo output tensor rỗng
+        final_output = torch.zeros_like(x_flat)
         
-        for start_idx in range(0, num_tokens, chunk_size):
-            end_idx = min(start_idx + chunk_size, num_tokens)
+        # Tính toán trên từng Expert (Tối ưu bằng cách lọc mask)
+        for i, expert in enumerate(self.experts):
+            # Tìm các vị trí (tokens) mà expert `i` được chọn (nằm trong cột top_k nào đó)
+            expert_mask = (selected_experts == i)
+            token_indices = expert_mask.any(dim=-1) # Boolean mask những tokens gọi expert i
             
-            chunk_x = x_flat[start_idx:end_idx]
-            chunk_indices = indices[start_idx:end_idx]
-            chunk_scores = scores[start_idx:end_idx]
-            
-            for i, expert in enumerate(self.experts):
-                mask = (chunk_indices == i).any(dim=-1)
-                if mask.any():
-                    expert_out = expert(chunk_x[mask]) * chunk_scores[chunk_indices == i].unsqueeze(-1)
-                    out_view = output[start_idx:end_idx]
-                    out_view[mask] += expert_out
-                    
-        return output.view(B, T, C)
+            if token_indices.any():
+                # Lấy dữ liệu của các token đó
+                expert_input = x_flat[token_indices]
+                
+                # Forward qua expert i
+                expert_output = expert(expert_input)
+                
+                # Tìm ra các trọng số (weight) tương ứng của expert i cho các token đó
+                # extract weight from routing_weights matching expert `i`
+                weight_indices = expert_mask[token_indices].nonzero(as_tuple=True)[1]
+                weights = routing_weights[token_indices, weight_indices].unsqueeze(1)
+                
+                # Cộng dồn kết quả vào final_output
+                final_output[token_indices] += expert_output * weights
+                
+        # --- EXPERT LOAD BALANCING (AUXILIARY LOSS) ---
+        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        if self.training:
+            expert_mask = F.one_hot(selected_experts, num_classes=self.n_experts).float() 
+            f_i = expert_mask.sum(dim=1).mean(dim=0)          
+            p_i = routing_probs.mean(dim=0)            
+            aux_loss = self.n_experts * torch.sum(f_i * p_i)
+                
+        return final_output.view(B, T, C), aux_loss
 
 # --- RING-INSPIRED BLOCKWISE ATTENTION ---
 
 class AuraAttention(nn.Module):
     """Attention với Ring-Blockwise để mở rộng Context cực đại mà không nổ VRAM"""
-    def __init__(self, n_embd, n_head, n_kv_head, window_size=512):
+    def __init__(self, n_embd, n_head, n_kv_head, max_batch_size=8, max_seq_len=2048):
         super().__init__()
         self.n_head = n_head
         self.n_kv_head = n_kv_head
         self.head_dim = n_embd // n_head
         self.kv_group_size = n_head // n_kv_head
-        self.window_size = window_size
+        self.max_batch_size = max_batch_size
+        self.max_seq_len = max_seq_len
         
         self.wq = nn.Linear(n_embd, n_embd, bias=False)
         self.wk = nn.Linear(n_embd, n_kv_head * self.head_dim, bias=False)
@@ -142,63 +155,73 @@ class AuraAttention(nn.Module):
         
         self.rope = RotaryEmbedding(self.head_dim)
         
-        # Sliding Window Mask
-        # Sử dụng trễ (lazy) để tiết kiệm memory cho mask lớn
-        self.register_buffer('sliding_mask', None, persistent=False)
+        self.register_buffer('k_cache', torch.zeros(max_batch_size, n_kv_head, max_seq_len, self.head_dim), persistent=False)
+        self.register_buffer('v_cache', torch.zeros(max_batch_size, n_kv_head, max_seq_len, self.head_dim), persistent=False)
 
-    def forward(self, x):
+    def forward(self, x, start_pos=None, use_cache=False):
         B, T, C = x.shape
         q = self.wq(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         k = self.wk(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.wv(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         
-        cos, sin = self.rope(v, seq_len=T)
-        q, _ = apply_rotary_pos_emb(q, q, cos, sin)
-        k = k.repeat_interleave(self.kv_group_size, dim=1)
-        v = v.repeat_interleave(self.kv_group_size, dim=1)
-        _, k = apply_rotary_pos_emb(k, k, cos, sin)
+        seq_offset = start_pos if start_pos is not None else 0
         
-        # --- BLOCKWISE RING ATTENTION LOGIC ---
-        # Thay vì tính Full Matrix (T, T), ta tính theo từng block (attn_block_size)
-        out = torch.zeros_like(q)
+        cos, sin = self.rope(v, seq_len=T + seq_offset)
+        cos_curr = cos[:, :, seq_offset:seq_offset+T, :]
+        sin_curr = sin[:, :, seq_offset:seq_offset+T, :]
         
-        # Nếu sequence ngắn, chạy Full Attention cho nhanh hoặc mặc kệ kích thước, gọi SDPA
-        if self.window_size >= T:
-            # Nếu window coverage full, ta có thể dùng SDPA causal=True gốc cực nhanh
-            out = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True)
+        q, _ = apply_rotary_pos_emb(q, q, cos_curr, sin_curr)
+        _, k = apply_rotary_pos_emb(k, k, cos_curr, sin_curr)
+
+        if use_cache and start_pos is not None:
+            fetch_len = min(start_pos, self.max_seq_len)
+            past_k = self.k_cache[:B, :, :fetch_len, :]
+            past_v = self.v_cache[:B, :, :fetch_len, :]
+            
+            k_out = torch.cat([past_k, k], dim=2)
+            v_out = torch.cat([past_v, v], dim=2)
+            
+            positions = torch.arange(start_pos, start_pos + T, device=x.device)
+            wrap_mask = positions >= self.max_seq_len
+            positions[wrap_mask] = 16 + ((positions[wrap_mask] - 16) % (self.max_seq_len - 16))
+            
+            for b in range(B):
+                for t_idx, pos in enumerate(positions):
+                    self.k_cache[b, :, pos, :] = k[b, :, t_idx, :]
+                    self.v_cache[b, :, pos, :] = v[b, :, t_idx, :]
+            
+            k_out = k_out.repeat_interleave(self.kv_group_size, dim=1)
+            v_out = v_out.repeat_interleave(self.kv_group_size, dim=1)
+            
+            out = F.scaled_dot_product_attention(q, k_out, v_out, attn_mask=None, dropout_p=0.0, is_causal=(T > 1))
         else:
-            # Blockwise processing (Ring-style)
-            # Trong thực tế, F.scaled_dot_product_attention cũng hoàn toàn xử lý được các Mask Boolean tự chế nhưng tốc độ sẽ rơi về 'math' backend (chậm hơn FlashAttention)
-            # Tuy nhiên với block_size = 512, SDPA (Math backend) có mask boolean vẫn tốn cực ít VRAM và nhanh hơn cách cũ.
+            k_out = k.repeat_interleave(self.kv_group_size, dim=1)
+            v_out = v.repeat_interleave(self.kv_group_size, dim=1)
+            out = F.scaled_dot_product_attention(q, k_out, v_out, attn_mask=None, dropout_p=0.0, is_causal=True)
             
-            mask = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))
-            for i in range(T):
-                for j in range(T):
-                    if i - j > self.window_size: mask[i, j] = False
-            
-        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
-        
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.wo(out)
 
 class AuraBlock(nn.Module):
-    def __init__(self, n_embd, n_head, n_kv_head, n_experts, top_k):
+    def __init__(self, n_embd, n_head, n_kv_head, n_experts=8, top_k=2):
         super().__init__()
-        self.attention = AuraAttention(n_embd, n_head, n_kv_head, window_size=window_size)
-        self.moe = AuraMoE(n_embd, n_experts, top_k)
+        self.attention = AuraAttention(n_embd, n_head, n_kv_head)
+        self.mlp = AuraMoE(n_embd, n_experts, top_k)
         self.attention_norm = RMSNorm(n_embd)
         self.ffn_norm = RMSNorm(n_embd)
-    def forward(self, x):
-        # Chúng ta wrap toàn bộ block này để checkpoint nếu cần
-        x = x + self.attention(self.attention_norm(x))
-        x = x + self.moe(self.ffn_norm(x))
-        return x
+    def forward(self, x, start_pos=None, use_cache=False):
+        attn_out = self.attention(self.attention_norm(x), start_pos=start_pos, use_cache=use_cache)
+        x = x + attn_out
+        ffn_out, aux_loss = self.mlp(self.ffn_norm(x))
+        x = x + ffn_out
+        return x, aux_loss
 
 class AuraFlashModel(nn.Module):
     def __init__(self, vocab_size, use_checkpoint=False):
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.token_embedding = nn.Embedding(vocab_size, n_embd)
+        # Sử dụng MoE Pocket AI (700M) để cân bằng tốc độ / trí tuệ trên 6GB VRAM
         self.layers = nn.ModuleList([AuraBlock(n_embd, n_head, n_kv_head, n_experts, top_k) for _ in range(n_layer)])
         self.norm = RMSNorm(n_embd)
         self.output = nn.Linear(n_embd, vocab_size, bias=False)
@@ -208,16 +231,18 @@ class AuraFlashModel(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, start_pos=None, use_cache=False):
         B, T = idx.shape
         x = self.token_embedding(idx)
         
+        total_aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 from torch.utils.checkpoint import checkpoint
-                x = checkpoint(layer, x, use_reentrant=False)
+                x, aux_loss = checkpoint(layer, x, use_reentrant=False)
             else:
-                x = layer(x)
+                x, aux_loss = layer(x, start_pos=start_pos, use_cache=use_cache)
+            total_aux_loss = total_aux_loss + aux_loss
                 
         x = self.norm(x)
         logits = self.output(x)
@@ -228,7 +253,8 @@ class AuraFlashModel(nn.Module):
             logits = logits.view(B*T, C)
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
-        return logits, loss
+            
+        return logits, loss, total_aux_loss
         
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
@@ -259,24 +285,37 @@ class AuraFlashModel(nn.Module):
         print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay:,} parameters")
         print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay:,} parameters")
         
-        # Nếu đang sử dụng CUDA, ta bật 'fused' để tăng tốc thuật toán học gấp rưỡi
+        # Nếu đang sử dụng CUDA, ta bật 'fused' để tăng tốc thuật toán học gấp rưỡi (Dành cho bản Fallback)
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
-        print(f"using fused AdamW: {use_fused}")
         
-        # Khởi tạo optimizer gốc của PyTorch với AMP
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        # ─── POCKET AI SURVIVAL MODE: BITSANDBYTES 8-BIT OPTIMIZER ───
+        # Native AdamW ngốn 14 bytes/param (32-bit state). 8-bit AdamW chỉ khoảng 6 bytes/param.
+        try:
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.AdamW8bit(optim_groups, lr=learning_rate, betas=betas)
+            print("using optimizer: bitsandbytes 8-bit AdamW (VRAM Savior!)")
+        except ImportError:
+            print(f"using optimizer: PyTorch Native AdamW (fused={use_fused}). LƯU Ý: VRAM SẼ CAO HƠN ĐỂ LƯU 32-BIT STATES.")
+            optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+            
         return optimizer
 
     def generate(self, idx, max_new_tokens):
+        start_pos = 0
         for _ in range(max_new_tokens):
-            idx_cond = idx[:, -block_size:]
-            logits, _ = self(idx_cond)
+            if start_pos > 0:
+                idx_cond = idx[:, -1:]
+            else:
+                idx_cond = idx
+                
+            logits, _, _ = self(idx_cond, start_pos=start_pos, use_cache=True)
             logits = logits[:, -1, :] 
             probs = F.softmax(logits, dim=-1) 
             idx_next = torch.multinomial(probs, num_samples=1) 
             idx = torch.cat((idx, idx_next), dim=1) 
+            start_pos += idx_cond.shape[1]
         return idx
 
 # --- TOKENIZATION (BPE Compression) ---
@@ -316,111 +355,13 @@ def get_batch(split):
     y = torch.stack([data_split[i+1:i+block_size+1] for i in ix])
     return x.to(device), y.to(device)
 
-# --- AURA-TINY (DRAFT MODEL FOR SPECULATIVE DECODING) ---
-
-class AuraTinyModel(nn.Module):
-    """Mô hình phản xạ siêu nhỏ (~30M params) để dự đoán nhanh"""
-    def __init__(self, vocab_size):
-        super().__init__()
-        # Thu gọn tối đa để đạt tốc độ cao
-        d_tiny = 256
-        n_lay_tiny = 4
-        n_head_tiny = 4
-        self.token_embedding = nn.Embedding(vocab_size, d_tiny)
-        self.layers = nn.ModuleList([
-            AuraBlock(d_tiny, n_head_tiny, n_head_tiny, n_experts=1, top_k=1) # Không dùng MoE cho Tiny
-            for _ in range(n_lay_tiny)
-        ])
-        self.norm = RMSNorm(d_tiny)
-        self.output = nn.Linear(d_tiny, vocab_size, bias=False)
-        
-    def forward(self, idx, targets=None):
-        x = self.token_embedding(idx)
-        for layer in self.layers:
-            x = layer(x)
-        x = self.norm(x)
-        logits = self.output(x)
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) if targets is not None else None
-        return logits, loss
-        
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        import inspect
-        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
-        ]
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        return optimizer
-
-# --- SPECULATIVE DECODING ENGINE ---
-
-@torch.no_grad()
-def speculative_generate(tiny_model, flash_model, idx, max_new_tokens, k=5):
-    """
-    Kỹ thuật Speculative Decoding: 
-    Tiny (Draft) dự đoán 'k' bước, Flash (Target) kiểm tra song song.
-    """
-    T_total = idx.shape[1] + max_new_tokens
-    while idx.shape[1] < T_total:
-        # 1. Draft sinh ra k tokens tiềm năng
-        curr_idx = idx
-        draft_tokens = []
-        for _ in range(k):
-            logits, _ = tiny_model(curr_idx[:, -block_size:])
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            draft_tokens.append(next_token)
-            curr_idx = torch.cat([curr_idx, next_token], dim=1)
-        
-        # 2. Target kiểm tra song song k tokens đó
-        # Chúng ta chạy Target qua toàn bộ chuỗi (original + draft)
-        full_logits, _ = flash_model(curr_idx[:, -block_size:])
-        
-        # Lấy logits tương ứng với các vị trí draft đã dự đoán
-        # Flash cung cấp logits cho vị trí T-1 đến T+k-1
-        target_probs = F.softmax(full_logits[:, -(k+1):-1, :], dim=-1)
-        
-        # 3. So sánh và chấp nhận
-        accepted_count = 0
-        for i in range(k):
-            draft_token = draft_tokens[i].item()
-            # Lấy token có xác suất cao nhất từ Target tại vị trí đó
-            target_token = torch.argmax(target_probs[:, i, :], dim=-1).item()
-            
-            if draft_token == target_token:
-                accepted_count += 1
-            else:
-                # Nếu sai, ta lấy token xịn từ Target và dừng lại
-                idx = torch.cat([idx, torch.tensor([[target_token]], device=device)], dim=1)
-                break
-        else:
-            # Nếu tất cả k tokens đều đúng, ta lấy thêm 1 token bonus từ Target
-            bonus_token = torch.argmax(full_logits[:, -1, :], dim=-1, keepdim=True)
-            idx = torch.cat([curr_idx, bonus_token], dim=1)
-            continue
-            
-        # Nếu có token được chấp nhận trước khi lỗi
-        if accepted_count > 0:
-            idx = torch.cat([idx, curr_idx[:, idx.shape[1]:idx.shape[1]+accepted_count]], dim=1)
-            
-    return idx[:, :T_total]
-
 if __name__ == "__main__":
     # Demo thông số
     model = AuraFlashModel(vocab_size)
-    tiny = AuraTinyModel(vocab_size)
     m = model.to(device)
-    t = tiny.to(device)
     
     total_params = sum(p.numel() for p in m.parameters())
-    tiny_params = sum(p.numel() for p in t.parameters())
     
-    print(f"--- Aura-Flash V5.5 (Speculative Ready) ---")
+    print(f"--- Aura-MoE 700M (Pocket AI) ---")
     print(f"Target Model (Flash): {total_params/1e6:.2f} M params")
-    print(f"Draft Model (Tiny)  : {tiny_params/1e6:.2f} M params")
-    print(f"Speedup Mechanism   : Speculative Decoding (k=5)")
+    print(f"Speedup Mechanism   : Active Params Routing (Top-2)")

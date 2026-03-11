@@ -180,6 +180,23 @@ class MemoryOperationsController:
         internal_thought = perception.get('internal_monologue', '...')
         new_valence, new_arousal, new_importance = perception.get('valence', 0.0), perception.get('arousal', 0.0), perception.get('importance', 0.5)
         
+        # [Phase 5] White Bear Effect (Hiệu ứng Gấu Trắng)
+        forget_keywords = ['quên đi', 'đừng nhớ', 'xóa ký ức', 'đừng nghĩ về', 'hãy quên', 'quên nó đi']
+        is_forget_cmd = any(kw in user_input.lower() for kw in forget_keywords)
+        
+        if is_forget_cmd and similar and similar[0][0] > 0.6:
+            target_mem = similar[0][1]
+            if not getattr(target_mem, 'is_suppressed', False):
+                target_mem.is_suppressed = True
+                target_mem.arousal = max(target_mem.arousal, 0.9) # Tăng vọt arousal do lệnh cấm
+                target_mem.strength = 1.0 # Kéo ký ức trở lại trạng thái cực kỳ tươi mới
+                target_mem.importance = max(target_mem.importance, 0.8) # Bị dặn quên nên nó trở nên ám ảnh
+                print(f"\n{Fore.RED}🐻‍❄️ [WHITE BEAR EFFECT]: Lệnh 'HÃY QUÊN' kích hoạt phản kháng ngược: Ký ức bị đè nén trở nên ám ảnh tột độ!{Style.RESET_ALL}")
+                self.engine.memory.store.update_meta(target_mem.id, target_mem)
+                
+            # Đổi góc nhìn nội tâm khi bị ép quên
+            internal_thought += " [AI càng bảo quên, mình lại càng không thể ngừng nghĩ về nó.]"
+        
         # Phase 8 Idea 6.1: Sự Hoài Nghi Âm Thầm (Silent Skepticism)
         beliefs = self.engine.ego.get_active_beliefs(context_query=user_input)
         if beliefs:

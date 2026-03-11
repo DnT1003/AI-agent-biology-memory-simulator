@@ -46,6 +46,7 @@ class MemoryTrace:
     recall_count: int = 0  # Số lần được nhớ lại (để tính toán rủi ro bị méo mó)
     emotional_layers: int = 1 # Số tầng cảm xúc (Càng nhiều tầng, càng khó quên)
     is_flashbulb: bool = False # Ký ức in hằn không bao giờ phai
+    is_suppressed: bool = False # Thẻ "Gấu Trắng" - Cố quên nhưng lại càng nhớ
     impact_weight: float = 1.0 # Trọng số tác động đến Mood (Phase 19)
     overlays: List[str] = field(default_factory=list)  # Lớp cảm xúc tích lũy (max 5)
 

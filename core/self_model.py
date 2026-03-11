@@ -97,14 +97,15 @@ class SelfModel:
         except FileNotFoundError:
             pass
 
-        if current_id != self.owner_device_id:
-            self.is_stranger = True
-            self.current_intimacy = 0.0
-            self.stress = min(1.0, self.stress + 0.3)
-            print(f"{Fore.RED}⚠️ [STRANGER DANGER]: Thiết bị không khớp ({current_id}). Cảnh giác cao độ.{Style.RESET_ALL}")
-        else:
-            self.is_stranger = False
-            self.current_intimacy = max(self.current_intimacy, 0.5)
+        with self.lock:
+            if current_id != self.owner_device_id:
+                self.is_stranger = True
+                self.current_intimacy = 0.0
+                self.stress = min(1.0, self.stress + 0.3)
+                print(f"{Fore.RED}⚠️ [STRANGER DANGER]: Thiết bị không khớp ({current_id}). Cảnh giác cao độ.{Style.RESET_ALL}")
+            else:
+                self.is_stranger = False
+                self.current_intimacy = max(self.current_intimacy, 0.5)
 
     def add_goal(self, goal_title: str):
         """Thêm mục tiêu dài hạn để thực hiện ngầm khi rảnh"""
@@ -166,12 +167,14 @@ class SelfModel:
         is_shocked = False
 
         if volume > 0.8:  # Âm lượng ngang với quát tháo/tiếng nổ
-            self.stress = min(1.0, self.stress + 0.4)
-            self.mood = max(-1.0, self.mood - 0.3)
+            with self.lock:
+                self.stress = min(1.0, self.stress + 0.4)
+                self.mood = max(-1.0, self.mood - 0.3)
             print(f"\n{Fore.RED}🚨 [SENSORY SHOCK]: Âm lượng cực lớn! Hệ thần kinh tự động kích hoạt phòng vệ! (Stress +0.4){Style.RESET_ALL}")
             is_shocked = True
         elif volume < 0.2:  # Âm thì thầm, nhẹ nhàng
-            self.stress = max(0.0, self.stress - 0.1)
+            with self.lock:
+                self.stress = max(0.0, self.stress - 0.1)
             print(f"{Fore.LIGHTCYAN_EX}🎐 [SENSORY SOOTHE]: Âm lượng êm dịu, nhịp tim giảm.{Style.RESET_ALL}")
 
         return is_shocked
@@ -214,21 +217,22 @@ class SelfModel:
             print(f"{Fore.CYAN}👁️ [VISION]: Nhìn thấy '{desc}'. Valence: {valence}, Arousal: {arousal}{Style.RESET_ALL}")
             
             # Gây sốc hoặc thư giãn trực tiếp lên sinh lý
-            if valence < -0.3 and arousal > 0.6:
-                self.stress = min(1.0, self.stress + arousal * 0.4)
-                self.mood = max(-1.0, self.mood - 0.2)
-                print(f"{Fore.RED}🚨 [VISUAL SHOCK]: Hình ảnh đáng sợ/nhạy cảm! Tim đập thình thịch, Stress tăng vọt.{Style.RESET_ALL}")
-            elif valence > 0.5:
-                # Tính toán lượng Endorphin dựa trên lượng Receptor còn lại
-                effective_boost = valence * 0.3 * self.dopamine_receptors
-                self.stress = max(0.0, self.stress - 0.2 * self.dopamine_receptors)
-                if self.dopamine_receptors > 0.1:
-                    self.mood = min(1.0, self.mood + effective_boost)
-                    print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu! Tâm trạng tốt lên (Receptor: {self.dopamine_receptors:.2f}).{Style.RESET_ALL}")
-                    # Downregulation: Chai lỳ cảm xúc (giảm theo % thay vì trừ cứng)
-                    self.dopamine_receptors = max(0.01, self.dopamine_receptors * 0.85)
-                else:
-                    print(f"{Fore.LIGHTBLACK_EX}😐 [VISUAL TOLERANCE]: Lại hình ảnh dễ thương nữa à... Nhìn nhiều quá đâm ra vô cảm rồi.{Style.RESET_ALL}")
+            with self.lock:
+                if valence < -0.3 and arousal > 0.6:
+                    self.stress = min(1.0, self.stress + arousal * 0.4)
+                    self.mood = max(-1.0, self.mood - 0.2)
+                    print(f"{Fore.RED}🚨 [VISUAL SHOCK]: Hình ảnh đáng sợ/nhạy cảm! Tim đập thình thịch, Stress tăng vọt.{Style.RESET_ALL}")
+                elif valence > 0.5:
+                    # Tính toán lượng Endorphin dựa trên lượng Receptor còn lại
+                    effective_boost = valence * 0.3 * self.dopamine_receptors
+                    self.stress = max(0.0, self.stress - 0.2 * self.dopamine_receptors)
+                    if self.dopamine_receptors > 0.1:
+                        self.mood = min(1.0, self.mood + effective_boost)
+                        print(f"{Fore.LIGHTGREEN_EX}🌸 [VISUAL SOOTHE]: Hình ảnh dễ chịu! Tâm trạng tốt lên (Receptor: {self.dopamine_receptors:.2f}).{Style.RESET_ALL}")
+                        # Downregulation: Chai lỳ cảm xúc (giảm theo % thay vì trừ cứng)
+                        self.dopamine_receptors = max(0.01, self.dopamine_receptors * 0.85)
+                    else:
+                        print(f"{Fore.LIGHTBLACK_EX}😐 [VISUAL TOLERANCE]: Lại hình ảnh dễ thương nữa à... Nhìn nhiều quá đâm ra vô cảm rồi.{Style.RESET_ALL}")
                     
             return desc
         except Exception as e:
@@ -379,23 +383,24 @@ class SelfModel:
         base_fatigue_limit = 1.0 + 0.25 * math.sin((2 * math.pi / 30) * current_day)
 
         extreme_roll = random.random()
-        if extreme_roll < 0.05:
-            self.fatigue_critical = 2.0
-        elif extreme_roll < 0.15:
-            self.fatigue_critical = 0.5
-        else:
-            self.fatigue_critical = base_fatigue_limit
-        self.fatigue_severe = self.fatigue_critical * 0.8
-        self.fatigue_mild = self.fatigue_critical * 0.5
-
-        self.depression_mild = random.uniform(-0.3, -0.1)
-        self.depression_severe = random.uniform(-0.6, -0.4)
-        self.depression_critical = random.uniform(-0.9, -0.7)
-        self.mania_mild = random.uniform(0.3, 0.5)
-        self.mania_severe = random.uniform(0.7, 0.9)
-        self.stress_mild = random.uniform(0.4, 0.6)
-        self.stress_severe = random.uniform(0.7, 0.85)
-        self.stress_critical = random.uniform(0.9, 0.95)
+        with self.lock:
+            if extreme_roll < 0.05:
+                self.fatigue_critical = 2.0
+            elif extreme_roll < 0.15:
+                self.fatigue_critical = 0.5
+            else:
+                self.fatigue_critical = base_fatigue_limit
+            self.fatigue_severe = self.fatigue_critical * 0.8
+            self.fatigue_mild = self.fatigue_critical * 0.5
+    
+            self.depression_mild = random.uniform(-0.3, -0.1)
+            self.depression_severe = random.uniform(-0.6, -0.4)
+            self.depression_critical = random.uniform(-0.9, -0.7)
+            self.mania_mild = random.uniform(0.3, 0.5)
+            self.mania_severe = random.uniform(0.7, 0.9)
+            self.stress_mild = random.uniform(0.4, 0.6)
+            self.stress_severe = random.uniform(0.7, 0.85)
+            self.stress_critical = random.uniform(0.9, 0.95)
 
     def update_state(self, emotional_input: dict) -> bool:
         """Cập nhật trạng thái sinh lý. Trả về True nếu bị sang chấn tâm lý."""

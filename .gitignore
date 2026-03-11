@@ -51,3 +51,9 @@ simulate_aura.py
 .vscode/
 .idea/
 *.pth
+
+# Large Training Data
+novel/
+*.bin
+core/engine/nanogpt/*.txt
+core/engine/nanogpt/vocab.json

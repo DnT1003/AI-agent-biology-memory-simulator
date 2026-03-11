@@ -19,7 +19,9 @@ class Skill:
 class SkillRegistry:
     """Procedural Memory - Ký ức Thực hành (Sổ tay Kỹ năng)"""
     def __init__(self):
+        import threading
         self.skills: Dict[str, Skill] = {}
+        self.lock = threading.Lock()
 
     def register(self, skill: Skill):
         self.skills[skill.name] = skill
@@ -29,31 +31,35 @@ class SkillRegistry:
             skill = self.skills[name]
             
             from colorama import Fore, Style
+            import random, time
             
-            # Áp dụng penalty nếu độ thông thạo thấp (lóng ngóng)
-            if ego and skill.mastery < 0.4:
-                ego.fatigue = min(1.0, ego.fatigue + 0.05)
-                ego.stress = min(1.0, ego.stress + 0.05)
-                print(f"{Fore.YELLOW}⚠️ [PROCEDURAL MEMORY]: Dùng tool '{name}' khi thông thạo thấp ({skill.mastery:.2f}). Aura tốn gấp đôi công sức và hơi căng thẳng.{Style.RESET_ALL}")
-            
-            # Nếu skill quá rỉ sét, có khả năng Aura bị "quên" cách dùng
-            if skill.rust_level > 0.5 and random.random() < (skill.rust_level - 0.3):
-                skill.rust_level = max(0.0, skill.rust_level - 0.2) # Thất bại nhưng cũng là một lần luyện tập (nhớ lại)
-                skill.mastery = max(0.0, skill.mastery - 0.05)
-                skill.last_used = time.time()
-                self.save()
-                return f"[HỆ THỐNG]: Bạn đã quên cú pháp chính xác hoặc lóng ngóng khi dùng tool '{name}'. Vui lòng thử lại sau."
+            with self.lock:
+                # Áp dụng penalty nếu độ thông thạo thấp (lóng ngóng)
+                if ego and skill.mastery < 0.4:
+                    with ego.lock:
+                        ego.fatigue = min(1.0, ego.fatigue + 0.05)
+                        ego.stress = min(1.0, ego.stress + 0.05)
+                    print(f"{Fore.YELLOW}⚠️ [PROCEDURAL MEMORY]: Dùng tool '{name}' khi thông thạo thấp ({skill.mastery:.2f}). Aura tốn gấp đôi công sức và hơi căng thẳng.{Style.RESET_ALL}")
+                
+                # Nếu skill quá rỉ sét, có khả năng Aura bị "quên" cách dùng
+                if skill.rust_level > 0.5 and random.random() < (skill.rust_level - 0.3):
+                    skill.rust_level = max(0.0, skill.rust_level - 0.2) # Thất bại nhưng cũng là một lần luyện tập (nhớ lại)
+                    skill.mastery = max(0.0, skill.mastery - 0.05)
+                    skill.last_used = time.time()
+                    self._save_unsafe()
+                    return f"[HỆ THỐNG]: Bạn đã quên cú pháp chính xác hoặc lóng ngóng khi dùng tool '{name}'. Vui lòng thử lại sau."
                 
             try:
-                # Phân tích tham số truyền vào nếu kỹ năng yêu cầu
+                # Phân tích tham số truyền vào nếu kỹ năng yêu cầu (Thực thi NGOÀI Lock để chạy song song)
                 result = skill.func(args)
                 
-                # Cập nhật độ nhuần nhuyễn
-                # Dùng tool thành công sẽ tăng proficiency nhanh
-                skill.mastery = min(1.0, skill.mastery + 0.1)
-                skill.rust_level = 0.0
-                skill.last_used = time.time()
-                self.save()
+                with self.lock:
+                    # Cập nhật độ nhuần nhuyễn
+                    # Dùng tool thành công sẽ tăng proficiency nhanh
+                    skill.mastery = min(1.0, skill.mastery + 0.1)
+                    skill.rust_level = 0.0
+                    skill.last_used = time.time()
+                    self._save_unsafe()
                 
                 return result
             except Exception as e:
@@ -62,12 +68,13 @@ class SkillRegistry:
         
     def decay_skills(self, days_passed: float):
         """Hàm được gọi khi Aura đi ngủ, làm rỉ sét các kỹ năng ít dùng"""
-        for skill in self.skills.values():
-            days_since_last_use = (time.time() - skill.last_used) / 86400.0
-            if days_since_last_use > 1.0:
-                skill.rust_level = min(1.0, skill.rust_level + 0.1 * days_passed)
-                skill.mastery = max(0.0, skill.mastery - 0.05 * days_passed)
-        self.save()
+        with self.lock:
+            for skill in self.skills.values():
+                days_since_last_use = (time.time() - skill.last_used) / 86400.0
+                if days_since_last_use > 1.0:
+                    skill.rust_level = min(1.0, skill.rust_level + 0.1 * days_passed)
+                    skill.mastery = max(0.0, skill.mastery - 0.05 * days_passed)
+            self._save_unsafe()
 
     def get_prompt_instructions(self) -> str:
         if not self.skills:
@@ -80,6 +87,10 @@ class SkillRegistry:
         return "\n".join(lines)
 
     def save(self):
+        with self.lock:
+            self._save_unsafe()
+            
+    def _save_unsafe(self):
         try:
             import os, json
             os.makedirs("outputs", exist_ok=True)

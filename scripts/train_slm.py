@@ -1,38 +1,31 @@
 """
-train_slm.py  —  Aura-Flash 1.28B Production Training
+train_slm.py  —  Aura-MoE 700M "Pocket AI" Production Training
 =======================================================
 Environment: .venv_aura (Python 3.12 + torch 2.5.1+cu121)
 Command:     .\.venv_aura\Scripts\python.exe scripts/train_slm.py
 
 VRAM Budget (RTX 3060 Laptop = 6GB dedicated):
-  - gpu_service.py (RoBERTa running) : ~484MB
-  - Flash model fp16                 : ~2.46GB
-  - Tiny model fp16                  : ~70MB
-  - Adam8bit stores                  : ~0.6GB (8-bit, no fp32 copy!)
-  - Activations (batch=4, block=512) : ~1.5GB
-  Total estimated                    : ~5.1GB  ← well within 6GB
+  - Model Weights (700M bf16)        : ~1.4GB
+  - Adam8bit Stores (top_k=2)        : ~0.7GB
+  - Activations & Gradients          : ~1.5GB
+  Total estimated                    : ~4.0GB - 4.5GB  ← well within 6GB
 
-Architecture verified from session fc6fb02b:
-  - AuraFlashModel: 1.28B params, MoE 8exp/top2, GQA 16h/4kv, RoPE, Ring Blockwise
-  - AuraTinyModel:  ~30M params (Speculative Decoding draft model)
-  - Tokenizer:      char-level from input.txt (Vietnamese novel corpus)
+Architecture verified from session Phase 6:
+  - AuraFlashModel: 700M params, MoE 8exp/top2, GQA 16h/4kv, No Bias
+  - Tokenizer: BPE
 """
 import os, sys, time, json
 
-# Fix cho màn hình Terminal Windows bị lỗi font khi in dấu mũi tên
 if sys.stdout and hasattr(sys.stdout, 'reconfigure') and sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
 os.environ.pop('CURL_CA_BUNDLE', None)
 os.environ.pop('REQUESTS_CA_BUNDLE', None)
 
-# Fix for MSVC 2022 on Windows to run torch.compile natively without IDE
 msvc_path = r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64"
 if os.path.exists(msvc_path) and msvc_path not in os.environ.get('PATH', ''):
     os.environ['PATH'] = msvc_path + os.pathsep + os.environ.get('PATH', '')
     
-# Removed expandable_segments as it's unsupported on this platform
-
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 nanogpt_dir = os.path.join(project_root, 'core', 'engine', 'nanogpt')
 sys.path.insert(0, project_root)
@@ -42,81 +35,65 @@ import torch
 from colorama import Fore, Style, init
 init(autoreset=True)
 
+import config as slm_config
+
 # ─────────────────────────────────────────────────────────────────
-# HYPERPARAMETERS — Optimizing for full 6GB VRAM usage
+# HYPERPARAMETERS — Loaded from nanogpt/config.py
 # ─────────────────────────────────────────────────────────────────
-BATCH_SIZE     = 8      # Tăng lên 8 nhờ Gradient Checkpointing
-BLOCK_SIZE     = 512    # Context window súc tích
-MAX_ITERS      = 5000   # Chế độ Long-run: 5000 bước huấn luyện
-EVAL_INTERVAL  = 250    # Đánh giá mỗi 250 bước để tối ưu tốc độ
-LEARNING_RATE  = 3e-4
-GRAD_CLIP      = 1.0
-WARMUP_ITERS   = 200
-GRAD_ACCUM_STEPS = 4    # Tương đương Batch = 32 nhưng không tốn thêm VRAM
-USE_CHECKPOINT = True   # Kích hoạt Gradient Checkpointing để tiết kiệm VRAM cực đại
+BATCH_SIZE     = slm_config.batch_size
+BLOCK_SIZE     = slm_config.block_size
+MAX_ITERS      = getattr(slm_config, 'max_iters', 5000)
+EVAL_INTERVAL  = getattr(slm_config, 'eval_interval', 250)
+LEARNING_RATE  = 5e-5   # Hạ LR để tránh nhiễu Gradient (Gradient Bouncing) khi fine-tune tập dữ liệu nhỏ.
+GRAD_CLIP      = slm_config.grad_clip
+WARMUP_ITERS   = getattr(slm_config, 'warmup_iters', 200)
+GRAD_ACCUM_STEPS = slm_config.grad_accum_steps
+USE_CHECKPOINT = slm_config.use_checkpoint
 
 CHECKPOINT_DIR  = os.path.join(project_root, 'outputs', 'slm_checkpoints')
-CHECKPOINT_PATH = os.path.join(nanogpt_dir, 'aura_flash_v5.pth')
-TINY_CKPT_PATH  = os.path.join(nanogpt_dir, 'aura_tiny_v5.pth')
+CHECKPOINT_PATH = os.path.join(nanogpt_dir, 'aura_moe_700m.pth')
 RESUME = os.path.exists(CHECKPOINT_PATH)
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = slm_config.device
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 print(f"\n{Fore.CYAN}{'='*60}")
-print(f"  Aura-Flash 1.28B — Production Training")
+print(f"  Aura-MoE-700M (Pocket AI) — Production Training")
 print(f"{'='*60}{Style.RESET_ALL}")
 print(f"  Device  : {device.upper()}")
 if device == 'cuda':
     gpu = torch.cuda.get_device_properties(0)
     print(f"  GPU     : {gpu.name}")
     print(f"  VRAM    : {gpu.total_memory/1024**3:.1f} GB total")
-    free_now = (gpu.total_memory - torch.cuda.memory_reserved(0)) / 1024**3
-    print(f"  Free    : {free_now:.2f} GB (excluding other processes)")
 print(f"  Resume  : {RESUME}")
 print(f"  Batch   : {BATCH_SIZE} x {BLOCK_SIZE} chars")
-print(f"  Optimizer: bitsandbytes Adam8bit (no GradScaler needed)")
+print(f"  Optimizer: bitsandbytes Adam8bit")
 print()
 
-# ─── Load data ────────────────────────────────────────────────────
-input_path = os.path.join(nanogpt_dir, 'input.txt')
-print(f"[1/5] Doc du lieu: {input_path}")
-with open(input_path, 'r', encoding='utf-8') as f:
-    text = f.read()
-print(f"      → {len(text):,} ky tu | ~{len(text)//4:,} tokens")
+# ─── Load data (Production Binary Path) ───────────────────────────
+import numpy as np
+train_bin = os.path.join(nanogpt_dir, 'train.bin')
+val_bin = os.path.join(nanogpt_dir, 'val.bin')
 
-# ─── Vocab ────────────────────────────────────────────────────────
-from tokenizer import BPETokenizer
-vocab_path = os.path.join(nanogpt_dir, 'vocab.json')
-target_vocab_size = 8192
-
-tokenizer = BPETokenizer(vocab_size=target_vocab_size)
-if os.path.exists(vocab_path):
-    print(f"[2/5] Nap vocab BPE: {vocab_path}")
-    tokenizer.load(vocab_path)
-    vocab_size = tokenizer.vocab_size
+if os.path.exists(train_bin) and os.path.exists(val_bin):
+    print(f"[1/5] Nap du lieu nhi phan (memmap): {train_bin}")
+    train_data = np.memmap(train_bin, dtype=np.uint16, mode='r')
+    val_data = np.memmap(val_bin, dtype=np.uint16, mode='r')
+    
+    # Vocab size from config
+    vocab_size = slm_config.vocab_size
 else:
-    print(f"[2/5] Build vocab BPE moi: {target_vocab_size} tokens -> luu vocab.json (Cho xiu nhe...)")
-    tokenizer.train(text)
-    tokenizer.save(vocab_path)
-    vocab_size = tokenizer.vocab_size
-
-encode = lambda s: tokenizer.encode(s)
-decode = lambda l: tokenizer.decode(l)
-
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data, val_data = data[:n], data[n:]
-print(f"      → {len(train_data):,} train | {len(val_data):,} val tokens")
+    print(f"[!] CANH BAO: Khong tim thay file .bin. Vui long chay: python scripts/prepare_data.py")
+    # Fallback/Old logic (Optional, but better to enforce binary now)
+    sys.exit(1)
 
 def get_batch(split):
-    d = train_data if split == 'train' else val_data
-    if len(d) <= BLOCK_SIZE:
-        return (torch.zeros(BATCH_SIZE, BLOCK_SIZE, dtype=torch.long, device=device),
-                torch.zeros(BATCH_SIZE, BLOCK_SIZE, dtype=torch.long, device=device))
-    ix = torch.randint(len(d) - BLOCK_SIZE, (BATCH_SIZE,))
-    x = torch.stack([d[i:i+BLOCK_SIZE] for i in ix]).to(device)
-    y = torch.stack([d[i+1:i+BLOCK_SIZE+1] for i in ix]).to(device)
+    data_ptr = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data_ptr) - BLOCK_SIZE, (BATCH_SIZE,))
+    
+    # Chuyển từ uint16 numpy sang torch long
+    x = torch.stack([torch.from_numpy((data_ptr[i:i+BLOCK_SIZE]).astype(np.int64)) for i in ix]).to(device)
+    y = torch.stack([torch.from_numpy((data_ptr[i+1:i+BLOCK_SIZE+1]).astype(np.int64)) for i in ix]).to(device)
     return x, y
 
 # ─── Build models ─────────────────────────────────────────────────
@@ -126,18 +103,12 @@ model_module.train_data = train_data
 model_module.val_data   = val_data
 model_module.block_size = BLOCK_SIZE
 
-from model import AuraFlashModel, AuraTinyModel
+from model import AuraFlashModel
 
-print(f"[3/5] Khoi tao models...")
-# Kích hoạt use_checkpoint=True để AuraFlash có thể train 1.28B trên 6GB
+print(f"[3/5] Khoi tao model MoE 700M (Active 200M)...")
 flash = AuraFlashModel(vocab_size, use_checkpoint=USE_CHECKPOINT).half().to(device)
 total_params = sum(p.numel() for p in flash.parameters())
 print(f"      → AuraFlash: {total_params/1e6:.1f}M params | VRAM: {torch.cuda.memory_allocated(0)/1024**3:.2f}GB")
-print(f"      → Gradient Checkpointing: {'BAT' if USE_CHECKPOINT else 'TAT'}")
-
-tiny = AuraTinyModel(vocab_size).half().to(device)
-tiny_params = sum(p.numel() for p in tiny.parameters())
-print(f"      → AuraTiny:  {tiny_params/1e6:.1f}M params | VRAM: {torch.cuda.memory_allocated(0)/1024**3:.2f}GB")
 
 if RESUME:
     try:
@@ -145,31 +116,23 @@ if RESUME:
         print(f"      → Resume Flash OK: {CHECKPOINT_PATH}")
     except Exception as e:
         print(f"      → Flash resume failed ({e}), starting fresh")
-    if os.path.exists(TINY_CKPT_PATH):
-        try:
-            tiny.load_state_dict(torch.load(TINY_CKPT_PATH, map_location=device, weights_only=True))
-            print(f"      → Resume Tiny OK: {TINY_CKPT_PATH}")
-        except Exception as e:
-            print(f"      → Tiny resume failed ({e})")
 
-# Native PyTorch Compile using Windows MSVC
-print(f"[3.5/5] Compiling models with Triton/MSVC (May take a few minutes)...")
-try:
-    flash = torch.compile(flash)
-    tiny = torch.compile(tiny)
-    print(f"      → Compile: SUCCESS")
-except Exception as e:
-    print(f"      → Compile: FAILED ({e})")
+# Native PyTorch Compile
+print(f"[3.5/5] Compiling models with Triton/MSVC...")
+if os.name == 'nt':
+    print(f"      → Skipped: torch.compile() is not natively supported on Windows (Missing Triton).")
+else:
+    try:
+        flash = torch.compile(flash)
+        print(f"      → Compile: SUCCESS")
+    except Exception as e:
+        print(f"      → Compile: FAILED ({e})")
 
 # ─── Optimizers ───────────────────────────────────────────────────
-# Áp dụng công nghệ NanoGPT: Fused AdamW tĩnh cho Tensor và loại bỏ Weight Decay khởi bias.
-# Bfloat16 vẫn được giữ lại trên vòng lặp backward để ngăn underflow qua card 3060.
 opt_flash = flash.configure_optimizers(weight_decay=0.1, learning_rate=LEARNING_RATE, betas=(0.9, 0.95), device_type=device)
-opt_tiny  = tiny.configure_optimizers(weight_decay=0.1, learning_rate=LEARNING_RATE, betas=(0.9, 0.95), device_type=device)
-print(f"[4/5] Optimizer: Fused AdamW + Custom WeightDecay (NanoGPT config)")
+print(f"[4/5] Optimizer: Fused AdamW + Custom WeightDecay")
 
 def get_lr(step):
-    """Cosine annealing with linear warmup"""
     import math
     if step < WARMUP_ITERS:
         return LEARNING_RATE * step / WARMUP_ITERS
@@ -182,12 +145,12 @@ def estimate_loss(model):
     model.eval()
     losses = {}
     for split in ['train', 'val']:
-        ls = torch.zeros(15)
-        for k in range(15):
+        ls = torch.zeros(slm_config.eval_iters)
+        for k in range(slm_config.eval_iters):
             X, Y = get_batch(split)
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                _, loss = model(X, Y)
-            ls[k] = loss.float().item()
+                _, loss, aux_loss = model(X, Y)
+            ls[k] = (loss + 0.01 * aux_loss).float().item()
         losses[split] = ls.mean().item()
     model.train()
     return losses
@@ -197,31 +160,26 @@ print(f"\n{'='*60}")
 print(f"  Training {MAX_ITERS} iters | eval every {EVAL_INTERVAL} | batch={BATCH_SIZE} block={BLOCK_SIZE}")
 print(f"{'='*60}\n")
 
-flash.train(); tiny.train()
+flash.train()
 best_val = float('inf')
 start = time.time()
 
 for step in range(MAX_ITERS):
-    # LR schedule
     lr = get_lr(step)
     for g in opt_flash.param_groups: g['lr'] = lr
-    for g in opt_tiny.param_groups:  g['lr'] = lr
 
-    # Eval + checkpoint
+    # Eval + checkpoint (Mỗi 250 bước)
     if step % EVAL_INTERVAL == 0:
         lf = estimate_loss(flash)
-        lt = estimate_loss(tiny)
         elapsed = time.time() - start
         eta = (elapsed / (step + 1)) * (MAX_ITERS - step) if step > 0 else 0
         vram = torch.cuda.memory_allocated(0) / 1024**3
-        print(f"  [{step:5d}/{MAX_ITERS}] Flash val={lf['val']:.4f} train={lf['train']:.4f} | "
-              f"Tiny val={lt['val']:.4f} | VRAM={vram:.2f}GB | "
-              f"{elapsed/60:.1f}m el | ETA={eta/60:.1f}m")
+        print(f"  [{step:5d}/{MAX_ITERS}] 🏆 EVAL: val={lf['val']:.4f} train={lf['train']:.4f} | "
+              f"VRAM={vram:.2f}GB | {elapsed/60:.1f}m el | ETA={eta/60:.1f}m")
 
         if lf['val'] < best_val:
             best_val = lf['val']
             torch.save(flash.state_dict(), CHECKPOINT_PATH)
-            torch.save(tiny.state_dict(), TINY_CKPT_PATH)
             bkup = os.path.join(CHECKPOINT_DIR, f"flash_s{step:05d}_v{best_val:.4f}.pth")
             torch.save(flash.state_dict(), bkup)
             print(f"  {Fore.GREEN}✅ Best val={best_val:.4f} saved → {CHECKPOINT_PATH}{Style.RESET_ALL}")
@@ -229,29 +187,30 @@ for step in range(MAX_ITERS):
     # ─ Train Flash ─
     Xb, Yb = get_batch('train')
     with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-        _, loss = flash(Xb, Yb)
-        loss = loss / GRAD_ACCUM_STEPS
+        _, raw_loss, aux_loss = flash(Xb, Yb)
+        loss = (raw_loss + 0.01 * aux_loss) / GRAD_ACCUM_STEPS
     loss.backward()
+    
+    # Logging Nhanh (Mỗi 50 bước)
+    if step % 50 == 0 and step % EVAL_INTERVAL != 0:
+        elapsed = time.time() - start
+        eta = (elapsed / (step + 1)) * (MAX_ITERS - step) if step > 0 else 0
+        vram = torch.cuda.memory_allocated(0) / 1024**3
+        curr_loss = raw_loss.item()
+        curr_aux = aux_loss.item()
+        print(f"  [{step:5d}/{MAX_ITERS}] ⚡ train_loss={curr_loss:.4f} | aux={curr_aux:.4f} | "
+              f"VRAM={vram:.2f}GB | {elapsed/60:.1f}m el | ETA={eta/60:.1f}m")
+        # Aggressive Memory Sweeping to prevent creeping
+        torch.cuda.empty_cache()
+    
+    # Xóaa Tensor rác khỏi VRAM ngay lập tức
+    del raw_loss, aux_loss, loss, Xb, Yb
     
     if (step + 1) % GRAD_ACCUM_STEPS == 0:
         torch.nn.utils.clip_grad_norm_(flash.parameters(), GRAD_CLIP)
         opt_flash.step()
         opt_flash.zero_grad(set_to_none=True)
     del loss, Xb, Yb
-
-    # ─ Train Tiny (every 2 steps) ─
-    if step % 2 == 0:
-        Xb2, Yb2 = get_batch('train')
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            _, loss2 = tiny(Xb2, Yb2)
-            loss2 = loss2 / GRAD_ACCUM_STEPS
-        loss2.backward()
-        
-        if (step + 1) % GRAD_ACCUM_STEPS == 0:
-            torch.nn.utils.clip_grad_norm_(tiny.parameters(), GRAD_CLIP)
-            opt_tiny.step()
-            opt_tiny.zero_grad(set_to_none=True)
-        del loss2, Xb2, Yb2
 
 # ─── Done ─────────────────────────────────────────────────────────
 total_time = time.time() - start
@@ -262,7 +221,6 @@ print(f"  Checkpoint     : {CHECKPOINT_PATH}")
 print(f"  Tong thoi gian : {total_time/60:.1f} phut ({total_time/3600:.2f} gio)")
 print(f"{'='*60}{Style.RESET_ALL}")
 
-# Sample generation
 print(f"\n[5/5] Sample generation (Flash):")
 flash.eval()
 with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16):

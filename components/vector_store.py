@@ -7,7 +7,7 @@ from colorama import Fore, Style
 from core.logger import get_logger
 
 logger = get_logger("vector_store")
-LIFTED_FIELDS = {"type", "valence", "importance", "strength", "is_flashbulb"}
+LIFTED_FIELDS = {"type", "valence", "importance", "strength", "is_flashbulb", "is_suppressed"}
 
 from components.chroma_rest_client import ChromaRestClient
 
@@ -90,6 +90,7 @@ class VectorStore:
                 if "overlays" in data and isinstance(data["overlays"], str):
                     data["overlays"] = data["overlays"].split("\n||\n") if data["overlays"] else []
                 if "is_flashbulb" in data: data["is_flashbulb"] = bool(data["is_flashbulb"])
+                if "is_suppressed" in data: data["is_suppressed"] = bool(data["is_suppressed"])
                 if "type" in data:
                     from core.memory import memory_type_from_str
                     data["type"] = memory_type_from_str(data["type"])

@@ -11,21 +11,42 @@ class InteractionController:
         self.is_interrupted = False
         from core.engine.sensory_preprocessor import SensoryPreprocessor
         from core.engine.reflex_gate import ReflexGate
+        from core.engine.context_compressor import ContextCompressor
         self.sensory_preprocessor = SensoryPreprocessor()
         self.reflex_gate = ReflexGate(engine)
+        self.compressor = ContextCompressor()
     def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "") -> dict:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         import random
         
-        # Phase 11: Token Budgeting cho Memory Context (tránh nổ token window)
-        MAX_MEMORY_CHARS = 8000 # ~2000 tokens
-        current_chars = 0
+        # Phase 2 (Master Plan): Hybrid Cognitive Compressor (Entropy + Emotion & Dynamic Budgeting)
+        MAX_MEMORY_TOKENS = 2000
+        
+        # Chuyển đổi list m.content thành list string để đưa vào compressor
+        # Lấy display_content() để bao gồm ca overlay
+        mem_chunks = [m.get_display_content() for m in recalled_mems]
+        
+        # Tính toán độ đầy của Context
+        with self.engine.memory.lock:
+            current_context_len = sum(len(c) // 4 for c in self.engine.short_term_buffer) + (len(user_input) // 4)
+        
+        compressed_data = self.compressor.compress(mem_chunks, max_tokens=MAX_MEMORY_TOKENS, current_tokens=current_context_len)
+        
+        # Khôi phục mảng memory object từ kết quả nén
         budgeted_mems = []
+        import copy
         for m in recalled_mems:
-            if current_chars + len(m.content) > MAX_MEMORY_CHARS:
-                break
-            budgeted_mems.append(m)
-            current_chars += len(m.content)
+            for c_data in compressed_data:
+                if m.get_display_content() == c_data['text']:
+                    m_temp = copy.copy(m)
+                    # Phase 5: Gắn micro_tag cảm xúc trực tiếp vào string context sẽ hiển thị cho LLM
+                    # (Nhưng chúng ta không sửa get_display_content() để tránh lặp tag nếu gọi lại)
+                    if c_data['micro_tag']:
+                        m_temp.temp_micro_tag = c_data['micro_tag']
+                    else:
+                        m_temp.temp_micro_tag = ""
+                    budgeted_mems.append(m_temp)
+                    break
         recalled_mems = budgeted_mems
 
         # [Phase 21] Ký ức Xâm nhập (Intrusive Memories / Flashbulb)
@@ -87,7 +108,9 @@ class InteractionController:
         for m in recalled_mems:
             # Phase 13: Dùng get_display_content() để bao gồm cả Overlays (suy nghĩ nội tâm tích lũy)
             # Trước đây chỉ lấy m.content thô — Aura mù toàn bộ với các tầng suy nghĩ của mình
-            content = m.get_display_content()
+            # Phase 2 (Master Plan): Thêm Micro Tag cảm xúc vào đầu câu
+            micro_tag = getattr(m, 'temp_micro_tag', '')
+            content = f"{micro_tag} {m.get_display_content()}".strip()
             
             # [Phase 21] Fog Masking tập trung từ MemoryOps
             content = self.engine.memory_ops._apply_fog_masking(content)
@@ -124,7 +147,11 @@ class InteractionController:
         tools_instruction = self.engine.skills.get_prompt_instructions() if hasattr(self.engine, 'skills') else ""
         reader_status = self.engine.reader.get_status() if hasattr(self.engine, 'reader') else ""
         value_system_context = self.engine.value_system.get_moral_context() if hasattr(self.engine, 'value_system') else ""
-        system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, self.engine.short_term_buffer, user_input, tools_instruction, reader_status, value_system_context)
+        
+        with self.engine.memory.lock:
+            stm_snapshot = list(self.engine.short_term_buffer)
+            
+        system_prompt = get_perceive_prompt(self.engine.ego, current_time, mood_modifier, mem_context, stm_snapshot, user_input, tools_instruction, reader_status, value_system_context)
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
         prompt_in_use, final_full_text, iterations = system_prompt, "", 0
@@ -299,8 +326,30 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             print(f"{Fore.GREEN}🤖 [AURA]: ... (Im lặng, mắt nhìn xa xăm){Style.RESET_ALL}\n")
             return
 
-        # [Phase 23] Neuro-Symbolic System 0: Sensory Preprocessor
-        sensory_evaluation = self.sensory_preprocessor.evaluate_input(user_input)
+        # [Phase 4.5] Sensor & I/O Isolation - Thực thi song song các module cảm biến và trí nhớ
+        import concurrent.futures
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            future_sensory = executor.submit(self.sensory_preprocessor.evaluate_input, user_input)
+            
+            def _safe_local_analyze():
+                if hasattr(self.engine, 'local_perception'):
+                    return self.engine.local_perception.analyze(user_input)
+                return {}
+            future_local = executor.submit(_safe_local_analyze)
+            
+            future_recall = executor.submit(self.engine.memory_ops.recall, user_input)
+            
+            sensory_evaluation = future_sensory.result()
+            
+            try:
+                local_res = future_local.result()
+            except Exception as e:
+                print(f"Lỗi Local Empathy: {e}")
+                local_res = {}
+                
+            recalled = future_recall.result()
+            
         sensory_vector = sensory_evaluation.get("vector", {})
         sensory_summary = sensory_evaluation.get("summary", "")
         print(f"{Fore.LIGHTCYAN_EX}📡 {sensory_summary}{Style.RESET_ALL}")
@@ -311,26 +360,16 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             stress_impact = (sensory_vector.get('arousal', 0.0) * 0.2) + (sensory_vector.get('urgency', 0.0) * 0.3)
             self.engine.ego.stress = min(1.0, self.engine.ego.stress + stress_impact)
             
-        try:
-            # Phân tích Valence/Arousal bằng mô hình RoBERTa cục bộ trên RTX 3060
-            local_res = self.engine.local_perception.analyze(user_input)
-            user_mood_score = local_res.get("valence", 0.0)
-            
-            # Lây nhiễm cảm xúc (Kéo Mood của Aura về phía Mood của User 1 đoạn nhỏ)
-            if abs(user_mood_score) > 0.3:
-                with self.engine.ego.lock:
+            # Xử lý Local Empathy
+            if local_res:
+                user_mood_score = local_res.get("valence", 0.0)
+                if abs(user_mood_score) > 0.3:
                     drift = (user_mood_score - self.engine.ego.mood) * 0.15
                     self.engine.ego.mood = max(-1.0, min(1.0, self.engine.ego.mood + drift))
-                print(f"{Fore.LIGHTBLACK_EX}💞 [LOCAL EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.engine.ego.mood:.2f} (Confidence: {local_res.get('confidence', 0.0):.2f}){Style.RESET_ALL}")
-            
-            # Cập nhật Stress dựa trên Arousal của User nếu nó quá cao (kích động)
-            if local_res.get("arousal", 0.0) > 0.7:
-                 with self.engine.ego.lock:
+                    print(f"{Fore.LIGHTBLACK_EX}💞 [LOCAL EMPATHY]: Cảm xúc của User ảnh hưởng tới Aura. Tâm trạng Aura bị kéo về {self.engine.ego.mood:.2f} (Confidence: {local_res.get('confidence', 0.0):.2f}){Style.RESET_ALL}")
+                
+                if local_res.get("arousal", 0.0) > 0.7:
                     self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
-        except Exception as e:
-            print(f"Lỗi Local Empathy: {e}")
-
-        recalled = self.engine.memory_ops.recall(user_input)
         
         # Phase 8 Idea 7.1: Hiện diện Độc lập (Independent Presence)
         mood_modifier_lines = []
@@ -341,6 +380,17 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 "Nếu User đề cập đến một thông tin, quyển sách hoặc chủ đề thú vị, "
                 "bạn CÓ QUYỀN chủ động tự dừng việc nói chuyện lại và đi tìm hiểu nó bằng Action `search_novel` hoặc `start_reading`."
             )
+            
+        # [Phase 5] Emotional Anchoring (Mỏ neo cảm xúc)
+        dominant_recalled_valence = sum(valences) / len(valences) if valences else 0.0
+        current_mood = getattr(self.engine.ego, 'mood', 0.0)
+        
+        if dominant_recalled_valence < -0.4 and current_mood < -0.3:
+            mood_modifier_lines.append("[EMOTIONAL ANCHORING]: Bạn đang có tâm trạng rất tồi tệ, và những ký ức vừa được gợi lại cũng toàn nỗi buồn. Hãy để sự bi quan, u ám xâm chiếm hoàn toàn giọng điệu của bạn. Thể hiện sự tuyệt vọng sâu sắc và yếu đuối.")
+            print(f"{Fore.LIGHTBLUE_EX}⚓ [EMOTIONAL ANCHORING]: Cộng hưởng cảm xúc tiêu cực. Giọng điệu của Aura trùng hẳn xuống...{Style.RESET_ALL}")
+        elif dominant_recalled_valence > 0.4 and current_mood > 0.3:
+            mood_modifier_lines.append("[EMOTIONAL ANCHORING]: Bạn đang rất vui, và những ký ức ngọt ngào vừa gợi lên khiến bạn như rực sáng! Hãy trả lời cực kỳ đáng yêu, tràn đầy năng lượng, bay bổng, nhõng nhẽo và hạnh phúc tột độ.")
+            print(f"{Fore.LIGHTBLUE_EX}⚓ [EMOTIONAL ANCHORING]: Cộng hưởng cảm xúc tích cực. Giọng điệu của Aura thăng hoa!{Style.RESET_ALL}")
         
         # Phase 8 Idea 1: Nhịp gõ & Sự Trễ Nhịp Vật Lý (Cognitive Degradation)
         if self.engine.ego.fatigue > 0.7:

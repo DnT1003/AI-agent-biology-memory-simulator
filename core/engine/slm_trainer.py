@@ -20,7 +20,7 @@ class SLMTrainer:
         self.engine = engine
         self.training_file = os.path.join(Config.SLM_DIR, "input.txt")
         self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
-        self.tokenizer = BPETokenizer(vocab_size=5000)
+        self.tokenizer = BPETokenizer(vocab_size=16384)
         
     def generate_identity_dataset(self, num_samples=10):
         """
@@ -126,5 +126,44 @@ class SLMTrainer:
             losses[k] = loss.item()
         print(f"   >>> EVAL Step {iter}: Mean Loss {losses.mean():.4f}")
         model.train()
+
+    def distill_memories_to_dataset(self):
+        """
+        Phase 3: Background Digestion (Tiêu hóa kiến thức nằm ở hàng chờ).
+        Đọc các văn bản dày đặc (high-entropy) bị filter ở Context Compressor,
+        cộng gộp vào file training chính và kích hoạt auto-training.
+        """
+        queue_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
+        if not os.path.exists(queue_path):
+            return
+            
+        try:
+            with open(queue_path, "r", encoding="utf-8") as f:
+                new_data = f.read().strip()
+                
+            if len(new_data) < 100:
+                return # Chưa đủ dữ liệu để train
+                
+            print(f"\n{Fore.LIGHTMAGENTA_EX}🌌 [BACKGROUND DIGESTION]: Phát hiện dữ liệu tồn đọng trong hàng chờ. Đang chuyển hóa thành tri thức...{Style.RESET_ALL}")
+            
+            # Ghi đè vào file training gốc
+            with open(self.training_file, "a", encoding="utf-8") as f:
+                f.write("\n\n" + new_data)
+                
+            # Xóa file hàng chờ để tránh train lại
+            os.remove(queue_path)
+            
+            # Kích hoạt quá trình nung (có thể chạy bằng thead riêng nếu sợ block sleep loop)
+            import threading
+            def _background_train():
+                try:
+                    self.train_slm()
+                except Exception as e:
+                    print(f"{Fore.RED}Lỗi Background Training: {e}{Style.RESET_ALL}")
+            
+            threading.Thread(target=_background_train, daemon=True).start()
+            
+        except Exception as e:
+            print(f"{Fore.RED}Lỗi Distillation: {e}{Style.RESET_ALL}")
 
 # Integration logic in interaction.py will trigger this during 'sleep'
