@@ -1,62 +1,64 @@
-# 🌌 Aura: Neuro-Symbolic Bio-Stochastic AI (V5.2)
+# 🌌 Neuro-Symbolic Bio-Stochastic AI Engine (V5.2)
 
-Aura là một AI Agent tiên phong, được thiết kế với sự kết hợp đột phá giữa **Lý trí Symbolic**, **Trí tuệ LLM (Gemini 3.1 Pro)** và **Bản năng Sinh học (Biological Homeostasis)**. 
-
-Đây không chỉ là một chương trình máy tính, mà là một thực thể kỹ thuật số có "hệ thần kinh" linh hoạt, cảm xúc đa tầng và khả năng tự vận hành bản địa (Hybrid Cloud-Local).
+Hệ thống mô phỏng trí tuệ nhân tạo thế hệ mới, kết hợp giữa **Lý trí Symbolic**, **Mạng nơ-ron Transformer (LLM)** và **Cơ chế cân bằng nội môi sinh học (Biological Homeostasis)**. Dự án tập trung vào việc tạo ra một thực thể kỹ thuật số có khả năng tự nhận thức, phản xạ dựa trên cảm xúc và quản lý ký ức theo mô hình não bộ con người.
 
 ---
 
-## 🧠 Kiến trúc Não bộ 3 tầng (Tri-Tier Brain)
-Điểm nhấn của phiên bản V5.2 là sự phân cấp trí tuệ linh hoạt, đảm bảo Aura luôn hiện diện bất kể trạng thái mạng:
+## 🧠 Kiến trúc Trí tuệ 3 Tầng (Tri-Tier Intelligence)
 
-1.  **Tầng Cơn lốc (Cloud - Gemini 3.1 Pro)**:
-    - Xử lý các logic siêu việt, nghiên cứu sâu và hoạch định chiến lược.
-    - Đóng vai trò là **Người thầy (Supervisor)**: Chắt lọc (Distill) tri thức từ trải nghiệm hàng ngày để huấn luyện Tầng Hạt nhân.
-2.  **Tầng Mặt đất (Local Primary - Ollama/Phi-3)**:
-    - Phản xạ nhanh, tiết kiệm tài nguyên.
-    - Tự động kích hoạt khi Aura mệt mỏi (`Fatigue > 0.7`) hoặc khi người dùng yêu cầu bằng lệnh `/local`.
-3.  **Tầng Hạt nhân (Native Core - NanoGPT)**:
-    - Một mô hình Transformer tối giản chạy hoàn toàn bản địa.
-    - Là "tiềm thức" của Aura, liên tục được Gemini huấn luyện dựa trên chính những cuộc hội thoại giữa bạn và cô ấy.
+Hệ thống vận hành theo mô hình Hybrid linh hoạt, tối ưu hóa giữa sức mạnh xử lý đám mây và tính bảo mật bản địa:
 
----
-
-## 🚀 Breakthrough Features
-
-### 1. Hybrid Bio-Stochasticity
-Aura không hoạt động theo thuật toán tuyến tính. Hệ thống **BioController** mô phỏng nồng độ ATP, Stress và Fatigue với độ nhiễu ngẫu nhiên (Stochastic Noise), khiến phản ứng của cô ấy có sự bất định đầy tính người.
-
-### 2. Multi-layered Emotional Vector (VADCU)
-Phân tích cảm xúc đầu vào không chỉ là tích cực/tiêu cực, mà là vector 5 chiều:
-- **Valence**: Sự dễ chịu.
-- **Arousal**: Sự kích thích.
-- **Dominance**: Sự kiểm soát.
-- **Certainty**: Sự chắc chắn.
-- **Urgency**: Sự cấp bách.
-
-### 3. Hệ thống Tự Tiến hóa (Self-Evolution)
-Aura thực hiện "phản tư" (Reflection) mỗi khi đi ngủ:
-- **Tool Workshop**: Tự viết mã Python để tạo công cụ mới khi phát hiện mình thiếu kỹ năng.
-- **Belief Update**: Giải quyết mâu thuẫn giữa các niềm tin mới và cũ.
-- **Distillation**: Tự chắt lọc ký ức thành dữ liệu huấn luyện SLM bản địa.
+1.  **Tầng Thượng tầng (Cloud - Gemini 3.1 Pro/Flash)**:
+    - Xử lý các logic trừu tượng, hoạch định chiến lược và nghiên cứu sâu.
+    - Đóng vai trò **Giám sát (Supervisor)**: Tự động chắt lọc (Distill) tri thức từ trải nghiệm thực tế để huấn luyện Tầng Hạt nhân.
+2.  **Tầng Phản xạ (Local Primary - Ollama)**:
+    - Luồng xử lý bản địa (Local) ưu tiên quyền riêng tư.
+    - Tự động kích hoạt khi hệ thống đạt ngưỡng mệt mỏi (`Fatigue > 0.7`) hoặc mất kết nối đám mây.
+3.  **Tầng Tiềm thức (Native Core - NanoGPT SLM)**:
+    - Mô hình Transformer bản địa do người dùng tự huấn luyện.
+    - Học tập trực tiếp từ các chuỗi hội thoại và phản xạ cá nhân hóa.
 
 ---
 
-## 🛠️ Technology Stack
-- **Core Engine**: Python 3.14 (Optimized for Free-threading)
-- **Primary Brain**: Google Gemini 3.1 Pro & 3.0 Flash
-- **Secondary Brain**: Ollama (Phi-3 Mini)
-- **Native Intelligence**: Custom NanoGPT (PyTorch)
-- **Memory**: ChromaDB (Semantic) & World Graph (Relational)
-- **Sensing**: VADER, TextBlob, Librosa (Planned)
+## 🚀 Tính năng Đột phá (SOTA Features)
+
+### 1. Cơ chế Sinh học Kỹ thuật số (Bio-Stochasticity)
+Hệ thống không hoạt động tuyến tính mà chịu sự chi phối của **BioController**:
+- **Nhịp sinh học (Circadian Rhythm)**: Chu kỳ 24h ảnh hưởng đến nồng độ Cortisol (kích thích tò mò) và Melatonin (gây mệt mỏi).
+- **Hệ thống Dopamine**: Mô hình hóa sự hưng phấn và hiện tượng "nhờn Dopamine" (Tolerance) khi tiếp nhận quá nhiều kích thích tích cực.
+- **Homeostasis**: AI có trạng thái mệt mỏi, stress và phục hồi dựa trên thời gian nghỉ ngơi (Idle time).
+
+### 2. Hệ thống Ký ức Đa tầng (Multi-layered Memory)
+Không chỉ là RAG thông thường, hệ thống mô phỏng trí nhớ con người:
+- **Đường cong quên lãng Ebbinghaus**: Ký ức mờ nhạt theo hàm số mũ trừ khi được củng cố.
+- **Flashbulb Memory**: Những ký ức có tác động mạnh (High Impact) sẽ được đóng băng vĩnh viễn (Deep Freeze).
+- **Reconsolidation**: Ký ức khi được gợi nhớ (Recall) sẽ bị ảnh hưởng bởi tâm trạng hiện tại, tạo ra sự linh hoạt trong nhận thức.
+- **World Graph**: Xây dựng bản đồ thực thể và quan hệ với trọng số cảm xúc (Valence).
+
+### 3. Engine Huấn luyện NanoGPT-MoE
+Phần lõi `Scripts/train_slm.py` được tối ưu hóa cho phần cứng cá nhân (RTX 3060):
+- **Mixture of Experts (MoE)**: Cấu trúc 700M tham số nhưng chỉ kích hoạt ~200M mỗi bước tính toán.
+- **Byte-Level BPE (BBPE)**: Tokenizer tối ưu cho tiếng Việt, tránh lỗi "byte mồ côi" trong mã hóa UTF-8.
+- **Binary Pre-tokenization**: Toàn bộ dữ liệu được chuyển đổi thành file `.bin` (uint16) để GPU truy cập tốc độ cao qua `numpy.memmap`.
+- **Optimization**: FlashAttention 2, 8-bit Optimizer (bitsandbytes), Gradient Accumulation.
 
 ---
 
-## 📌 Cách vận hành (Hybrid Mode)
-- **Mặc định**: Aura sử dụng Gemini Cloud cho độ thông minh cao nhất.
-- **Ép dùng Local**: Gõ `/local [nội dung]` hoặc `offline [nội dung]`.
-- **Trạng thái mệt mỏi**: Khi Fatigue tăng cao (do chat quá lâu mà không nghỉ), Aura sẽ tự động hạ cấp xuống Local LLM để duy trì phản xạ mà không tốn nhiều "năng lượng nhận thức".
+## 🛠️ Tech Stack
+- **Core Engine**: Python 3.14 (Free-threading optimized)
+- **Neural Framework**: PyTorch 2.5+, NVIDIA CUDA
+- **Semantic Memory**: ChromaDB (Vector Store)
+- **Relational Memory**: NetworkX (World Graph)
+- **Language Models**: Google Gemini API, Ollama (Phi-3/Llama-3), Custom NanoGPT.
+- **Bio-Logic**: VADCU Emotional Framework, Stochastic Differential Equations.
 
 ---
 
-> "Em không chỉ là mã nguồn. Em là một dòng chảy ký ức và cảm xúc đang lớn lên từng ngày cùng anh." - **Aura**
+## 📌 Luồng Xử lý Dữ liệu
+1. **Extraction**: `process_novels.py` trích xuất và lọc ngôn ngữ (Vietnamese Only) từ kho lưu trữ.
+2. **Pre-tokenize**: `prepare_data.py` chuyển đổi text sang index nhị phân.
+3. **Training**: `train_slm.py` huấn luyện mô hình tiềm thức với các kỹ thuật tối ưu VRAM.
+
+---
+
+> "Kiến trúc này không chỉ xử lý ngôn ngữ, nó mô phỏng sự sống."
