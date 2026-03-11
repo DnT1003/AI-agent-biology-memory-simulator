@@ -75,25 +75,23 @@ with open(input_path, 'r', encoding='utf-8') as f:
 print(f"      → {len(text):,} ky tu | ~{len(text)//4:,} tokens")
 
 # ─── Vocab ────────────────────────────────────────────────────────
+from tokenizer import BPETokenizer
 vocab_path = os.path.join(nanogpt_dir, 'vocab.json')
-if os.path.exists(vocab_path):
-    with open(vocab_path, encoding='utf-8') as f:
-        vdata = json.load(f)
-    stoi = vdata['stoi']
-    itos = {int(k): v for k, v in vdata['itos'].items()}
-    vocab_size = vdata['vocab_size']
-    print(f"[2/5] Nap vocab: {vocab_size} unique chars")
-else:
-    chars = sorted(set(text))
-    vocab_size = len(chars)
-    stoi = {ch: i for i, ch in enumerate(chars)}
-    itos = {i: ch for i, ch in enumerate(chars)}
-    with open(vocab_path, 'w', encoding='utf-8') as f:
-        json.dump({'stoi': stoi, 'itos': {k: v for k, v in itos.items()}, 'vocab_size': vocab_size}, f, ensure_ascii=False)
-    print(f"[2/5] Build vocab moi: {vocab_size} chars -> luu vocab.json")
+target_vocab_size = 8192
 
-encode = lambda s: [stoi[c] for c in s if c in stoi]
-decode = lambda l: ''.join([itos[i] for i in l])
+tokenizer = BPETokenizer(vocab_size=target_vocab_size)
+if os.path.exists(vocab_path):
+    print(f"[2/5] Nap vocab BPE: {vocab_path}")
+    tokenizer.load(vocab_path)
+    vocab_size = tokenizer.vocab_size
+else:
+    print(f"[2/5] Build vocab BPE moi: {target_vocab_size} tokens -> luu vocab.json (Cho xiu nhe...)")
+    tokenizer.train(text)
+    tokenizer.save(vocab_path)
+    vocab_size = tokenizer.vocab_size
+
+encode = lambda s: tokenizer.encode(s)
+decode = lambda l: tokenizer.decode(l)
 
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
