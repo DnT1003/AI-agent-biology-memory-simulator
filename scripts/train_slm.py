@@ -19,6 +19,10 @@ Architecture verified from session fc6fb02b:
 """
 import os, sys, time, json
 
+# Fix cho màn hình Terminal Windows bị lỗi font khi in dấu mũi tên
+if sys.stdout and hasattr(sys.stdout, 'reconfigure') and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 os.environ.pop('CURL_CA_BUNDLE', None)
 os.environ.pop('REQUESTS_CA_BUNDLE', None)
 # Removed expandable_segments as it's unsupported on this platform

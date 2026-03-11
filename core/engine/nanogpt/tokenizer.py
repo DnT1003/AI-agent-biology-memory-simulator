@@ -3,57 +3,75 @@ import json
 import re
 
 class BPETokenizer:
-    """Production-grade BPE Tokenizer with efficient training"""
-    def __init__(self, vocab_size=1000):
+    """Production-grade BPE Tokenizer with efficient tuple-based training"""
+    def __init__(self, vocab_size=8192):
         self.vocab_size = vocab_size
         self.merges = {}
-        self.vocab = {chr(i): i for i in range(256)}
-        self.inv_vocab = {i: chr(i) for i in range(256)}
+        self.vocab = {}
+        self.inv_vocab = {}
 
     def train(self, text):
         if not text: return
         
-        # Pre-tokenize text into words using regex to avoid O(N^2) on the entire 6MB string
-        word_freqs = collections.defaultdict(int)
-        # Match words (including vietnamese characters) and punctuation safely
-        for w in re.findall(r'\w+|[^\w\s]', text):
-            # Format: 'h e l l o' + ' </w>'
-            chars = " ".join(list(w)) + " </w>"
-            word_freqs[chars] += 1
-            
-        words = word_freqs
+        # 1. Thu thập toàn bộ ký tự đơn duy nhất trong văn bản
+        unique_chars = sorted(list(set(text)))
+        self.vocab = {"<UNK>": 0}
+        for c in unique_chars:
+            if c not in self.vocab:
+                self.vocab[c] = len(self.vocab)
+        self.inv_vocab = {v: k for k, v in self.vocab.items()}
         
-        num_merges = self.vocab_size - 256
+        base_vocab_size = len(self.vocab)
+        
+        # 2. Phân tách văn bản tĩnh
+        # Giữ lại toàn bộ dấu cách, xuống dòng thông qua chia words bằng \S+|\s+
+        words = collections.defaultdict(int)
+        for w in re.findall(r'\S+|\s+', text):
+            # Lưu mảng tuple thay vì str để tránh lỗi gộp dấu cách
+            words[tuple(w)] += 1
+            
+        num_merges = max(0, self.vocab_size - base_vocab_size)
+        
         for i in range(num_merges):
             pairs = collections.defaultdict(int)
             for word, freq in words.items():
-                symbols = word.split()
-                for j in range(len(symbols)-1):
-                    pairs[symbols[j], symbols[j+1]] += freq
+                for j in range(len(word)-1):
+                    pairs[word[j], word[j+1]] += freq
             
             if not pairs: break
             best = max(pairs, key=pairs.get)
-            merge_idx = i + 256
-            self.merges[best] = merge_idx
-            self.vocab["".join(best)] = merge_idx
-            self.inv_vocab[merge_idx] = "".join(best)
             
-            # Update vocab training
-            new_words = {}
-            pair_str = " ".join(best)
-            replacement = "".join(best)
+            merge_idx = base_vocab_size + i
+            self.merges[best] = merge_idx
+            
+            new_token = "".join(best)
+            self.vocab[new_token] = merge_idx
+            self.inv_vocab[merge_idx] = new_token
+            
+            # Update word freq
+            new_words = collections.defaultdict(int)
             for word, freq in words.items():
-                new_word = word.replace(pair_str, replacement)
-                new_words[new_word] = freq
+                if len(word) < 2:
+                    new_words[word] += freq
+                    continue
+                
+                new_word = []
+                j = 0
+                while j < len(word):
+                    if j < len(word)-1 and (word[j], word[j+1]) == best:
+                        new_word.append(new_token)
+                        j += 2
+                    else:
+                        new_word.append(word[j])
+                        j += 1
+                new_words[tuple(new_word)] += freq
             words = new_words
 
     def encode(self, text):
         if not text: return []
-        
-        # We need to pre-tokenize encode exactly like train
         tokens = []
-        for w in re.findall(r'\w+|[^\w\s]', text):
-            word = list(w) + ["</w>"]
+        for w in re.findall(r'\S+|\s+', text):
+            word = list(w)
             while len(word) > 1:
                 pairs = [(word[i], word[i+1]) for i in range(len(word)-1)]
                 found_pair = None
@@ -76,25 +94,26 @@ class BPETokenizer:
                         new_word.append(word[j])
                         j += 1
                 word = new_word
-            tokens.extend([self.vocab.get(t, ord(t[0]) if len(t)==1 else 0) for t in word])
             
+            for t in word:
+                tokens.append(self.vocab.get(t, self.vocab.get("<UNK>", 0)))
+                
         return tokens
 
     def decode(self, tokens):
-        res = "".join([self.inv_vocab.get(t, chr(t) if t < 256 else "") for t in tokens])
-        return res.replace("</w>", "")
+        return "".join([self.inv_vocab.get(t, "") for t in tokens])
 
     def save(self, filepath):
-        # Convert tuple keys to strings for JSON
-        merges_str = {f"{k[0]} {k[1]}": v for k, v in self.merges.items()}
+        # Lưu các merge keys dạng tuple -> list
+        merges_list = [[k[0], k[1], v] for k, v in self.merges.items()]
         data = {
-            "vocab_size": self.vocab_size,
+            "vocab_size": len(self.vocab),
             "vocab": self.vocab,
             "inv_vocab": {str(k): v for k, v in self.inv_vocab.items()},
-            "merges": merges_str
+            "merges": merges_list
         }
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
     def load(self, filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -102,6 +121,5 @@ class BPETokenizer:
         self.vocab_size = data["vocab_size"]
         self.vocab = data["vocab"]
         self.inv_vocab = {int(k): v for k, v in data["inv_vocab"].items()}
-        # Reconstruct tuple keys from strings
-        self.merges = {tuple(k.split()): v for k, v in data["merges"].items()}
+        self.merges = {tuple((item[0], item[1])): item[2] for item in data["merges"]}
 
