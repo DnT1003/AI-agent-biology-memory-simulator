@@ -94,8 +94,9 @@ class SLMTrainer:
                 self._run_eval(model, iter)
             
             # Forward pass
-            xb, yb = get_batch('train')
-            logits, loss = model(xb, yb)
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                xb, yb = get_batch('train')
+                logits, loss = model(xb, yb)
             
             # Backward pass
             optimizer.zero_grad(set_to_none=True)
@@ -120,7 +121,8 @@ class SLMTrainer:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y = get_batch('val')
-            logits, loss = model(X, Y)
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                logits, loss = model(X, Y)
             losses[k] = loss.item()
         print(f"   >>> EVAL Step {iter}: Mean Loss {losses.mean():.4f}")
         model.train()

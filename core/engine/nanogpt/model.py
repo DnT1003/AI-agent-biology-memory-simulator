@@ -162,52 +162,21 @@ class AuraAttention(nn.Module):
         # Thay vì tính Full Matrix (T, T), ta tính theo từng block (attn_block_size)
         out = torch.zeros_like(q)
         
-        # Nếu sequence ngắn, chạy Full Attention cho nhanh
-        if T <= attn_block_size:
-            wei = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)
-            # Causal mask + Sliding Window
-            mask = torch.tril(torch.ones(T, T, device=x.device))
-            for i in range(T):
-                for j in range(T):
-                    if i - j > self.window_size: mask[i, j] = 0
-            wei = wei.masked_fill(mask == 0, float('-inf'))
-            wei = F.softmax(wei, dim=-1)
-            out = wei @ v
+        # Nếu sequence ngắn, chạy Full Attention cho nhanh hoặc mặc kệ kích thước, gọi SDPA
+        if self.window_size >= T:
+            # Nếu window coverage full, ta có thể dùng SDPA causal=True gốc cực nhanh
+            out = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True)
         else:
             # Blockwise processing (Ring-style)
-            # Để đơn giản hóa cho Single-GPU, ta dùng phân mảnh dọc Query
-            for i in range(0, T, attn_block_size):
-                end_i = min(i + attn_block_size, T)
-                q_block = q[:, :, i:end_i, :] # (B, H, BS, D)
-                
-                # Biến tích lũy cho Safe Softmax
-                block_out = torch.zeros_like(q_block)
-                l = torch.zeros((B, self.n_head, end_i - i, 1), device=x.device)
-                m = torch.fill_(torch.empty((B, self.n_head, end_i - i, 1), device=x.device), float('-inf'))
-                
-                # Duyệt qua các blocks Key/Value (Giới hạn bởi Sliding Window cho hiệu suất)
-                start_j = max(0, i - self.window_size)
-                for j in range(start_j, end_i, attn_block_size): # Causal: j không vượt quá end_i
-                    end_j = min(j + attn_block_size, end_i)
-                    k_block = k[:, :, j:end_j, :]
-                    v_block = v[:, :, j:end_j, :]
-                    
-                    attn_scores = (q_block @ k_block.transpose(-2, -1)) * (self.head_dim ** -0.5)
-                    
-                    # Apply causal mask nội bộ block nếu j == i
-                    if i == j:
-                        curr_bs = end_i - i
-                        m_causal = torch.tril(torch.ones(curr_bs, curr_bs, device=x.device))
-                        attn_scores = attn_scores.masked_fill(m_causal == 0, float('-inf'))
-                    
-                    # Flash-Attention style online softmax
-                    m_new = torch.max(m, torch.max(attn_scores, dim=-1, keepdim=True)[0])
-                    p = torch.exp(attn_scores - m_new)
-                    l = l * torch.exp(m - m_new) + torch.sum(p, dim=-1, keepdim=True)
-                    block_out = block_out * torch.exp(m - m_new) + (p @ v_block)
-                    m = m_new
-                
-                out[:, :, i:end_i, :] = block_out / l
+            # Trong thực tế, F.scaled_dot_product_attention cũng hoàn toàn xử lý được các Mask Boolean tự chế nhưng tốc độ sẽ rơi về 'math' backend (chậm hơn FlashAttention)
+            # Tuy nhiên với block_size = 512, SDPA (Math backend) có mask boolean vẫn tốn cực ít VRAM và nhanh hơn cách cũ.
+            
+            mask = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))
+            for i in range(T):
+                for j in range(T):
+                    if i - j > self.window_size: mask[i, j] = False
+            
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
         
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.wo(out)
@@ -260,6 +229,46 @@ class AuraFlashModel(nn.Module):
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
         return logits, loss
+        
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+        """
+        Implementation of nanoGPT's smart optimizer configuration:
+        - Tách riêng parameters cần và không cần weight decay (bias, layernorm không cần)
+        - Kích hoạt fused AdamW nếu chạy trên CUDA để tăng tốc tính toán.
+        """
+        import inspect
+        
+        # Bắt đầu phân loại parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # Chỉ tối ưu những param yêu cầu gradients
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        
+        # Bất kỳ Tensor nào là ma trận từ 2 chiều trở lên thì sẽ áp dụng weight decay
+        # VD: weight của nn.Linear hay nn.Embedding
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        # Các Tensor 1 chiều (như bias và trọng số của RMSNorm) sẽ không bị weight decay
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        
+        num_decay = sum(p.numel() for p in decay_params)
+        num_nodecay = sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay:,} parameters")
+        
+        # Nếu đang sử dụng CUDA, ta bật 'fused' để tăng tốc thuật toán học gấp rưỡi
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        print(f"using fused AdamW: {use_fused}")
+        
+        # Khởi tạo optimizer gốc của PyTorch với AMP
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        return optimizer
+
     def generate(self, idx, max_new_tokens):
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -block_size:]
@@ -333,6 +342,21 @@ class AuraTinyModel(nn.Module):
         logits = self.output(x)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) if targets is not None else None
         return logits, loss
+        
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+        import inspect
+        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        return optimizer
 
 # --- SPECULATIVE DECODING ENGINE ---
 

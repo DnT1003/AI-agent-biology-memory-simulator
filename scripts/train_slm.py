@@ -25,6 +25,12 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure') and sys.stdout.encoding.low
 
 os.environ.pop('CURL_CA_BUNDLE', None)
 os.environ.pop('REQUESTS_CA_BUNDLE', None)
+
+# Fix for MSVC 2022 on Windows to run torch.compile natively without IDE
+msvc_path = r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64"
+if os.path.exists(msvc_path) and msvc_path not in os.environ.get('PATH', ''):
+    os.environ['PATH'] = msvc_path + os.pathsep + os.environ.get('PATH', '')
+    
 # Removed expandable_segments as it's unsupported on this platform
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -46,6 +52,7 @@ EVAL_INTERVAL  = 250    # Đánh giá mỗi 250 bước để tối ưu tốc đ
 LEARNING_RATE  = 3e-4
 GRAD_CLIP      = 1.0
 WARMUP_ITERS   = 200
+GRAD_ACCUM_STEPS = 4    # Tương đương Batch = 32 nhưng không tốn thêm VRAM
 USE_CHECKPOINT = True   # Kích hoạt Gradient Checkpointing để tiết kiệm VRAM cực đại
 
 CHECKPOINT_DIR  = os.path.join(project_root, 'outputs', 'slm_checkpoints')
@@ -145,13 +152,21 @@ if RESUME:
         except Exception as e:
             print(f"      → Tiny resume failed ({e})")
 
+# Native PyTorch Compile using Windows MSVC
+print(f"[3.5/5] Compiling models with Triton/MSVC (May take a few minutes)...")
+try:
+    flash = torch.compile(flash)
+    tiny = torch.compile(tiny)
+    print(f"      → Compile: SUCCESS")
+except Exception as e:
+    print(f"      → Compile: FAILED ({e})")
+
 # ─── Optimizers ───────────────────────────────────────────────────
-# Adam8bit: does NOT need GradScaler.
-# Important: backward() is in fp16 (half), but Adam8bit handles quantized fp32 internally.
-import bitsandbytes as bnb
-opt_flash = bnb.optim.Adam8bit(flash.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
-opt_tiny  = bnb.optim.Adam8bit(tiny.parameters(),  lr=LEARNING_RATE, weight_decay=0.01)
-print(f"[4/5] Optimizer: bitsandbytes.Adam8bit (no GradScaler)")
+# Áp dụng công nghệ NanoGPT: Fused AdamW tĩnh cho Tensor và loại bỏ Weight Decay khởi bias.
+# Bfloat16 vẫn được giữ lại trên vòng lặp backward để ngăn underflow qua card 3060.
+opt_flash = flash.configure_optimizers(weight_decay=0.1, learning_rate=LEARNING_RATE, betas=(0.9, 0.95), device_type=device)
+opt_tiny  = tiny.configure_optimizers(weight_decay=0.1, learning_rate=LEARNING_RATE, betas=(0.9, 0.95), device_type=device)
+print(f"[4/5] Optimizer: Fused AdamW + Custom WeightDecay (NanoGPT config)")
 
 def get_lr(step):
     """Cosine annealing with linear warmup"""
@@ -170,7 +185,7 @@ def estimate_loss(model):
         ls = torch.zeros(15)
         for k in range(15):
             X, Y = get_batch(split)
-            with torch.amp.autocast('cuda'):
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 _, loss = model(X, Y)
             ls[k] = loss.float().item()
         losses[split] = ls.mean().item()
@@ -213,26 +228,30 @@ for step in range(MAX_ITERS):
 
     # ─ Train Flash ─
     Xb, Yb = get_batch('train')
-    opt_flash.zero_grad(set_to_none=True)
-    with torch.amp.autocast('cuda'):
+    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
         _, loss = flash(Xb, Yb)
+        loss = loss / GRAD_ACCUM_STEPS
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(flash.parameters(), GRAD_CLIP)
-    opt_flash.step()
+    
+    if (step + 1) % GRAD_ACCUM_STEPS == 0:
+        torch.nn.utils.clip_grad_norm_(flash.parameters(), GRAD_CLIP)
+        opt_flash.step()
+        opt_flash.zero_grad(set_to_none=True)
     del loss, Xb, Yb
-    torch.cuda.empty_cache()
 
     # ─ Train Tiny (every 2 steps) ─
     if step % 2 == 0:
         Xb2, Yb2 = get_batch('train')
-        opt_tiny.zero_grad(set_to_none=True)
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             _, loss2 = tiny(Xb2, Yb2)
+            loss2 = loss2 / GRAD_ACCUM_STEPS
         loss2.backward()
-        torch.nn.utils.clip_grad_norm_(tiny.parameters(), GRAD_CLIP)
-        opt_tiny.step()
+        
+        if (step + 1) % GRAD_ACCUM_STEPS == 0:
+            torch.nn.utils.clip_grad_norm_(tiny.parameters(), GRAD_CLIP)
+            opt_tiny.step()
+            opt_tiny.zero_grad(set_to_none=True)
         del loss2, Xb2, Yb2
-        torch.cuda.empty_cache()
 
 # ─── Done ─────────────────────────────────────────────────────────
 total_time = time.time() - start
@@ -246,7 +265,7 @@ print(f"{'='*60}{Style.RESET_ALL}")
 # Sample generation
 print(f"\n[5/5] Sample generation (Flash):")
 flash.eval()
-with torch.no_grad(), torch.amp.autocast('cuda'):
+with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16):
     ctx = torch.tensor(encode("Cô ấy"), dtype=torch.long, device=device).unsqueeze(0)
     out = flash.generate(ctx, max_new_tokens=200)
 print(decode(out[0].tolist()))
