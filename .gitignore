@@ -33,6 +33,7 @@ core/engine/nanogpt/*.pth
 core/engine/nanogpt/vocab.json
 
 # Development
+*.pyc
 v5_test.py
 hybrid_test.py
 migrate_db.py
@@ -44,3 +45,8 @@ train_script.txt
 1/
 temp_backup/
 patch_test_shell.txt
+
+# Testing
+tests/
+test_*.py
+*_test.py
