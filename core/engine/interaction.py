@@ -178,6 +178,10 @@ class InteractionController:
             # Ghi log text the JSON dict
             final_full_text += json.dumps(result_json, ensure_ascii=False) + "\n"
             
+            for key in ["valence", "arousal", "importance", "type", "internal_monologue", "response"]:
+                if key in result_json:
+                    result[key] = result_json[key]
+            
             thought = result_json.get("thought", "")
             action = result_json.get("action")
             response = result_json.get("response", "")
@@ -198,8 +202,9 @@ class InteractionController:
                     if not response:
                         response = f"Đã thực thi hành động: {func_name}"
                         result["response"] = response
-                
-                break
+            
+            # Luôn thoát vòng lặp sau khi có kết quả hợp lệ để tránh lặp vô hạn
+            break
                 
         print("\n")
         
@@ -212,7 +217,7 @@ class InteractionController:
         # --- PHASE 2: INTEGRATED COGNITIVE ACTIONS (Execution AFTER Response) ---
         
         # Process Short Term Memory
-        threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output), daemon=True).start()
+        threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, result), daemon=True).start()
         with self.engine.memory.lock:
             self.engine.short_term_buffer.append(f"User: {user_input}")
             self.engine.short_term_buffer.append(f"Aura: {output}")

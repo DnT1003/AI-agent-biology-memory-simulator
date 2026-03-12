@@ -3,8 +3,12 @@ import atexit
 import signal
 import threading
 import asyncio
-from prompt_toolkit import PromptSession
-from prompt_toolkit.patch_stdout import patch_stdout
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.patch_stdout import patch_stdout
+    HAS_PROMPT_TOOLKIT = True
+except ImportError:
+    HAS_PROMPT_TOOLKIT = False
 from colorama import Fore, Style, init
 
 from core.engine import CognitiveEngine
@@ -68,11 +72,12 @@ if __name__ == "__main__":
     ai.autonomous.start()
 
     async def interactive_loop():
-        use_prompt_toolkit = True
+        use_prompt_toolkit = HAS_PROMPT_TOOLKIT
         try:
-            session = PromptSession(f"\n{Fore.WHITE}👤 Bạn: {Style.RESET_ALL}")
+            if use_prompt_toolkit:
+                session = PromptSession(f"\n{Fore.WHITE}👤 Bạn: {Style.RESET_ALL}")
         except Exception as e:
-            print(f"{Fore.YELLOW}⚠️ Không tìm thấy Windows Console chuẩn (có thể đang chạy trong IDE). Fallback sang input() thường.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}⚠️ Không khởi tạo được prompt_toolkit (có thể chạy trong IDE?): {e}. Fallback sang input(){Style.RESET_ALL}")
             use_prompt_toolkit = False
 
         reply_task = None

@@ -10,9 +10,11 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 logger = logging.getLogger(__name__)
 
 from core.local_llm import LocalLLM
-import PIL.Image
-
-logger = logging.getLogger(__name__)
+try:
+    import PIL.Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 class LLM:
     def __init__(self, ego=None):
@@ -71,11 +73,15 @@ class LLM:
             
         contents = [prompt]
         if image_path:
-            try:
-                img = PIL.Image.open(image_path)
-                contents.append(img)
-            except Exception as e:
-                logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
+            if not HAS_PIL:
+                logger.warning(f"Không thể nạp hình ảnh vì chưa cài đặt module Pillow: {image_path}")
+                print(f"{Fore.YELLOW}⚠️ [HỆ THỐNG]: Cần cài đặt Pillow để nhận dạng ảnh. Vui lòng chạy: pip install Pillow.{Style.RESET_ALL}")
+            else:
+                try:
+                    img = PIL.Image.open(image_path)
+                    contents.append(img)
+                except Exception as e:
+                    logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
 
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
@@ -141,11 +147,15 @@ class LLM:
             
         contents = [prompt]
         if image_path:
-            try:
-                img = PIL.Image.open(image_path)
-                contents.append(img)
-            except Exception as e:
-                logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
+            if not HAS_PIL:
+                logger.warning(f"Không thể nạp hình ảnh vì chưa cài đặt module Pillow: {image_path}")
+                print(f"{Fore.YELLOW}⚠️ [HỆ THỐNG]: Cần cài đặt Pillow để nhận dạng ảnh. Vui lòng chạy: pip install Pillow.{Style.RESET_ALL}")
+            else:
+                try:
+                    img = PIL.Image.open(image_path)
+                    contents.append(img)
+                except Exception as e:
+                    logger.error(f"Lỗi nạp hình ảnh LLM: {e}")
 
         resp = self.client.models.generate_content(
             model=model_override or Config.MODEL_NAME, 
