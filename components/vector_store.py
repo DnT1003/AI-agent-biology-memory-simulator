@@ -41,16 +41,10 @@ class VectorStore:
                 metadata={"hnsw:space": "cosine"}
             )
         except Exception as e:
-            print(f"{Fore.RED}⚠️ [VECTOR STORE]: Could not connect to Chroma Server: {e}{Style.RESET_ALL}")
-            # Mock collection to allow system to start without crashing
-            self.collection = type('MockCollection', (), {
-                'upsert': lambda self, *args, **kwargs: None,
-                'update': lambda self, *args, **kwargs: None,
-                'delete': lambda self, *args, **kwargs: None,
-                'get': lambda self, *args, **kwargs: {'ids': [], 'metadatas': []},
-                'query': lambda self, *args, **kwargs: {'ids': [[]], 'metadatas': [[]], 'distances': [[]]},
-                'count': lambda self, *args, **kwargs: 0
-            })()
+            print(f"{Fore.RED}❌ [VECTOR STORE FATAL]: Could not connect to Chroma Server: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}   Hệ thống yêu cầu bộ nhớ dài hạn để hoạt động chính xác. Vui lòng chạy start_services.ps1 trước.{Style.RESET_ALL}")
+            import sys
+            sys.exit(1)
 
     # ─────────────────────────────────────────────────
     # INTERNAL SERIALIZATION / DESERIALIZATION

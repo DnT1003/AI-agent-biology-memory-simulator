@@ -104,6 +104,10 @@ class SkillRegistry:
 
     def load_dynamic_skills(self):
         """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills."""
+        from config import Config
+        if not getattr(Config, 'ALLOW_DYNAMIC_SKILLS', False):
+            return
+
         dynamic_dir = os.path.join(os.path.dirname(__file__), "dynamic_skills")
         if not os.path.exists(dynamic_dir):
             return

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+chromadb
+google-genai
+numpy
+colorama
+tenacity
+python-dotenv
+requests
+transformers
+torch
+sentencepiece
+beautifulsoup4
+cloudscraper

@@ -1,0 +1,5 @@
+﻿=== API: v1 ===
+models/gemini-embedding-001 | ['embedContent', 'countTextTokens', 'countTokens', 'asyncBatchEmbedContent']
+
+=== API: v1beta1 ===
+models/gemini-embedding-001 | ['embedContent', 'countTextTokens', 'countTokens', 'asyncBatchEmbedContent']

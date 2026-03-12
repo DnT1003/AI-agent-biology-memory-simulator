@@ -13,9 +13,8 @@ import asyncio
 import sys
 import os
 
-# ⚠️ Fix: PostgreSQL override SSL globally, gây lỗi Transformers model download
-os.environ.pop('CURL_CA_BUNDLE', None)
-os.environ.pop('REQUESTS_CA_BUNDLE', None)
+# Note: If PostgreSQL overrides SSL, consider localized fixes or environment-specific cert stores.
+# Avoid global environ.pop which weakens TLS for the entire process.
 
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))

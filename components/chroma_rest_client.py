@@ -18,7 +18,7 @@ class ChromaRestClient:
         else:
             url = f"{self.base_url}/{endpoint}"
             
-        resp = requests.request(method, url, **kwargs)
+        resp = requests.request(method, url, timeout=kwargs.pop('timeout', 5), **kwargs)
         
         if resp.status_code == 404 and ignore_404:
             return {}
@@ -109,6 +109,6 @@ class CollectionWrapper:
         return self.client._request("POST", f"collections/{self.id}/delete", json=payload)
 
     def count(self):
-        resp = requests.get(f"{self.client.base_url}/collections/{self.id}/count")
+        resp = requests.get(f"{self.client.base_url}/collections/{self.id}/count", timeout=5)
         resp.raise_for_status()
         return int(resp.text)

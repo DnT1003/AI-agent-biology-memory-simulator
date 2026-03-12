@@ -272,7 +272,7 @@ class InteractionController:
         def _extract_graph():
             # Sử dụng logic spaCy + LLM mới từ WorldGraph
             self.engine.world_graph.update_from_text(user_input, self.engine.llm)
-        threading.Thread(target=_extract_graph).start()
+        threading.Thread(target=_extract_graph, daemon=True).start()
 
         # [Phase 5] Value System: phát hiện User đang thể hiện giá trị nào
         def _extract_values():

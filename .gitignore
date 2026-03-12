@@ -35,17 +35,6 @@ core/engine/nanogpt/*.pth
 core/engine/nanogpt/vocab.json
 
 # Development
-tests/
-test_*.py
-verify_*.py
-sniff_*.py
-peek_memories.py
-discover_*.py
-explore_*.py
-inspect_*.py
-list_*.py
-search_*.py
-run_*.py
 v5_test.py
 hybrid_test.py
 migrate_db.py

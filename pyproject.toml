@@ -19,6 +19,9 @@ dependencies = [
     "sentencepiece",
     "beautifulsoup4",
     "cloudscraper",
+    "prompt-toolkit",
+    "Pillow",
+    "pywin32; sys_platform == 'win32'",
 ]
 
 [tool.setuptools]

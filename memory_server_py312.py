@@ -6,6 +6,9 @@ import os
 
 app = FastAPI(title="Aura ChromaDB Wrapper")
 
+# Security: Basic token protection for destructive actions
+API_TOKEN = os.getenv("AURA_MEM_TOKEN", "aura_secret_default_change_me")
+
 # Initialize ChromaDB Persistent Client
 DB_PATH = os.getenv("CHROMA_DB_PATH", "outputs/chroma_db_server")
 if not os.path.exists(DB_PATH):
@@ -92,7 +95,9 @@ async def get_memories(req: GetRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/delete")
-async def delete_memories(req: DeleteRequest):
+async def delete_memories(req: DeleteRequest, token: Optional[str] = None):
+    if token != API_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
     try:
         kwargs = {}
         if req.ids is not None: kwargs["ids"] = req.ids
@@ -110,7 +115,9 @@ async def count_memories():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/clear")
-async def clear_all():
+async def clear_all(token: Optional[str] = None):
+    if token != API_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
     global collection
     try:
         client.delete_collection("aura_long_term_memory")

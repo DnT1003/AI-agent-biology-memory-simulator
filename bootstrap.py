@@ -3,10 +3,13 @@ import subprocess
 import sys
 import shutil
 
+import shlex
+
 def run_command(cmd):
     print(f"Executing: {cmd}")
     try:
-        subprocess.check_call(cmd, shell=True)
+        args = shlex.split(cmd)
+        subprocess.check_call(args)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {e}")
         return False
