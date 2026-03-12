@@ -18,7 +18,7 @@ WORKDIR /app
 RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Cai dat dependencies rieng cho GPU Service
-RUN pip3 install --no-cache-dir fastapi uvicorn pydantic transformers colorama reqests
+RUN pip3 install --no-cache-dir fastapi uvicorn pydantic transformers colorama requests scipy
 
 # Copy thu muc core
 COPY core ./core

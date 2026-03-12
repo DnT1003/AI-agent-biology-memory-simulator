@@ -35,6 +35,13 @@ spec:
               value: http://aura-gpu-svc:8001
             - name: AURA_OUTPUT_DIR
               value: /app/outputs
+          resources:
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+            requests:
+              memory: "256Mi"
+              cpu: "500m"
           volumeMounts:
             - name: brain-storage
               mountPath: /app/outputs

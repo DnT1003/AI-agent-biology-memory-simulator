@@ -21,9 +21,13 @@ spec:
           imagePullPolicy: Never  # Do build ở máy local
           ports:
             - containerPort: 8000
-          # TEST IDE EXTENSION Ở ĐÂY: Bạn hãy thử xuống dòng dưới chữ "8000",
-          # Gõ chữ "env" hoặc "resources" và ấn Ctr+Space xem IDE có gợi ý 
-          # cấu trúc K8s hoàn chỉnh (limits, requests...) không nhé!
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
           volumeMounts:
             - name: chroma-data
               mountPath: /chroma_data
