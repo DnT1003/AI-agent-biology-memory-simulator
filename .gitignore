@@ -14,10 +14,8 @@ __pycache__/
 *.log
 *.docx
 *.zip
-error_log.txt
-debug_import_results.txt
-test_out.txt
-v5_test_output.txt
+*.txt
+!requirements.txt
 
 # Databases & Outputs (Large Files)
 outputs/
