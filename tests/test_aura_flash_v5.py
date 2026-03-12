@@ -18,6 +18,7 @@ class MockConfig:
     SLM_N_EXPERTS = 4
     SLM_TOP_K = 2
     SLM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../core/engine/nanogpt"))
+    OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../outputs"))
 
 with patch('config.Config', MockConfig):
     # Import model trễ để đảm bảo patch có hiệu lực
@@ -92,22 +93,14 @@ class TestAuraFlashV5(unittest.TestCase):
     def test_moe_routing(self):
         moe = AuraMoE(self.n_embd, self.n_experts, self.top_k).to(self.device)
         x = torch.randn(1, 4, self.n_embd)
-        output = moe(x)
+        output, aux_loss = moe(x)
         self.assertEqual(output.shape, x.shape)
         self.assertFalse(torch.isnan(output).any())
 
     # 3. TEST ATTENTION (SLIDING WINDOW)
     def test_sliding_window_mask(self):
-        attention = AuraAttention(self.n_embd, self.n_head, self.n_kv_head, window_size=self.window_size).to(self.device)
+        attention = AuraAttention(self.n_embd, self.n_head, self.n_kv_head).to(self.device)
         x = torch.randn(1, 16, self.n_embd)
-        
-        # Build mask thủ công cho test
-        mask = torch.tril(torch.ones(16, 16))
-        for i in range(16):
-            for j in range(16):
-                if i - j > self.window_size:
-                    mask[i, j] = 0
-        attention.sliding_mask = mask
         
         output = attention(x)
         self.assertEqual(output.shape, (1, 16, self.n_embd))
@@ -115,7 +108,7 @@ class TestAuraFlashV5(unittest.TestCase):
     # 4. TEST MODEL FORWARD & GENERATION
     def test_model_inference(self):
         idx = torch.randint(0, self.vocab_size, (1, 5))
-        logits, loss = self.model(idx)
+        logits, loss, aux_loss = self.model(idx)
         self.assertEqual(logits.shape, (1, 5, self.vocab_size))
         
         # Test sinh text ngắn
@@ -130,7 +123,7 @@ class TestAuraFlashV5(unittest.TestCase):
         self.assertEqual(db.query("status"), "ok")
         
         idx = torch.randint(0, self.vocab_size, (1, 4))
-        logits, _ = vm.run_inference(self.model, idx)
+        logits, _, _ = vm.run_inference(self.model, idx)
         self.assertEqual(logits.shape, (1, 4, self.vocab_size))
 
 if __name__ == "__main__":

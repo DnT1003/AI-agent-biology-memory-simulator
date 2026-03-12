@@ -105,7 +105,7 @@ class BPETokenizer:
 
     def decode(self, tokens):
         byte_data = b"".join([self.inv_vocab.get(t, b"") for t in tokens])
-        return byte_data.decode('utf-8', errors='replace')
+        return byte_data.decode('utf-8', errors='replace').replace('\x00', '')
 
     def save(self, filepath):
         # Chuyển bytes thành chuỗi Hex để lưu JSON an toàn
