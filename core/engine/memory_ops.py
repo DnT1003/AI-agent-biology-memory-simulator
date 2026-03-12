@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import time
 import random
@@ -16,9 +16,13 @@ class MemoryOperationsController:
     def __init__(self, engine):
         self.engine = engine
         from core.engine.integrity_filter import IntegrityFilter
-        from core.engine.slm_trainer import SLMTrainer
         self.integrity_filter = IntegrityFilter(engine)
-        self.slm_trainer = SLMTrainer(engine)
+        self.slm_trainer = None
+        try:
+            from core.engine.slm_trainer import SLMTrainer
+            self.slm_trainer = SLMTrainer(engine)
+        except Exception:
+            self.slm_trainer = None
 
     def _apply_fog_masking(self, content: str) -> str:
         """[Phase 21] Che mờ các chi tiết cụ thể nếu Aura đang mệt mỏi hoặc stress."""
@@ -289,7 +293,8 @@ class MemoryOperationsController:
         self._tool_workshop_phase()
         self._calibration_phase()
         self._belief_evolution_phase()
-        self.slm_trainer.distill_memories_to_dataset()
+        if self.slm_trainer:
+            self.slm_trainer.distill_memories_to_dataset()
         
         # [Phase 19] Cập nhật Mood dựa trên tổng hòa ký ức đã được chữa lành
         mems_after = self.engine.memory.get_all()

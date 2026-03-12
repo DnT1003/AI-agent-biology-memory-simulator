@@ -1,6 +1,10 @@
-import re
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from textblob import TextBlob
+﻿import re
+try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    HAS_VADER = True
+except Exception:
+    SentimentIntensityAnalyzer = None
+    HAS_VADER = False
 
 class SensoryPreprocessor:
     """
@@ -8,12 +12,15 @@ class SensoryPreprocessor:
     Phân tích thuộc tính vật lý và cảm xúc thô của Input trước khi chuyển cho LLM.
     """
     def __init__(self):
-        self.analyzer = SentimentIntensityAnalyzer()
+        self.analyzer = SentimentIntensityAnalyzer() if HAS_VADER and SentimentIntensityAnalyzer else None
 
     def evaluate_input(self, text: str, user_context: dict = None) -> dict:
         # 1. Phân tích Valence (Vui/Buồn) bằng VADER
-        scores = self.analyzer.polarity_scores(text)
-        valence = scores['compound']
+        if self.analyzer:
+            scores = self.analyzer.polarity_scores(text)
+            valence = float(scores.get("compound", 0.0))
+        else:
+            valence = 0.0
         
         # 2. Phân tích Arousal (Kích động) dựa trên cường độ văn bản
         # Logic: Dấu chấm than, viết hoa toàn bộ, và các từ nhấn mạnh tăng Arousal
@@ -25,7 +32,6 @@ class SensoryPreprocessor:
         
         # 3. Phân tích Dominance (Quyền lực/Sự tự tin của User)
         # User ra lệnh (Dominance cao) vs User hỏi han (Dominance thấp)
-        blob = TextBlob(text)
         dominance = 0.5
         if re.search(r'\b(do|must|tell|give|search|start|stop)\b', text.lower()):
             dominance += 0.2
