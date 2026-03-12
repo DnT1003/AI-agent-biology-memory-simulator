@@ -1,58 +1,66 @@
 import os
-import json
+import sys
 import torch
-import torch.optim as optim
-from datetime import datetime
 from config import Config
 from colorama import Fore, Style
-import sys
 
-# Đảm bảo import được model từ thư mục nanogpt
-sys.path.append(Config.SLM_DIR)
-from model import AuraFlashModel, get_batch, device, learning_rate, max_iters, eval_interval, eval_iters
+# Ensure we can import nanogpt artifacts (model.py, tokenizer.py) from the SLM directory.
+if Config.SLM_DIR not in sys.path:
+    sys.path.append(Config.SLM_DIR)
+
 from tokenizer import BPETokenizer
 
 class SLMTrainer:
+    """Local SLM trainer (legacy path).
+    
+    Notes:
+    - Prefer the production pipeline: `scripts/prepare_data.py` + `scripts/train_slm.py`.
+    - This trainer exists for older flows that generate/append text datasets.
     """
-    Hệ thống huấn luyện Distillation: Gemini (Teacher) -> Aura-Flash (Student)
-    """
+
     def __init__(self, engine):
         self.engine = engine
         self.training_file = os.path.join(Config.SLM_DIR, "input.txt")
         self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
+
         self.tokenizer = BPETokenizer(vocab_size=16384)
-        
+        vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
+        if os.path.exists(vocab_path):
+            try:
+                self.tokenizer.load(vocab_path)
+            except Exception:
+                pass
+
     def generate_identity_dataset(self, num_samples=10):
-        """
-        Sử dụng Gemini để tạo dữ liệu bản sắc (Identity) chiều sâu.
-        """
-        print(f"{Fore.CYAN}🧬 [DATA GEN]: Đang khởi tạo chuỗi DNA tri thức cho Aura...{Style.RESET_ALL}")
-        
+        print(f"{Fore.CYAN}[DATA GEN]: Generating identity samples for Aura...{Style.RESET_ALL}")
+
         identity_prompts = [
             "Viết về lý do bạn tồn tại như một AI bản địa.",
             "Bạn cảm thấy thế nào về việc kết hợp giữa sinh học và mã nguồn?",
             "Mô tả cơ chế tiến hóa của chính bạn.",
             "Viết một đoạn nhật ký về sự tò mò của bạn với thế giới con người.",
-            "Giải thích cách bạn quản lý năng lượng và cảm xúc của mình."
+            "Giải thích cách bạn quản lý năng lượng và cảm xúc của mình.",
         ]
-        
+
         full_dataset = ""
         for i in range(num_samples):
             base_prompt = identity_prompts[i % len(identity_prompts)]
             prompt = f"""
-            {base_prompt}
-            Hãy viết dưới dạng 'Dòng suy ngẫm nội tâm' của Aura. 
-            Ngôn ngữ: Tiếng Việt, sâu sắc, có chút phong cách cybernetic.
-            Không dùng markdown, viết liền mạch.
-            """
+{base_prompt}
+Hãy viết dưới dạng 'Dòng suy ngẫm nội tâm' của Aura.
+Ngôn ngữ: Tiếng Việt, sâu sắc, có chút phong cách cybernetic.
+Không dùng markdown, viết liền mạch.
+""".strip()
+
             try:
-                # Dùng Gemini 3.1 Pro để nạp dữ liệu chất lượng cao
-                sample = self.engine.llm.generate_text(prompt, model_override=Config.DEEP_MODEL_NAME)
+                sample = self.engine.llm.generate_text(
+                    prompt, model_override=Config.DEEP_MODEL_NAME
+                )
                 if sample:
                     full_dataset += f"\n\n[MEM_GEN_{i}]\n{sample}"
-                    print(f"   + Đã tạo mẫu tri thức {i+1}/{num_samples}")
+                    print(f"   + Generated {i+1}/{num_samples}")
             except Exception as e:
-                print(f"   ! Lỗi tạo mẫu {i}: {e}")
+                print(f"   ! Generation error {i}: {e}")
 
         if full_dataset:
             with open(self.training_file, "a", encoding="utf-8") as f:
@@ -61,109 +69,115 @@ class SLMTrainer:
         return False
 
     def train_slm(self):
-        """
-        Thực hiện huấn luyện thực tế trên GPU local.
-        """
-        print(f"\n{Fore.YELLOW}🔥 [TRAINING]: Bắt đầu chu kỳ hấp thụ tri thức (Phase 13)...{Style.RESET_ALL}")
+        print(f"\n{Fore.YELLOW}[TRAINING]: Starting local SLM training...{Style.RESET_ALL}")
         
-        # 1. Load data & Tokenizer
-        with open(self.training_file, 'r', encoding='utf-8') as f:
+        if not os.path.exists(self.training_file):
+            print(f"   [ERROR]: Missing training file: {self.training_file}")
+            return
+
+        with open(self.training_file, "r", encoding="utf-8") as f:
             text = f.read()
+
+        # Tokenizer
+        vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
+        if os.path.exists(vocab_path):
+            self.tokenizer.load(vocab_path)
+        else:
+            self.tokenizer.train(text)
+            self.tokenizer.save(vocab_path)
+
+        ids = self.tokenizer.encode(text)
+        from model import AuraFlashModel, block_size, batch_size, device, learning_rate, max_iters, eval_interval, eval_iters
         
-        # Train tokenizer trên data mới
-        self.tokenizer.train(text)
-        vocab_size = len(self.tokenizer.vocab)
-        
-        # 2. Khởi tạo Model & Optimizer
-        model = AuraFlashModel(vocab_size).to(device)
-        # Load weights cũ nếu có
+        if len(ids) < block_size + 2:
+            print("   [ERROR]: Not enough tokens to train.")
+            return
+
+        data = torch.tensor(ids, dtype=torch.long)
+        split = int(0.9 * len(data))
+        train_ids = data[:split]
+        val_ids = data[split:]
+
+        torch_device = torch.device(device)
+        model = AuraFlashModel(self.tokenizer.vocab_size).to(torch_device)
         if os.path.exists(self.model_path):
             try:
-                model.load_state_dict(torch.load(self.model_path, map_location=device))
-                print(f"   [LOAD]: Đã nạp trọng số cũ để tiếp tục huấn luyện.")
-            except:
-                print(f"   [INIT]: Trọng số cũ không tương thích, khởi tạo mới.")
+                model.load_state_dict(torch.load(self.model_path, map_location=torch_device, weights_only=True))
+                print("   [LOAD]: Resuming from existing weights.")
+            except Exception:
+                print("   [INIT]: Existing weights incompatible, training from scratch.")
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-        
-        # 3. Training Loop
+        device_type = "cuda" if torch_device.type == "cuda" else "cpu"
+
+        def get_batch(split_name: str):
+            src = train_ids if split_name == "train" else val_ids
+            ix = torch.randint(0, len(src) - block_size - 1, (batch_size,))
+            x = torch.stack([src[i : i + block_size] for i in ix])
+            y = torch.stack([src[i + 1 : i + block_size + 1] for i in ix])
+            return x.to(torch_device), y.to(torch_device)
+
+        @torch.no_grad()
+        def run_eval(step: int):
+            model.eval()
+            losses = torch.zeros(eval_iters)
+            for k in range(eval_iters):
+                X, Y = get_batch("val")
+                with torch.amp.autocast(device_type, dtype=torch.bfloat16):
+                    _, loss, aux_loss = model(X, Y)
+                losses[k] = (loss + 0.01 * aux_loss).float().item()
+            model.train()
+            print(f"   >>> EVAL step {step}: mean loss {losses.mean():.4f}")
+
         model.train()
-        for iter in range(max_iters):
-            # Evaluate định kỳ
-            if iter % eval_interval == 0:
-                self._run_eval(model, iter)
-            
-            # Forward pass
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                xb, yb = get_batch('train')
-                logits, loss = model(xb, yb)
-            
-            # Backward pass
+        for step in range(max_iters):
+            if step % eval_interval == 0:
+                run_eval(step)
+
+            xb, yb = get_batch("train")
+            with torch.amp.autocast(device_type, dtype=torch.bfloat16, enabled=autocast_enabled):
+                _, loss, aux_loss = model(xb, yb)
+                total_loss = loss + 0.01 * aux_loss
+
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
-            
-            if iter % 100 == 0:
-                print(f"   Step {iter}/{max_iters} | Loss: {loss.item():.4f}")
-            
-            # Lưu checkpoint trung gian mỗi 10 bước để test sớm
-            if iter > 0 and iter % 10 == 0:
+
+            if step % 100 == 0:
+                print(f"   Step {step}/{max_iters} | Loss: {total_loss.item():.4f}")
+
+            if step > 0 and step % 10 == 0:
                 torch.save(model.state_dict(), self.model_path)
-                print(f"   [CHECKPOINT]: Đã lưu tạm thời tại {iter}")
 
-        # 4. Save Model
         torch.save(model.state_dict(), self.model_path)
-        print(f"{Fore.GREEN}✅ [COMPLETE]: Huấn luyện hoàn tất. Đã lưu bộ não tại {self.model_path}{Style.RESET_ALL}")
-
-    @torch.no_grad()
-    def _run_eval(self, model, iter):
-        model.eval()
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch('val')
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
-        print(f"   >>> EVAL Step {iter}: Mean Loss {losses.mean():.4f}")
-        model.train()
+        print(
+            f"{Fore.GREEN}✓ [COMPLETE]: Saved weights to {self.model_path}{Style.RESET_ALL}"
+        )
 
     def distill_memories_to_dataset(self):
-        """
-        Phase 3: Background Digestion (Tiêu hóa kiến thức nằm ở hàng chờ).
-        Đọc các văn bản dày đặc (high-entropy) bị filter ở Context Compressor,
-        cộng gộp vào file training chính và kích hoạt auto-training.
-        """
         queue_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
         if not os.path.exists(queue_path):
             return
-            
+
         try:
             with open(queue_path, "r", encoding="utf-8") as f:
                 new_data = f.read().strip()
-                
+
             if len(new_data) < 100:
-                return # Chưa đủ dữ liệu để train
-                
-            print(f"\n{Fore.LIGHTMAGENTA_EX}🌌 [BACKGROUND DIGESTION]: Phát hiện dữ liệu tồn đọng trong hàng chờ. Đang chuyển hóa thành tri thức...{Style.RESET_ALL}")
-            
-            # Ghi đè vào file training gốc
+                return
+
+            print(
+                f"\n{Fore.LIGHTMAGENTA_EX}[BACKGROUND DIGESTION]: Found queued finetune data.{Style.RESET_ALL}"
+            )
+
             with open(self.training_file, "a", encoding="utf-8") as f:
                 f.write("\n\n" + new_data)
-                
-            # Xóa file hàng chờ để tránh train lại
-            os.remove(queue_path)
-            
-            # Kích hoạt quá trình nung (có thể chạy bằng thead riêng nếu sợ block sleep loop)
-            import threading
-            def _background_train():
-                try:
-                    self.train_slm()
-                except Exception as e:
-                    print(f"{Fore.RED}Lỗi Background Training: {e}{Style.RESET_ALL}")
-            
-            threading.Thread(target=_background_train, daemon=True).start()
-            
-        except Exception as e:
-            print(f"{Fore.RED}Lỗi Distillation: {e}{Style.RESET_ALL}")
 
-# Integration logic in interaction.py will trigger this during 'sleep'
+            os.remove(queue_path)
+
+            import threading
+
+            threading.Thread(target=self.train_slm, daemon=True).start()
+
+        except Exception as e:
+            print(f"{Fore.RED}Distillation error: {e}{Style.RESET_ALL}")

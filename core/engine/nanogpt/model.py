@@ -7,7 +7,7 @@ import sys
 
 # Hỗ trợ chạy trực tiếp và import từ engine
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
-import config as slm_config
+import slm_params as slm_config
 
 # --- Aura-MoE 700M (Pocket AI) Hyperparameters ---
 batch_size = slm_config.batch_size
@@ -318,50 +318,4 @@ class AuraFlashModel(nn.Module):
             start_pos += idx_cond.shape[1]
         return idx
 
-# --- TOKENIZATION (BPE Compression) ---
-# Tạm thời dùng Character-level tokenizer cơ bản nếu chưa train BPE
-# Trong thực tế slm_trainer sẽ train BPE và lưu lại
-input_path = os.path.join(os.path.dirname(__file__), 'input.txt')
-if not os.path.exists(input_path):
-    with open(input_path, 'w', encoding='utf-8') as f:
-        f.write("Aura core initialization.")
-with open(input_path, 'r', encoding='utf-8') as f:
-    text = f.read()
-
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s if c in stoi] 
-decode = lambda l: ''.join([itos[i] for i in l]) 
-
-# DATA SPLITTING
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data = data[:n]
-val_data = data[n:]
-
-def get_batch(split):
-    data_split = train_data if split == 'train' else val_data
-    # Đảm bảo không bị out of bounds
-    if len(data_split) <= block_size:
-        # Padded batch for small data
-        x = torch.zeros((batch_size, block_size), dtype=torch.long)
-        y = torch.zeros((batch_size, block_size), dtype=torch.long)
-        return x.to(device), y.to(device)
-    
-    ix = torch.randint(len(data_split) - block_size, (batch_size,))
-    x = torch.stack([data_split[i:i+block_size] for i in ix])
-    y = torch.stack([data_split[i+1:i+block_size+1] for i in ix])
-    return x.to(device), y.to(device)
-
-if __name__ == "__main__":
-    # Demo thông số
-    model = AuraFlashModel(vocab_size)
-    m = model.to(device)
-    
-    total_params = sum(p.numel() for p in m.parameters())
-    
-    print(f"--- Aura-MoE 700M (Pocket AI) ---")
-    print(f"Target Model (Flash): {total_params/1e6:.2f} M params")
-    print(f"Speedup Mechanism   : Active Params Routing (Top-2)")
+# --- DELETED SIDE EFFECTS (Phần này đã được dọn sang scripts/train_slm.py hoặc prepare_data.py) ---

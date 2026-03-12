@@ -147,7 +147,7 @@ class MemoryManager:
         import threading
         self.store = VectorStore()
         self.embedder = embedder
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     def add_memory(self, trace: MemoryTrace):
         with self.lock:

@@ -1,59 +1,59 @@
-# Byte-compiled / optimized / DLL files
+# System Files
 __pycache__/
 *.py[cod]
 *$py.class
+.DS_Store
 
 # Environments
 .env
-
-# Logs and databases
-*.log
-error.log
-outputs/
-data/
-gitlog.txt
-tmp_git_log.txt
-test_moods_output.txt
-
-# Tests and Output files
-tests/
-output*.txt
-test_output.txt
-*.in
-test_*.py
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Environments
-.env
-
-# Logs and databases
-*.log
-error.log
-outputs/
-data/
-gitlog.txt
-tmp_git_log.txt
-test_moods_output.txt
-
-# Tests and Output files
-tests/
-output*.txt
-test_output.txt
-*.in
-test_*.py
-test.py
-simulate_aura.py
-
-# IDEs
-.vscode/
+.venv*
 .idea/
-*.pth
+.vscode/
 
-# Large Training Data
+# Logs & Artifacts
+*.log
+*.docx
+*.zip
+error_log.txt
+debug_import_results.txt
+test_out.txt
+v5_test_output.txt
+
+# Databases & Outputs (Large Files)
+outputs/
+data/
 novel/
 *.bin
-core/engine/nanogpt/*.txt
+*.pth
+*.pt
+*.onnx
+*.weights
+core/engine/nanogpt/input.txt
+core/engine/nanogpt/train.bin
+core/engine/nanogpt/val.bin
+core/engine/nanogpt/*.pth
 core/engine/nanogpt/vocab.json
+
+# Development
+tests/
+test_*.py
+verify_*.py
+sniff_*.py
+peek_memories.py
+discover_*.py
+explore_*.py
+inspect_*.py
+list_*.py
+search_*.py
+run_*.py
+v5_test.py
+hybrid_test.py
+migrate_db.py
+check_libs.py
+inject_persona.py
+memory_server_py312.py
+train_aura.py
+train_script.txt
+1/
+temp_backup/
+patch_test_shell.txt

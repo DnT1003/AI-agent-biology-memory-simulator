@@ -52,33 +52,38 @@ class StateMachine:
     """
 
     def __init__(self, initial: AgentState = AgentState.IDLE):
+        import threading
+        self._lock = threading.Lock()
         self._state = initial
         logger.info(f"StateMachine khởi tạo: {self._state.name}")
 
     @property
     def state(self) -> AgentState:
-        return self._state
+        with self._lock:
+            return self._state
 
     def transition(self, new_state: AgentState) -> bool:
         """
         Chuyển state. Trả về True nếu thành công, False nếu transition không hợp lệ.
         Không raise exception — hệ thống tiếp tục hoạt động dù transition bị chặn.
         """
-        allowed = _ALLOWED_TRANSITIONS.get(self._state, set())
-        if new_state not in allowed:
-            logger.warning(
-                f"[STATE MACHINE] Transition bị chặn: {self._state.name} → {new_state.name} "
-                f"(allowed: {[s.name for s in allowed]})"
-            )
-            return False
-        logger.debug(f"[STATE MACHINE] {self._state.name} → {new_state.name}")
-        self._state = new_state
-        return True
+        with self._lock:
+            allowed = _ALLOWED_TRANSITIONS.get(self._state, set())
+            if new_state not in allowed:
+                logger.warning(
+                    f"[STATE MACHINE] Transition bị chặn: {self._state.name} → {new_state.name} "
+                    f"(allowed: {[s.name for s in allowed]})"
+                )
+                return False
+            logger.debug(f"[STATE MACHINE] {self._state.name} → {new_state.name}")
+            self._state = new_state
+            return True
 
     def force(self, new_state: AgentState):
         """Override trực tiếp, dùng khi cần recover từ lỗi."""
-        logger.warning(f"[STATE MACHINE] FORCE override: {self._state.name} → {new_state.name}")
-        self._state = new_state
+        with self._lock:
+            logger.warning(f"[STATE MACHINE] FORCE override: {self._state.name} → {new_state.name}")
+            self._state = new_state
 
     # ------- Helper predicates ------- #
 

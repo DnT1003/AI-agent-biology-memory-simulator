@@ -1,0 +1,25 @@
+[project]
+name = "aura-biology-simulator"
+version = "0.1.0"
+description = "A biological/cognitive AI simulator prototype"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "chromadb",
+    "google-genai",
+    "numpy",
+    "colorama",
+    "tenacity",
+    "python-dotenv",
+    "requests",
+    "transformers",
+    "torch",
+    "sentencepiece",
+    "beautifulsoup4",
+    "cloudscraper",
+]
+
+[tool.setuptools]
+packages = ["core", "components"]

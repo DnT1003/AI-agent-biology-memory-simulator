@@ -14,7 +14,7 @@ class LocalPerception:
     Sử dụng các mô hình nhỏ (Encoder-only) chạy trên GPU RTX 3060 để phân tích 
     cảm xúc và sắc thái ngay lập tức mà không cần gọi LLM API.
     """
-    def __init__(self, model_name="cardiffnlp/twitter-roberta-base-sentiment"):
+    def __init__(self, model_name="cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual"):
         print(f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: Đang khởi tạo mô hình {model_name}...{Style.RESET_ALL}")
         self.model_name = model_name
         self.sentiment_analyzer = None

@@ -37,6 +37,8 @@ class AutonomousController:
             if hasattr(self.engine, 'cognitive_tick'):
                 self.engine.cognitive_tick(dt=30.0)
 
+            idle_time = time.time() - self.engine.last_interaction_time
+
             # [Phase 21] Dòng chảy Trí nhớ (Memory Stream) - Associative Recall
             if self.engine.state_machine.state == AgentState.IDLE and random.random() < 0.2:
                 stream_mems = self._weighted_sample_memories(1)

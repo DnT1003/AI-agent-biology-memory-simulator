@@ -50,6 +50,11 @@ class Embedder:
                 embedded_vecs = self._call_embedding_api(texts_to_embed)
                 for i, vec in zip(indices_to_embed, embedded_vecs):
                     results[i] = vec
+                    # 3. Cache với giới hạn (Evict oldest if > 1000)
+                    if len(self._cache) >= 1000:
+                        # Simple random eviction or FIFO if ordered
+                        first_key = next(iter(self._cache))
+                        del self._cache[first_key]
                     self._cache[text_list[i]] = vec
             except Exception as e:
                 print(f"{Fore.RED}⚠️ Lỗi Gemini Embedding (retry failed): {e}{Style.RESET_ALL}")

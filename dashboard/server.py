@@ -17,7 +17,7 @@ def get_state():
     return {"error": "No state found"}
 
 def run_dashboard():
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8050)
 
 if __name__ == "__main__":
     run_dashboard()

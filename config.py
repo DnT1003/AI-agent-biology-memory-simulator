@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     API_KEY = os.getenv("API_KEY", "")
     MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.0-flash")
     DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-3.1-pro")

@@ -82,7 +82,33 @@ class LLM:
             contents=contents,
             config=types.GenerateContentConfig(**config_params)
         )
-        data = json.loads(resp.text)
+        
+        # Robust JSON extraction
+        text = resp.text.strip()
+        try:
+            # Try direct load first
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Try to find JSON block in markdown
+            import re
+            json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    data = {}
+            else:
+                # Last resort: find first { and last }
+                start = text.find('{')
+                end = text.rfind('}')
+                if start != -1 and end != -1:
+                    try:
+                        data = json.loads(text[start:end+1])
+                    except json.JSONDecodeError:
+                        data = {}
+                else:
+                    data = {}
+
         if isinstance(data, list):
             return data[0] if len(data) > 0 else {}
         return data

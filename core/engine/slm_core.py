@@ -1,6 +1,6 @@
-import os
+﻿import os
 import sys
-import json
+import importlib.util
 from config import Config
 
 try:
@@ -9,128 +9,153 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# Thêm folder 1 vào path để import được GPTLanguageModel nếu cần
-sys.path.append(Config.SLM_DIR)
+# Make NanoGPT SLM directory importable (model.py, tokenizer.py, config.py live there)
+if Config.SLM_DIR not in sys.path:
+    sys.path.append(Config.SLM_DIR)
+
+
+def _load_nanogpt_config():
+    cfg_path = os.path.join(Config.SLM_DIR, "config.py")
+    spec = importlib.util.spec_from_file_location("aura_nanogpt_config", cfg_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load SLM config at {cfg_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 
 try:
     if TORCH_AVAILABLE:
-        from model import AuraFlashModel, vocab_size, block_size
-        # Tokenizer độc lập, không tái sử dụng encode thủ công từ model.py
+        from model import AuraFlashModel, block_size
         from tokenizer import BPETokenizer
     else:
         AuraFlashModel = None
-except ImportError:
+        BPETokenizer = None
+        block_size = 0
+except Exception:
     AuraFlashModel = None
+    BPETokenizer = None
+    block_size = 0
+
 
 class SLMCore:
-    """
-    Hạt nhân trí tuệ bản địa (Native Intelligence) dựa trên NanoGPT.
-    Aura sử dụng lớp này để thực hiện "suy nghĩ nội tâm" không thông qua mảng thần kinh lớn.
-    """
+    """Native SLM inference wrapper for the local NanoGPT core."""
+
     def __init__(self):
-        self.device = 'cuda' if TORCH_AVAILABLE and torch.cuda.is_available() else 'cpu'
-        self.model_path = os.path.join(Config.SLM_DIR, "aura_slm.pt")
+        self.device = "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu"
+        self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
         self.model = None
         self.is_ready = False
         self.use_gpu_service = not TORCH_AVAILABLE
         self.tokenizer = None
-        
+
         if Config.SLM_ENABLED and AuraFlashModel and TORCH_AVAILABLE:
             self._init_tokenizer()
             self.load_model()
 
     def _init_tokenizer(self):
-        """Khởi tạo Tokenizer độc lập để không dính tới model.py"""
         try:
-            vocab_path = os.path.join(Config.SLM_DIR, 'vocab.json')
-            self.tokenizer = BPETokenizer()
+            vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
+            tok = BPETokenizer()
             if os.path.exists(vocab_path):
-                self.tokenizer.load(vocab_path)
-            else:
-                # Nếu không có vocab BPE, tạm thời khởi tạo bảng Token byte trống.
-                # Khi train_slm chạy, nó sẽ ghi đè file vocab.json chuẩn.
-                pass
+                tok.load(vocab_path)
+            self.tokenizer = tok
         except Exception as e:
             from core.logger import get_logger
+
             get_logger("slm_core").error(f"[SLM Tokenizer Init Error]: {e}")
 
     def load_model(self):
         import logging
+
         try:
-            from model import AuraFlashModel, vocab_size
-            self.model = AuraFlashModel(vocab_size)
-            self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
-            if os.path.exists(self.model_path):
-                # Fix lỗi 1: Ép map_location và chuyển ngay sang bfloat16 để cứu 50% VRAM
-                self.model.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=True))
-                # Ép kiểu bfloat16 tương thích phần cứng RTX 3060
-                self.model.to(device=self.device, dtype=torch.bfloat16)
-                print(f"[SLM]: Đã nạp trọng số mô hình Aura bản địa ({self.model_path}) với bfloat16")
+            if not self.tokenizer:
+                self._init_tokenizer()
+
+            if self.tokenizer and getattr(self.tokenizer, "vocab_size", None):
+                model_vocab_size = int(self.tokenizer.vocab_size)
             else:
-                print(f"[SLM]: Chưa tìm thấy trọng số {self.model_path}. Aura sẽ bắt đầu với trạng thái nguyên thủy.")
-                self.model.to(self.device, dtype=torch.bfloat16)
-            
+                model_vocab_size = int(_load_nanogpt_config().vocab_size)
+
+            self.model = AuraFlashModel(model_vocab_size)
+
+            if os.path.exists(self.model_path):
+                try:
+                    state = torch.load(self.model_path, map_location=self.device, weights_only=True)
+                except TypeError:
+                    state = torch.load(self.model_path, map_location=self.device)
+
+                self.model.load_state_dict(state)
+
+            dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+            self.model.to(device=self.device, dtype=dtype)
             self.model.eval()
             self.is_ready = True
         except Exception as e:
-            logging.error(f"[SLM Model Load Error]: Lỗi khi khởi tạo mô hình nội tại: {e}", exc_info=True)
+            logging.error(f"[SLM Model Load Error]: {e}", exc_info=True)
+            self.is_ready = False
 
     def generate_thought(self, prompt_text: str, max_tokens: int = 50):
-        """Sinh ra một 'luồng suy nghĩ' bản địa ngắn."""
+        """Generate a short local thought sequence."""
+
         if self.use_gpu_service:
             import requests
+
             try:
-                resp = requests.post("http://127.0.0.1:8001/generate", json={"prompt": prompt_text, "max_new_tokens": max_tokens}, stream=True, timeout=10)
+                resp = requests.post(
+                    "http://127.0.0.1:8001/generate",
+                    json={"prompt": prompt_text, "max_new_tokens": max_tokens},
+                    timeout=10,
+                )
                 if resp.status_code == 200:
-                    lines = []
-                    for chunk in resp.iter_lines():
-                        if chunk:
-                            lines.append(chunk.decode('utf-8'))
-                    return "".join(lines)
+                    return resp.json().get("thought", "...")
             except Exception as e:
                 import logging
+
                 logging.error(f"[SLM GPU API Error]: {e}", exc_info=True)
             return "..."
 
-        if not self.is_ready or not self.model or not getattr(self, 'tokenizer', None):
+        if not self.is_ready or not self.model or not self.tokenizer:
             return "..."
-            
-        try:
-            import logging
-            # Encode bằng Tokenizer độc lập
-            encoded_text = self.tokenizer.encode(prompt_text)
-            context = torch.tensor(encoded_text, dtype=torch.long, device=self.device).unsqueeze(0)
-            
-            # Khắc phục lỗi 3: Cắt gọt Context Window để không bị văng Index Out Of Bounds
-            context = context[:, -block_size:] 
 
-            # Khi generate cũng phải xài bfloat16 context
-            with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                generated_ids = self.model.generate(context, max_new_tokens=max_tokens)
-                
-            # Pocket AI Survival Mode: Explicit Garbage Collection
-            if str(self.device) == 'cuda':
+        try:
+            encoded = self.tokenizer.encode(prompt_text)
+            if not encoded:
+                return "..."
+
+            context = torch.tensor(encoded, dtype=torch.long, device=self.device).unsqueeze(0)
+            context = context[:, -block_size:]
+
+            device_type = "cuda" if self.device == "cuda" else "cpu"
+            autocast_enabled = device_type == "cuda"
+
+            with torch.no_grad(), torch.amp.autocast(
+                device_type, dtype=torch.bfloat16, enabled=autocast_enabled
+            ):
+                out = self.model.generate(context, max_new_tokens=max_tokens)
+
+            if self.device == "cuda":
                 torch.cuda.empty_cache()
-                
-            return self.tokenizer.decode(generated_ids[0].tolist())
+
+            return self.tokenizer.decode(out[0].tolist())
         except Exception as e:
             import logging
+
             logging.error(f"[SLM Native Inference Error]: {e}", exc_info=True)
-            if str(self.device) == 'cuda':
+            if self.device == "cuda":
                 torch.cuda.empty_cache()
             return f"[SLM Error]: {e}"
 
     def log_experience_for_finetuning(self, text_data: str):
-        """
-        Khắc phục lỗi 4: Thay thế Online Learning rủi ro cao bằng Local Finetune theo mảng.
-        Ghi lại lịch sử đoạn thoại để sau này dùng train_slm.py huấn luyện một lần trọn vẹn.
-        """
+        """Append data to a finetune queue for offline training."""
+
         try:
             log_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(text_data.strip() + "\n\n")
-            print(f"[SLM]: Đã ghi nhớ kinh nghiệm để dành Finetune ngoại tuyến.")
+            print("[SLM]: Logged finetune experience.")
         except Exception as e:
             import logging
+
             logging.error(f"[SLM Finetune Logging Error]: {e}", exc_info=True)
