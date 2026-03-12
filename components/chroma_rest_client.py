@@ -36,8 +36,15 @@ class ChromaRestClient:
         return cols
 
     def delete_collection(self, name: str):
-        # print(f"[INFO] [CHROMA REST]: Deleting collection '{name}'...")
-        return self._request("DELETE", f"collections/{name}", ignore_404=True)
+        """Delete a collection by name (resolves id first)."""
+        collections = self.list_collections()
+        for col in collections:
+            if col.get("name") == name:
+                col_id = col.get("id")
+                if not col_id:
+                    break
+                return self._request("DELETE", f"collections/{col_id}", ignore_404=True)
+        return {}
 
     def get_or_create_collection(self, name: str, metadata: Optional[Dict] = None):
         # 1. Force refresh collection list
@@ -88,16 +95,18 @@ class CollectionWrapper:
         payload = {
             "query_embeddings": query_embeddings,
             "n_results": n_results,
-            "where": where or {},
             "include": include or ["metadatas", "distances"]
         }
+        if where:
+            payload["where"] = where
         return self.client._request("POST", f"collections/{self.id}/query", json=payload)
 
     def get(self, where: Optional[Dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: List[str] = None):
         payload = {
-            "where": where or {},
             "include": include or ["metadatas"]
         }
+        if where:
+            payload["where"] = where
         if limit: payload["limit"] = limit
         if offset: payload["offset"] = offset
         return self.client._request("POST", f"collections/{self.id}/get", json=payload)
@@ -109,6 +118,5 @@ class CollectionWrapper:
         return self.client._request("POST", f"collections/{self.id}/delete", json=payload)
 
     def count(self):
-        resp = requests.get(f"{self.client.base_url}/collections/{self.id}/count", timeout=10)
-        resp.raise_for_status()
-        return int(resp.text)
+        # API v2 returns JSON integer at /tenants/{tenant}/databases/{database}/collections/{collection_id}/count
+        return int(self.client._request("GET", f"collections/{self.id}/count"))

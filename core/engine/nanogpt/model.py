@@ -135,6 +135,21 @@ class AuraMoE(nn.Module):
                 
         return final_output.view(B, T, C), aux_loss
 
+class AuraMLP(nn.Module):
+    """Tiêu chuẩn LLaMA-like Feed-Forward Network (SwiGLU) dùng khi n_experts = 0"""
+    def __init__(self, n_embd):
+        super().__init__()
+        hidden_dim = int(2 * 4 * n_embd / 3) 
+        self.w1 = nn.Linear(n_embd, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, n_embd, bias=False)
+        self.w3 = nn.Linear(n_embd, hidden_dim, bias=False)
+        
+    def forward(self, x):
+        out = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        # Tuân thủ chung return API: (output, aux_loss)
+        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        return out, aux_loss
+
 # --- RING-INSPIRED BLOCKWISE ATTENTION ---
 
 class AuraAttention(nn.Module):
@@ -206,7 +221,10 @@ class AuraBlock(nn.Module):
     def __init__(self, n_embd, n_head, n_kv_head, n_experts=8, top_k=2):
         super().__init__()
         self.attention = AuraAttention(n_embd, n_head, n_kv_head)
-        self.mlp = AuraMoE(n_embd, n_experts, top_k)
+        if n_experts > 0:
+            self.mlp = AuraMoE(n_embd, n_experts, top_k)
+        else:
+            self.mlp = AuraMLP(n_embd)
         self.attention_norm = RMSNorm(n_embd)
         self.ffn_norm = RMSNorm(n_embd)
     def forward(self, x, start_pos=None, use_cache=False):

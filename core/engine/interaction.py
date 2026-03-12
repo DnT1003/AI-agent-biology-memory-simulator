@@ -1,4 +1,4 @@
-import re
+﻿import re
 import threading
 from datetime import datetime
 from colorama import Fore, Style
@@ -155,6 +155,7 @@ class InteractionController:
 
         print(f"\n{Fore.YELLOW}🧠 [AURA ĐANG SUY NGHĨ & PHẢN HỒI]:{Style.RESET_ALL} ")
         prompt_in_use, final_full_text, iterations = system_prompt, "", 0
+        response = ""
         result = {"valence": 0.0, "arousal": 0.0, "importance": 0.5, "type": "episodic", "internal_monologue": "Trống rỗng...", "response": "..."}
         
         import time

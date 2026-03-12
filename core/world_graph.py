@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import time
 try:
@@ -78,14 +78,14 @@ class WorldGraph:
         try:
             # Ép dùng local nếu có thể (thông qua params giả định hoặc logic trong components/llm.py)
             res = llm.generate_json(prompt, temperature=0.1, force_local=True)
-            if isinstance(res, list):
-                for item in res:
-                    self.add_relation(
-                        item.get('source'), 
-                        item.get('relation'), 
-                        item.get('target'),
-                        valence=item.get('valence', 0.0)
-                    )
+            items = res if isinstance(res, list) else ([res] if isinstance(res, dict) else [])
+            for item in items:
+                self.add_relation(
+                    item.get('source'),
+                    item.get('relation'),
+                    item.get('target'),
+                    valence=item.get('valence', 0.0)
+                )
         except Exception as e:
             logger.error(f"WorldGraph update error: {e}")
 

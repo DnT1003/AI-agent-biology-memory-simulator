@@ -494,7 +494,7 @@ class MemoryOperationsController:
             m.overlays = [ov.replace("[ToReevaluate] ", "").replace("[ToReevaluate]", "") for ov in m.overlays]
             self.engine.memory.update_memory(m)
 
-    def _identity_evolution_phase(self):
+    def _identity_evolution_phase(self, bio_report: str = None):
         """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity & Values."""
         with self.engine.memory.lock:
             buffer_snapshot = list(self.engine.short_term_buffer)

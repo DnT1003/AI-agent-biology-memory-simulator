@@ -1,0 +1,147 @@
+﻿diff --git a/components/chroma_rest_client.py b/components/chroma_rest_client.py
+index 7b4a7ed..7edacf4 100644
+--- a/components/chroma_rest_client.py
++++ b/components/chroma_rest_client.py
+@@ -1,4 +1,4 @@
+-import requests
++∩╗┐import requests
+ import json
+ from typing import List, Dict, Any, Optional
+ 
+@@ -36,8 +36,15 @@ class ChromaRestClient:
+         return cols
+ 
+     def delete_collection(self, name: str):
+-        # print(f"[INFO] [CHROMA REST]: Deleting collection '{name}'...")
+-        return self._request("DELETE", f"collections/{name}", ignore_404=True)
++        """Delete a collection by name (resolves id first)."""
++        collections = self.list_collections()
++        for col in collections:
++            if col.get("name") == name:
++                col_id = col.get("id")
++                if not col_id:
++                    break
++                return self._request("DELETE", f"collections/{col_id}", ignore_404=True)
++        return {}
+ 
+     def get_or_create_collection(self, name: str, metadata: Optional[Dict] = None):
+         # 1. Force refresh collection list
+@@ -109,6 +116,5 @@ class CollectionWrapper:
+         return self.client._request("POST", f"collections/{self.id}/delete", json=payload)
+ 
+     def count(self):
+-        resp = requests.get(f"{self.client.base_url}/collections/{self.id}/count", timeout=10)
+-        resp.raise_for_status()
+-        return int(resp.text)
++        # API v2 returns JSON integer at /tenants/{tenant}/databases/{database}/collections/{collection_id}/count
++        return int(self.client._request("GET", f"collections/{self.id}/count"))
+diff --git a/config.py b/config.py
+index a2d8f52..8fbab2d 100644
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,4 @@
+-import os
++∩╗┐import os
+ from dotenv import load_dotenv
+ 
+ load_dotenv()
+@@ -23,12 +23,14 @@ class Config:
+     # DUONG DAN ─ÉAU RA (OUTPUT PATHS) ΓÇö Phase 15: tap trung, thay vi hardcode khap noi
+     OUTPUT_DIR = os.getenv("AURA_OUTPUT_DIR", "outputs")
+     CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")
++    MAX_STORAGE_SIZE = int(os.getenv("AURA_MAX_STORAGE_MB", "1024")) * 1024 * 1024
+     CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "127.0.0.1")
+     CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
+     USE_CHROMA_SERVER = os.getenv("USE_CHROMA_SERVER", "True").lower() == "true"
+     STM_FILE = os.path.join(OUTPUT_DIR, "short_term.json")
+     MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
+     EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
++    SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
+ 
+     # HANH VI TU CHU (AUTONOMOUS BEHAVIOR THRESHOLDS) ΓÇö Phase 15: khong magic number
+     # Thoi gian nhan roi toi thieu de ping (giay)
+@@ -56,10 +58,3 @@ class Config:
+     SLM_N_EXPERTS = 0    # ─É├ú th├ío dß╗í MoE
+     SLM_TOP_K = 0
+ 
+-    # STORAGE LIMITS    # Phase 4 (Master Plan): Paths & Outputs
+-    OUTPUT_DIR = "outputs"
+-    STM_FILE = os.path.join(OUTPUT_DIR, "short_term_memory.txt")
+-    EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
+-    MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
+-    SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
+-    CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")
+diff --git a/core/engine/interaction.py b/core/engine/interaction.py
+index b7e7088..cc66ae1 100644
+--- a/core/engine/interaction.py
++++ b/core/engine/interaction.py
+@@ -1,4 +1,4 @@
+-import re
++∩╗┐import re
+ import threading
+ from datetime import datetime
+ from colorama import Fore, Style
+@@ -155,6 +155,7 @@ class InteractionController:
+ 
+         print(f"\n{Fore.YELLOW}≡ƒºá [AURA ─ÉANG SUY NGH─¿ & PHß║óN Hß╗ÆI]:{Style.RESET_ALL} ")
+         prompt_in_use, final_full_text, iterations = system_prompt, "", 0
++        response = ""
+         result = {"valence": 0.0, "arousal": 0.0, "importance": 0.5, "type": "episodic", "internal_monologue": "Trß╗æng rß╗ùng...", "response": "..."}
+         
+         import time
+diff --git a/core/skills.py b/core/skills.py
+index 4e82d63..0481560 100644
+--- a/core/skills.py
++++ b/core/skills.py
+@@ -1,4 +1,4 @@
+-from typing import List, Dict, Callable
++∩╗┐from typing import List, Dict, Callable
+ 
+ import time
+ import random
+@@ -113,6 +113,12 @@ class SkillRegistry:
+             lines.append(f"- Tool \"{s.name}\": {s.description}. VD: {s.usage_format}. [─Éß╗Ö th├┤ng thß║ío: Chß╗ìn ß╗ƒ mß╗⌐c {level} ({s.mastery:.2f}/1.0)]")
+         return "\n".join(lines)
+ 
++    def _save_unsafe(self):
++        from core.utils import atomic_write_json
++        from config import Config
++        data = {k: {"mastery": s.mastery, "rust_level": s.rust_level, "last_used": s.last_used} for k, s in self.skills.items()}
++        atomic_write_json(Config.SKILLS_FILE, data)
++
+     def save(self):
+         from core.utils import atomic_write_json
+         from config import Config
+diff --git a/core/world_graph.py b/core/world_graph.py
+index 35cce95..a0c27f3 100644
+--- a/core/world_graph.py
++++ b/core/world_graph.py
+@@ -1,4 +1,4 @@
+-import os
++∩╗┐import os
+ import json
+ import time
+ try:
+@@ -78,14 +78,14 @@ class WorldGraph:
+         try:
+             # ├ëp d├╣ng local nß║┐u c├│ thß╗â (th├┤ng qua params giß║ú ─æß╗ïnh hoß║╖c logic trong components/llm.py)
+             res = llm.generate_json(prompt, temperature=0.1, force_local=True)
+-            if isinstance(res, list):
+-                for item in res:
+-                    self.add_relation(
+-                        item.get('source'), 
+-                        item.get('relation'), 
+-                        item.get('target'),
+-                        valence=item.get('valence', 0.0)
+-                    )
++            items = res if isinstance(res, list) else ([res] if isinstance(res, dict) else [])
++            for item in items:
++                self.add_relation(
++                    item.get('source'),
++                    item.get('relation'),
++                    item.get('target'),
++                    valence=item.get('valence', 0.0)
++                )
+         except Exception as e:
+             logger.error(f"WorldGraph update error: {e}")
+ 

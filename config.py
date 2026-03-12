@@ -1,4 +1,4 @@
-import os
+﻿import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,12 +23,14 @@ class Config:
     # DUONG DAN ĐAU RA (OUTPUT PATHS) — Phase 15: tap trung, thay vi hardcode khap noi
     OUTPUT_DIR = os.getenv("AURA_OUTPUT_DIR", "outputs")
     CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")
+    MAX_STORAGE_SIZE = int(os.getenv("AURA_MAX_STORAGE_MB", "1024")) * 1024 * 1024
     CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "127.0.0.1")
     CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
     USE_CHROMA_SERVER = os.getenv("USE_CHROMA_SERVER", "True").lower() == "true"
     STM_FILE = os.path.join(OUTPUT_DIR, "short_term.json")
     MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
     EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
+    SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
 
     # HANH VI TU CHU (AUTONOMOUS BEHAVIOR THRESHOLDS) — Phase 15: khong magic number
     # Thoi gian nhan roi toi thieu de ping (giay)
@@ -56,10 +58,3 @@ class Config:
     SLM_N_EXPERTS = 0    # Đã tháo dỡ MoE
     SLM_TOP_K = 0
 
-    # STORAGE LIMITS    # Phase 4 (Master Plan): Paths & Outputs
-    OUTPUT_DIR = "outputs"
-    STM_FILE = os.path.join(OUTPUT_DIR, "short_term_memory.txt")
-    EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
-    MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
-    SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
-    CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")

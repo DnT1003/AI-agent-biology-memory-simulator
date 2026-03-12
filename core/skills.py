@@ -1,4 +1,4 @@
-from typing import List, Dict, Callable
+﻿from typing import List, Dict, Callable
 
 import time
 import random
@@ -112,6 +112,12 @@ class SkillRegistry:
             level = "Chưa quen" if s.mastery < 0.4 else ("Khá quen" if s.mastery < 0.8 else "Rất thành thạo")
             lines.append(f"- Tool \"{s.name}\": {s.description}. VD: {s.usage_format}. [Độ thông thạo: Chọn ở mức {level} ({s.mastery:.2f}/1.0)]")
         return "\n".join(lines)
+
+    def _save_unsafe(self):
+        from core.utils import atomic_write_json
+        from config import Config
+        data = {k: {"mastery": s.mastery, "rust_level": s.rust_level, "last_used": s.last_used} for k, s in self.skills.items()}
+        atomic_write_json(Config.SKILLS_FILE, data)
 
     def save(self):
         from core.utils import atomic_write_json
