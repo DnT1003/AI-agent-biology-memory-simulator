@@ -23,7 +23,17 @@ Write-Host ""
 
 # Kiểm tra .venv_aura
 if (-not (Test-Path $VenvPython)) {
-    Write-Host "[ERROR] Khong tim thay .venv_aura. Hay tao venv truoc." -ForegroundColor Red
+    Write-Host "[ERROR] Khong tim thay .venv_aura. Hay chay 'python bootstrap.py' de tao moi." -ForegroundColor Red
+    exit 1
+}
+
+# Kiem tra python co the khoi dong duoc khong (phong truong hop venv hong, tro vao root cu)
+try {
+    $null = & $VenvPython --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Venv hỏng" }
+} catch {
+    Write-Host "[ERROR] Moi truong .venv_aura da bi hong (Python link chet)." -ForegroundColor Red
+    Write-Host "Vui long chay: python bootstrap.py --force" -ForegroundColor Yellow
     exit 1
 }
 

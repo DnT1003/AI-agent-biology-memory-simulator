@@ -486,23 +486,19 @@ class SelfModel:
         elif self.integrity > 0.4:
             self.is_identity_crisis = False
 
-    def save_state(self, path="outputs/ego_state.json"):
-        """B4: Lưu toàn bộ trạng thái ego xuống file để tồn tại sau restart.
-        Bao gồm cả thresholds personality — tránh việc cá tính bị random hóa lại mỗi lần khởi động.
-        """
-        import json, os
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        from core.utils import atomic_write_json
+        from config import Config
+        path = path or Config.EGO_STATE_FILE
+        
         with self.lock:
             state = {
                 "mood": self.mood, "stress": self.stress,
                 "fatigue": self.fatigue, "curiosity": self.curiosity,
                 "social_need": self.social_need, "integrity": self.integrity,
                 "is_identity_crisis": self.is_identity_crisis,
-                # Phase 7: Intrinsic Goals
                 "long_term_goals": getattr(self, 'long_term_goals', []),
                 "energy": getattr(self, 'energy', 1.0),
                 "atp_level": getattr(self, 'atp_level', 1.0),
-                # Biological thresholds — persist để cá tính không đổi mỗi restart
                 "fatigue_mild": self.fatigue_mild,
                 "fatigue_severe": self.fatigue_severe,
                 "fatigue_critical": self.fatigue_critical,
@@ -521,12 +517,14 @@ class SelfModel:
                 "calibrated_overrides": self.calibrated_overrides,
                 "actionable_lessons": self.actionable_lessons
             }
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+        
+        atomic_write_json(path, state)
 
-    def load_state(self, path="outputs/ego_state.json"):
+    def load_state(self, path=None):
         """Tải lại trạng thái đã lưu. Nếu file không tồn tại, bỏ qua (dùng giá trị mặc định)."""
         import json, os
+        from config import Config
+        path = path or Config.EGO_STATE_FILE
         if not os.path.exists(path):
             return
         try:

@@ -43,9 +43,11 @@ class MemoryOperationsController:
 
     def load_short_term_memory(self):
         """Khoi phuc bo nho ngan han tu o cung neu thoi gian chua troi qua qua lau (3 tieng)"""
-        if os.path.exists(self.engine.stm_file_path):
+        from config import Config
+        path = Config.STM_FILE
+        if os.path.exists(path):
             try:
-                with open(self.engine.stm_file_path, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     last_updated = data.get("timestamp", 0)
                     saved_buffer = data.get("buffer", [])
@@ -63,6 +65,9 @@ class MemoryOperationsController:
 
     def save_short_term_memory(self):
         """Luu de mang tri nho ngan han xuong o cung (voi cap STM_MAX_ENTRIES)"""
+        from core.utils import atomic_write_json
+        from config import Config
+        path = Config.STM_FILE
         try:
             with self.engine.memory.lock:
                 # Phase 14: Cap truoc khi luu — tranh file phong to vo han
@@ -73,8 +78,7 @@ class MemoryOperationsController:
                 "timestamp": time.time(),
                 "buffer": buffer_copy
             }
-            with open(self.engine.stm_file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(path, data)
         except Exception as e:
             print(f"{Fore.RED}Loi luu bo nho ngan han: {e}{Style.RESET_ALL}")
 
@@ -348,8 +352,9 @@ class MemoryOperationsController:
                     for m_id in ids_to_delete:
                         self.engine.memory.store.remove(m_id)
                     print(f"{Fore.YELLOW}   🗑️ Đã xóa vĩnh viễn {len(ids_to_delete)} mảnh ký ức vụn vặt sau khi đúc kết Semantic.{Style.RESET_ALL}")
-        except Exception:
-            pass
+        except Exception as e:
+            from core.logger import get_logger
+            get_logger("memory.ops").error(f"Lỗi semantic consolidation: {e}", exc_info=True)
 
     def _decay_phase(self, nightly_stress_drop=0.0, nightly_fatigue_drop=0.0):
         """Phase 2: Áp dụng decay + semantic drift lên toàn bộ ký ức (có Homeostasis Recovery - Phase 18)."""
@@ -558,7 +563,8 @@ class MemoryOperationsController:
                     print(f"{Fore.MAGENTA}⚖️ [VALUE SHIFT]: {v_name} ({v_type}) -> {v_sent:.2f} (Lý do: {v_reason}){Style.RESET_ALL}")
                     
         except Exception as e:
-            print(f"{Fore.RED}Lỗi Identity Evolution: {e}{Style.RESET_ALL}")
+            from core.logger import get_logger
+            get_logger("memory.ops").error(f"Lỗi Identity Evolution: {e}", exc_info=True)
 
     def _tool_workshop_phase(self):
         """Phase 4 Self-Evolution: Aura tự học và viết code tạo Tool mới khi phát hiện lỗ hổng kỹ năng."""
@@ -635,7 +641,8 @@ class MemoryOperationsController:
             self.engine.skills.load_dynamic_skills()
             
         except Exception as e:
-            print(f"{Fore.RED}Lỗi Tool Workshop: {e}{Style.RESET_ALL}")
+            from core.logger import get_logger
+            get_logger("memory.ops").error(f"Lỗi Tool Workshop: {e}", exc_info=True)
 
     def _calibration_phase(self):
         """Phase 1 Self-Evolution: Aura tự hiệu chỉnh tham số sinh học dựa trên phản tư."""
@@ -698,7 +705,8 @@ class MemoryOperationsController:
                 # Lưu state ngay lập tức
                 self.engine.ego.save_state()
         except Exception as e:
-            print(f"{Fore.RED}Lỗi Calibration Phase: {e}{Style.RESET_ALL}")
+            from core.logger import get_logger
+            get_logger("memory.ops").error(f"Lỗi Calibration Phase: {e}", exc_info=True)
 
     def _belief_evolution_phase(self):
         """Phase 2 Self-Evolution: Aura tự rà soát và giải quyết mâu thuẫn trong hệ thống niềm tin cốt lõi."""
@@ -776,4 +784,5 @@ class MemoryOperationsController:
                 self.engine.memory.store.remove(m_id)
                 
         except Exception as e:
-            print(f"{Fore.RED}Lỗi Belief Evolution Phase: {e}{Style.RESET_ALL}")
+            from core.logger import get_logger
+            get_logger("memory.ops").error(f"Lỗi Belief Evolution Phase: {e}", exc_info=True)

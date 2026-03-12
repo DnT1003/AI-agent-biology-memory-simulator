@@ -1,6 +1,7 @@
 import time
 import random
 import re
+import threading
 from datetime import datetime
 from colorama import Fore, Style
 from core.prompts import get_proactive_ping_prompt
@@ -13,21 +14,23 @@ logger = get_logger("autonomous")
 class AutonomousController:
     def __init__(self, engine):
         self.engine = engine
+        self._stop_event = threading.Event()
+        self._loop_thread = None
     def start(self):
         """Khởi động vòng lặp nền nếu chưa chạy."""
         from core.agent_state import AgentState
         if self.engine.state_machine.state == AgentState.SHUTDOWN or self.engine.state_machine.state == AgentState.IDLE:
-            import threading
+            self._stop_event.clear() # Ensure the event is clear for a new start
             self.engine.state_machine.transition(AgentState.IDLE)
-            thread = threading.Thread(target=self.background_loop, daemon=True)
-            thread.start()
+            self._loop_thread = threading.Thread(target=self.background_loop, daemon=True)
+            self._loop_thread.start()
             print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Cognitive Loop started.{Style.RESET_ALL}")
 
     def background_loop(self):
         time.sleep(10)
         from core.agent_state import AgentState
         
-        while self.engine.state_machine.state != AgentState.SHUTDOWN:
+        while not self._stop_event.is_set(): # Changed condition to use _stop_event
             time.sleep(30)
             if self.engine.state_machine.state in [AgentState.THINKING, AgentState.READING]:
                 continue
@@ -177,7 +180,7 @@ class AutonomousController:
         try:
             self._do_reading_session()
         except Exception as e:
-            print(f"{Fore.RED}⚠️ Lỗi reading session: {e}{Style.RESET_ALL}")
+            logger.error(f"Lỗi reading session: {e}", exc_info=True)
         finally:
             self.engine.state_machine.transition(AgentState.IDLE)
 
@@ -195,7 +198,7 @@ class AutonomousController:
                 synthesized_text = self.engine.llm.generate_text(prompt, temperature=0.7).strip()
                 print(f"{Fore.YELLOW}💡 [SYNTHESIZED MEMORY]: {synthesized_text}{Style.RESET_ALL}")
             except Exception as e:
-                print(f"{Fore.RED}⚠️ Lỗi Synthesize Memory: {e}{Style.RESET_ALL}")
+                logger.error(f"Lỗi Synthesize Memory: {e}", exc_info=True)
                 synthesized_text = content[:500] + "..."  # Fallback
 
             from core.memory import MemoryTrace
@@ -213,9 +216,10 @@ class AutonomousController:
             print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
 
     def stop(self):
-        """Dừng background loop gracefully."""
-        from core.agent_state import AgentState
-        self.engine.state_machine.transition(AgentState.SHUTDOWN)
+        self._stop_event.set()
+        if self._loop_thread and self._loop_thread.is_alive():
+             self._loop_thread.join(timeout=5.0)
+        print(f"{Fore.YELLOW}Autonomous loop stopped.{Style.RESET_ALL}")
 
     def _weighted_sample_memories(self, k: int, filter_type=None):
         """Thay thế random.sample bằng salience-weighted sampling (không lặp lại).
@@ -322,7 +326,7 @@ class AutonomousController:
                 print(f"\n{Fore.LIGHTCYAN_EX}🎯 [INTRINSIC MOTIVATION]: Aura tự hình thành mục tiêu: '{goal_str}'\n   -> Lý do: {reason}{Style.RESET_ALL}")
                 self.engine.ego.add_goal(goal_str)
         except Exception as e:
-            print(f"Lỗi sinh Goal: {e}")
+            logger.error(f"Lỗi sinh Goal: {e}", exc_info=True)
 
     def _execute_planning(self):
         """Phase 7: Lập kế hoạch và gọi Tool tuần tự (Planning) để giải quyết Mục tiêu"""
@@ -404,4 +408,4 @@ class AutonomousController:
                     self.engine.ego.beliefs = [b for b in self.engine.ego.beliefs if b != f"Mục tiêu hiện tại: {target_goal}"]
                     self.engine.ego.save_state()
         except Exception as e:
-            print(f"Lỗi hệ thống Planning: {e}")
+            logger.error(f"Lỗi hệ thống Planning: {e}", exc_info=True)

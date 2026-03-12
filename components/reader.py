@@ -27,7 +27,7 @@ MAX_RETRIES = 2
 
 class CircuitBreaker:
     """Bảo vệ IP/Hệ thống: Ngừng spam request nếu website liên tục trả lỗi."""
-    def __init__(self, max_failures=3, reset_timeout=300):
+    def __init__(self, max_failures=3, reset_timeout=600):
         self.max_failures = max_failures
         self.reset_timeout = reset_timeout
         self.failures = 0

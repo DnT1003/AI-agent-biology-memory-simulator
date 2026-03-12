@@ -22,6 +22,33 @@ class SkillRegistry:
         import threading
         self.skills: Dict[str, Skill] = {}
         self.lock = threading.Lock()
+        self.engine = None # Will be set by CognitiveEngine
+
+    def _ego_action(self, arg, action_type):
+        if not self.engine: return "Engine not connected."
+        if action_type == "add_goal":
+            self.engine.ego.add_goal(arg)
+            return f"Mục tiêu '{arg}' đã được thiết lập."
+        return "Unknown ego action."
+
+    def _reader_action(self, arg, action_type):
+        if not self.engine: return "Engine not connected."
+        if action_type == "search_novel":
+            import threading
+            def _async():
+                res = self.engine.reader.search_and_set_novel(arg)
+                print(f"\n[READER]: {res}")
+            threading.Thread(target=_async, daemon=True).start()
+            return f"Đang tìm kiếm truyện '{arg}'..."
+        return "Unknown reader action."
+
+    def _autonomous_action(self, arg, action_type):
+        if not self.engine: return "Engine not connected."
+        if action_type == "start_reading":
+            import threading
+            threading.Thread(target=self.engine.autonomous.start_reading_task, args=("User request",), daemon=True).start()
+            return "Bắt đầu đọc sách."
+        return "Unknown autonomous action."
 
     def register(self, skill: Skill):
         self.skills[skill.name] = skill
@@ -87,23 +114,15 @@ class SkillRegistry:
         return "\n".join(lines)
 
     def save(self):
+        from core.utils import atomic_write_json
+        from config import Config
         with self.lock:
-            self._save_unsafe()
-            
-    def _save_unsafe(self):
-        try:
-            import os, json
-            os.makedirs("outputs", exist_ok=True)
-            data = {}
-            for k, s in self.skills.items():
-                data[k] = {"mastery": s.mastery, "rust_level": s.rust_level, "last_used": s.last_used}
-            with open("outputs/skills.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e: 
-            print(f"Lỗi save skills: {e}")
+            data = {k: {"mastery": s.mastery, "rust_level": s.rust_level, "last_used": s.last_used} for k, s in self.skills.items()}
+            atomic_write_json(Config.SKILLS_FILE, data)
 
     def load_dynamic_skills(self):
         """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills."""
+        import os, importlib.util, inspect
         from config import Config
         if not getattr(Config, 'ALLOW_DYNAMIC_SKILLS', False):
             return
@@ -125,11 +144,8 @@ class SkillRegistry:
                     module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(module)
                     
-                    # Tìm các hàm có decorator hoặc định dạng đặc biệt, 
-                    # ở đây ta quy ước các hàm có docstring chứa 'AUTOGEN' hoặc đơn giản là export các hàm cụ thể.
                     for name, func in inspect.getmembers(module, inspect.isfunction):
-                        if getattr(func, '__qualname__', '').startswith(name): # Tránh nạp các hàm import từ chỗ khác
-                            # Tạo Skill object từ metadata trong docstring hoặc hằng số trong module
+                        if getattr(func, '__qualname__', '').startswith(name): 
                             desc = getattr(module, "DESCRIPTION", "Kỹ năng tự học mới.")
                             usage = getattr(module, "USAGE", f"ACTION: {name} | <tham số>")
                             
@@ -145,15 +161,17 @@ class SkillRegistry:
                     print(f"{Fore.RED}   ❌ Lỗi khi nạp kỹ năng {filename}: {e}{Style.RESET_ALL}")
 
     def load(self):
+        from core.utils import atomic_read_json
+        from config import Config
+        if not os.path.exists(Config.SKILLS_FILE):
+            return
         try:
-            import os, json
-            if os.path.exists("outputs/skills.json"):
-                with open("outputs/skills.json", "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    for k, v in data.items():
-                        if k in self.skills:
-                            self.skills[k].mastery = v.get("mastery", 0.5)
-                            self.skills[k].rust_level = v.get("rust_level", 0.0)
-                            self.skills[k].last_used = v.get("last_used", time.time())
-        except Exception as e: 
+            with self.lock:
+                data = atomic_read_json(Config.SKILLS_FILE)
+                for k, v in data.items():
+                    if k in self.skills:
+                        self.skills[k].mastery = v.get("mastery", 0.5)
+                        self.skills[k].rust_level = v.get("rust_level", 0.0)
+                        self.skills[k].last_used = v.get("last_used", time.time())
+        except Exception as e:
             print(f"Lỗi load skills: {e}")

@@ -164,6 +164,7 @@ class InteractionController:
         max_tokens = None
         
         while iterations < 5 and not self.is_interrupted:
+            iterations += 1
             try:
                 result_json = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, max_output_tokens=max_tokens)
             except Exception as e:
@@ -191,55 +192,33 @@ class InteractionController:
                     func_name, arg_str = action_str.split("|", 1)
                 func_name, arg_str = func_name.strip(), arg_str.strip()
                 
-                ALLOWED_TOOLS = {"search_novel", "start_reading", "web_search", "add_goal", "search_web"}
-                if func_name not in ALLOWED_TOOLS:
-                    print(f"{Fore.RED}⚠️ [SECURITY]: Tool '{func_name}' bị chặn (không nằm trong whitelist).{Style.RESET_ALL}")
-                    break
+                if hasattr(self.engine, 'skills'):
+                    print(f"{Fore.CYAN}🛠️ Aura sử dụng kỹ năng: {func_name}({arg_str}){Style.RESET_ALL}")
+                    action_output = self.engine.skills.execute(func_name, arg_str, ego=getattr(self.engine, 'ego', None))
+                    if not response:
+                        response = f"Đã thực thi hành động: {func_name}"
+                        result["response"] = response
                 
-                print(f"\n{Fore.LIGHTMAGENTA_EX}🔧 [HÀNH ĐỘNG]: Kích hoạt Tool {func_name}('{arg_str}')...{Style.RESET_ALL}")
-                tool_result = self.engine.skills.execute(func_name, arg_str, ego=self.engine.ego)
-                preview = str(tool_result).replace('\n', ' ')[:100] + "..." if len(str(tool_result)) > 100 else str(tool_result).replace('\n', ' ')
-                print(f"{Fore.LIGHTBLACK_EX}   -> Kết quả: {preview}{Style.RESET_ALL}")
-                
-                prompt_in_use += f"\n\n[HÀNH ĐỘNG ĐÃ GỌI]: {func_name}\n[KẾT QUẢ TỪ HỆ THỐNG]:\n{tool_result}\n\nDựa vào kết quả trên, hãy tiếp tục suy nghĩ và đưa ra hành động khác hoặc 'response' cuối cùng."
-                iterations += 1
-                print(f"{Fore.YELLOW}🧠 [AURA TIẾP THU KẾT QUẢ]:{Style.RESET_ALL} ")
-                continue
-            else:
-                if response:
-                    # [Phase 23] Neuro-Symbolic Cognitive Consumption
-                    # Tính toán chi phí thực tế dựa trên input và output
-                    total_tokens = len(prompt_in_use.split()) + len(response.split())
-                    costs = self.engine.ego.bio_controller.calculate_interaction_cost(total_tokens, sensory_vector)
-                    
-                    with self.engine.ego.lock:
-                        self.engine.ego.atp_level = max(0.0, self.engine.ego.atp_level - costs["atp_cost"])
-                        self.engine.ego.energy = max(0.0, self.engine.ego.energy - costs["energy_cost"])
-                    
-                    # Giả lập typing gõ chậm Fragmentation
-                    if "[SEND]" in response:
-                        frag_parts = response.split("[SEND]")
-                        for i, frag in enumerate(frag_parts):
-                            print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {frag.strip()}")
-                            if i < len(frag_parts) - 1:
-                                time.sleep(0.5)
-                    else:
-                        print(f"\n{Fore.CYAN}🗣️ Aura:{Style.RESET_ALL} {response.strip()}")
-                
-                try:
-                    result["valence"] = max(-1.0, min(1.0, float(result_json.get("valence", 0.0))))
-                    result["arousal"] = max(0.0, min(1.0, float(result_json.get("arousal", 0.0))))
-                    result["importance"] = max(0.0, min(1.0, float(result_json.get("importance", 0.5))))
-                except (ValueError, TypeError):
-                    pass
-                result["type"] = str(result_json.get("type", "episodic"))
-                result["internal_monologue"] = thought
-                result["response"] = response
                 break
                 
         print("\n")
+        
+        output = response if response else "..."
+        if result.get("response", "...") in ["", "..."]:
+             result["response"] = output
+             
         self.engine.ego.update_state(result)
-        result["final_full_text"] = final_full_text
+        
+        # --- PHASE 2: INTEGRATED COGNITIVE ACTIONS (Execution AFTER Response) ---
+        
+        # Process Short Term Memory
+        threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output), daemon=True).start()
+        with self.engine.memory.lock:
+            self.engine.short_term_buffer.append(f"User: {user_input}")
+            self.engine.short_term_buffer.append(f"Aura: {output}")
+            if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
+        self.engine.memory_ops.save_short_term_memory()
+
         return result
 
     def interaction_loop(self, user_input: str):
@@ -300,8 +279,9 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                     v_sent = float(item.get('sentiment', 0.0))
                     if v_name and abs(v_sent) >= 0.4:
                         self.engine.value_system.update_user_value(v_name, v_sent)
-            except Exception:
-                pass
+            except Exception as e:
+                from core.logger import get_logger
+                get_logger("interaction").error(f"Lỗi extract values: {e}", exc_info=True)
         threading.Thread(target=_extract_values, daemon=True).start()
 
         with self.engine.ego.lock:
@@ -454,42 +434,12 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                         self.engine.ego.is_identity_crisis = False
                         print(f"{Fore.GREEN}✨ Aura đã thoát khỏi khủng hoảng nhân cách!{Style.RESET_ALL}")
 
+        # --- GỌI LLM SINH LỜI NÓI & THỰC THI CHUỖI NHẬN THỨC ---
+        final_result = self.perceive_and_respond(user_input, recalled, mood_modifier)
+        if final_result and final_result.get("response"):
+            print(f"\n{Fore.GREEN}🤖 Aura:{Style.RESET_ALL} {final_result['response']}\n")
         
-        output = self.perceive_and_respond(user_input, recalled, mood_modifier=mood_modifier)
-        response = output.get('response', "...")
-        combined_log = output.get("final_full_text", "")
-
-        # --- XỬ LÝ CÁC HÀNH ĐỘNG NHẬN THỨC (COGNITIVE ACTIONS) ---
-        # Quét toàn bộ log hệ thống để đảm bảo nhận diện đúng ý định ngay cả khi Tool lỗi
-        import re as _re
-        
-        # ACTION: add_goal
-        goal_matches = _re.findall(r'ACTION:\s*add_goal\s*\|\s*(.+)', combined_log, _re.IGNORECASE)
-        for g in goal_matches:
-            self.engine.ego.add_goal(g.strip())
-
-        # ACTION: start_reading
-        if _re.search(r'ACTION:\s*start_reading', combined_log, _re.IGNORECASE):
-             print(f"\n{Fore.GREEN}📖 [ACTION]: Aura quyết định đi đọc sách...{Style.RESET_ALL}")
-             threading.Thread(target=self.engine.autonomous.start_reading_task, args=("theo ý muốn bản thân",), daemon=True).start()
-
-        # ACTION: search_novel
-        search_matches = _re.findall(r'ACTION:\s*search_novel\s*\|\s*(.+)', combined_log, _re.IGNORECASE)
-        for s in search_matches:
-            book_title = s.strip()
-            print(f"\n{Fore.GREEN}📖 [ACTION]: Aura tìm kiếm truyện '{book_title}'...{Style.RESET_ALL}")
-            def _async_search():
-                result_msg = self.engine.reader.search_and_set_novel(book_title)
-                print(f"\n{Fore.GREEN}📚 [ACTION - SEARCH]: {result_msg}{Style.RESET_ALL}")
-            threading.Thread(target=_async_search, daemon=True).start()
-
-        threading.Thread(target=self.engine.memory_ops.update_or_add_memory, args=(user_input, output)).start()
-        with self.engine.memory.lock:
-            self.engine.short_term_buffer.append(f"User: {user_input}")
-            self.engine.short_term_buffer.append(f"Aura: {response}")
-            if len(self.engine.short_term_buffer) > 16: self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
         self.engine.memory_ops.save_short_term_memory()
-
         # Phase 7 Idea 1: Áp dụng nhịp sinh học sau mỗi interaction
         self.engine.ego.apply_circadian_rhythm()
 

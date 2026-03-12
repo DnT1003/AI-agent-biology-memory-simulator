@@ -56,5 +56,10 @@ class Config:
     SLM_N_EXPERTS = 0    # Đã tháo dỡ MoE
     SLM_TOP_K = 0
 
-    # STORAGE LIMITS (Phase 9 - Sprint D)
-    MAX_STORAGE_SIZE = 500 * 1024 * 1024  # 500MB
+    # STORAGE LIMITS    # Phase 4 (Master Plan): Paths & Outputs
+    OUTPUT_DIR = "outputs"
+    STM_FILE = os.path.join(OUTPUT_DIR, "short_term_memory.txt")
+    EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
+    MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
+    SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
+    CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")

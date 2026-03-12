@@ -96,21 +96,21 @@ def get_skill_registry() -> SkillRegistry:
         name="add_goal",
         description="Thiết lập mục tiêu dài hạn để Aura thực hiện ngầm.",
         usage_format="ACTION: add_goal | <tên mục tiêu>",
-        func=lambda x: f"[HÀNH ĐỘNG]: Mục tiêu '{x}' đã được ghi nhận vào Bản Ngã."
+        func=lambda x: registry._ego_action(x, "add_goal")
     ))
     
     registry.register(Skill(
         name="search_novel",
         description="Tìm kiếm truyện trên docln.net và nạp vào hàng đợi đọc.",
         usage_format="ACTION: search_novel | <tên truyện>",
-        func=lambda x: f"[HÀNH ĐỘNG]: Đang tìm kiếm truyện '{x}' trên thư viện Docln..."
+        func=lambda x: registry._reader_action(x, "search_novel")
     ))
     
     registry.register(Skill(
         name="start_reading",
         description="Bắt đầu phiên đọc tiểu thuyết ngay lập tức.",
         usage_format="ACTION: start_reading | now",
-        func=lambda x: "[HÀNH ĐỘNG]: Aura bắt đầu phiên đọc sách trong nền."
+        func=lambda x: registry._autonomous_action(x, "start_reading")
     ))
     
     # --- Nạp các kỹ năng tự học (Self-Evolution) ---

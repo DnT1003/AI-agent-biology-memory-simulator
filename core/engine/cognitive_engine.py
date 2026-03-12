@@ -45,6 +45,7 @@ class CognitiveEngine:
 
         from core.tools import get_skill_registry
         self.skills = get_skill_registry()
+        self.skills.engine = self  # Phase 2: Bridge tools to engine
         self.skills.load()  # Phase 6: Nạp độ thông thạo từ ổ cứng
         self.reader = BackgroundReader(self.llm)
 
@@ -162,7 +163,7 @@ class CognitiveEngine:
 
     def shutdown(self):
         """Dừng toàn bộ engine và lưu trạng thái trước khi thoát."""
-        self.stop()  # Dừng background_loop từ AutonomousMixin
+        self.autonomous.stop()  # Dừng background_loop (AutonomousController)
         if hasattr(self, 'reader') and getattr(self.reader, 'stop', None):
             self.reader.stop()
         with self.ego.lock:
@@ -171,7 +172,8 @@ class CognitiveEngine:
 
     def _dump_mind_state(self):
         """Xuất trạng thái sinh lý và tâm lý ra JSON để Dashboard đọc (Idea 5)"""
-        import json
+        from core.utils import atomic_write_json
+        from config import Config
         try:
             state = {
                 "name": self.ego.name,
@@ -187,7 +189,7 @@ class CognitiveEngine:
                 "active_goals": self.ego.get_active_goals(),
                 "timestamp": time.time()
             }
-            with open("outputs/mind_state.json", "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
+            atomic_write_json(Config.MIND_STATE_FILE, state)
         except Exception:
             logger.warning("Failed to dump mind state", exc_info=True)
+

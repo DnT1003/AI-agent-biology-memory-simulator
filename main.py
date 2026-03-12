@@ -22,8 +22,6 @@ if __name__ == "__main__":
     ai = CognitiveEngine()
     
     is_shutting_down = False
-    # Phase 14: Shutdown coordination Event
-    _shutdown_complete = threading.Event()
 
     def handle_exit():
         global is_shutting_down
@@ -31,8 +29,7 @@ if __name__ == "__main__":
             is_shutting_down = True
             print(f"\n{Fore.YELLOW}He thong dang tat...{Style.RESET_ALL}")
             try:
-                ai.autonomous.stop()  # Signal background loop to stop
-                _shutdown_complete.wait(timeout=5.0)  # Wait for clean exit
+                ai.autonomous.stop()  # Sẽ tự động block until joined
                 ai.memory_ops.sleep()    # Only save AFTER background thread has stopped
                 if hasattr(ai, 'shutdown'): ai.shutdown() # Finalize
             except Exception as e:
@@ -67,13 +64,8 @@ if __name__ == "__main__":
 
     print("Tải ký ức nền từ cơ sở dữ liệu...")
 
-    # Start the agent's background loop in a separate thread
-    def _bg_wrapper():
-        ai.autonomous.background_loop()
-        _shutdown_complete.set()  # Bao hieu da thoat sach se
-    
-    background_thread = threading.Thread(target=_bg_wrapper, daemon=True)
-    background_thread.start()
+    # Start the agent's background loop normally via its own method
+    ai.autonomous.start()
 
     async def interactive_loop():
         use_prompt_toolkit = True
@@ -125,8 +117,13 @@ if __name__ == "__main__":
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"{Fore.RED}Lỗi hệ thống: {e}{Style.RESET_ALL}")
-                break
+                from core.logger import get_logger
+                get_logger("main").critical(f"Brain Glitch: {e}", exc_info=True)
+                print(f"\n{Fore.RED}🔴 [BRAIN GLITCH]: Aura đang gặp sự cố thần kinh nghiêm trọng: {e}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}⚠️  Hệ thống sẽ cố gắng khởi động lại sau 5 giây...{Style.RESET_ALL}")
+                import time
+                time.sleep(5)
+                continue # Thử tiếp tục thay vì break nếu có thể
                 
     import time
     ai.last_interaction_time = time.time()

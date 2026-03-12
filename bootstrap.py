@@ -5,6 +5,26 @@ import shutil
 
 import shlex
 
+# Phase 1: Environment Validation
+REQUIRED_PYTHON_VERSION = (3, 12)
+
+def check_git_config():
+    """Check for 'dubious ownership' issues on Windows/WSL environments."""
+    try:
+        subprocess.check_output(["git", "status"], stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        if b"dubious ownership" in e.output:
+            print("⚠️ Warning: Git 'dubious ownership' detected.")
+            print("Run: git config --global --add safe.directory " + os.getcwd().replace("\\", "/"))
+    except FileNotFoundError:
+        pass # Git not installed, skip
+
+def check_python_version():
+    if sys.version_info < REQUIRED_PYTHON_VERSION:
+        print(f"❌ Error: Aura requires Python {REQUIRED_PYTHON_VERSION[0]}.{REQUIRED_PYTHON_VERSION[1]} or higher.")
+        print(f"Current version: {sys.version}")
+        sys.exit(1)
+
 def run_command(cmd):
     print(f"Executing: {cmd}")
     try:
@@ -74,4 +94,8 @@ def main():
     print("3. Eval SLM: .\\.venv_aura\\Scripts\\python.exe scripts/eval_slm.py")
 
 if __name__ == "__main__":
+    check_python_version()
+    check_git_config()
+    
+    # ─── 1. Setup Master Venv (.venv) ────────────────────────────────
     main()
