@@ -1,0 +1,29 @@
+# Dockerfile cho Aura Brain (Dieu phoi nhan thuc)
+FROM python:3.12-slim
+
+# Cai dat dependencies he thong can thiet
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy Requirements va cai dat
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Cai dat spacy models
+RUN python -m spacy download en_core_web_sm || true
+
+# Copy toan bo du an vao
+COPY . .
+
+# Gan thu muc dau ra vao mac dinh, phong truong hop khong co volume
+RUN mkdir -p /app/outputs
+
+# Vi la Main Loop tuong tac qua console, thuong se chay tren nen Cua so Terminal,
+# khong khoi dong nen neu chua co interactive console,
+# Do do chung ta de script hoat dong voi che do ngam cho phep K8s theo doi hoac 
+# doi TTY cua user.
+CMD ["python", "main.py"]

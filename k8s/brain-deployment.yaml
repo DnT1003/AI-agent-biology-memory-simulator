@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-brain
+  namespace: default
+  labels:
+    app: aura-brain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-brain
+  template:
+    metadata:
+      labels:
+        app: aura-brain
+    spec:
+      containers:
+        - name: brain
+          image: aura/brain:latest
+          imagePullPolicy: Never
+          # Vi kien truc script tuong tac STDIN "interactive", se dung tty. 
+          # Co the dung kubectl attach -it đe giao tiep hoac port-forward.
+          tty: true
+          stdin: true
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: API_KEY
+            - name: CHROMA_SERVER_HOST
+              value: aura-chromadb-svc
+            - name: GPU_SERVICE_URL
+              value: http://aura-gpu-svc:8001
+            - name: AURA_OUTPUT_DIR
+              value: /app/outputs
+          volumeMounts:
+            - name: brain-storage
+              mountPath: /app/outputs
+      volumes:
+        - name: brain-storage
+          persistentVolumeClaim:
+            claimName: brain-pvc

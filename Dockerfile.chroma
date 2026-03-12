@@ -1,0 +1,21 @@
+# Dockerfile dành riêng cho ChromaDB
+# Sử dụng Python 3.11/3.12 (môi trường ổn định nhất cho pydantic v1.x của Chroma)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Cài đặt ChromaDB
+# Do ChromaDB có nhiều dependency C++, đôi lúc cần build-essential
+RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir chromadb==0.4.24
+
+# Tạo thư mục chứa dữ liệu Chroma
+RUN mkdir -p /chroma_data
+ENV CHROMA_DB_IMPL=chromadb.db.sqlite.SqliteDB
+ENV PERSIST_DIRECTORY=/chroma_data
+
+# Mở cổng 8000
+EXPOSE 8000
+
+# Lệnh khởi chạy server (Thay vì uvicorn custom, gọi command của chromadb)
+CMD ["chroma", "run", "--host", "0.0.0.0", "--port", "8000", "--path", "/chroma_data"]

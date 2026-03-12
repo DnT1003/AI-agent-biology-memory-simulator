@@ -1,4 +1,4 @@
-﻿import os
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,6 +27,7 @@ class Config:
     CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "127.0.0.1")
     CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
     USE_CHROMA_SERVER = os.getenv("USE_CHROMA_SERVER", "True").lower() == "true"
+    GPU_SERVICE_URL = os.getenv("GPU_SERVICE_URL", "http://127.0.0.1:8001")
     STM_FILE = os.path.join(OUTPUT_DIR, "short_term.json")
     MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
     EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")

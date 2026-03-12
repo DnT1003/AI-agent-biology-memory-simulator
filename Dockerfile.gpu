@@ -1,0 +1,31 @@
+# Dockerfile cho Aura GPU Microservice (SLM & RoBERTa)
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+# Cai dat Python 3.12 va cac dependencies he thong
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3-pip \
+    python3.12-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Link python3 to python3.12
+RUN ln -s /usr/bin/python3.12 /usr/bin/python || true
+
+WORKDIR /app
+
+# Cai dat PyTorch ho tro CUDA 12.1
+RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Cai dat dependencies rieng cho GPU Service
+RUN pip3 install --no-cache-dir fastapi uvicorn pydantic transformers colorama reqests
+
+# Copy thu muc core
+COPY core ./core
+COPY config.py ./config.py
+
+# Mo cong 8001 cho GPU Service
+EXPOSE 8001
+
+# Khoi xay GPU Service voi uvicorn
+CMD ["python3", "-m", "uvicorn", "core.server.gpu_service:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

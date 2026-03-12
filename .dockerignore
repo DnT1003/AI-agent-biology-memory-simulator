@@ -1,0 +1,21 @@
+# Bo qua cac thu muc ao va moi truong local
+.venv*
+__pycache__/
+*.pyc
+.git/
+.idea/
+.vscode/
+
+# Bo qua thu muc output dia phuong (khi dua len K8s se dung PVC)
+outputs/
+data/
+novel/
+
+# Bo qua log
+*.log
+error_log.txt
+
+# Bo qua Mieu/MoE checkpoint models (se duoc tai ve tu xa, hoac tu mount, tuy kien truc, 
+# neu muon copy vao container thi comment dong nay lai)
+# core/engine/nanogpt/*.pth
+# core/engine/nanogpt/*.bin

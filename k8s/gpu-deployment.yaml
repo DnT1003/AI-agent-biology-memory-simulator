@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-gpu-svc
+  namespace: default
+  labels:
+    app: aura-gpu-svc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-gpu-svc
+  template:
+    metadata:
+      labels:
+        app: aura-gpu-svc
+    spec:
+      containers:
+        - name: gpu-service
+          image: aura/gpuservice:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8001
+          # Day la diem quan trong giao gpu: yeu cau 1 GPU tu worker node k8s.
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aura-gpu-svc
+spec:
+  selector:
+    app: aura-gpu-svc
+  ports:
+    - protocol: TCP
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP

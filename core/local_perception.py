@@ -29,8 +29,13 @@ class LocalPerception:
                 print(f"{Fore.GREEN}✅ [LOCAL PERCEPTION]: Engine sẵn sàng trên {self.device.upper()}.{Style.RESET_ALL}")
             except Exception as e:
                 print(f"{Fore.RED}❌ [LOCAL PERCEPTION]: Lỗi khi nạp mô hình: {e}{Style.RESET_ALL}")
+                from config import Config
+                print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice at {Config.GPU_SERVICE_URL}.{Style.RESET_ALL}")
+                self.mode = "api"
         else:
-            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice on port 8001.{Style.RESET_ALL}")
+            from config import Config
+            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice at {Config.GPU_SERVICE_URL}.{Style.RESET_ALL}")
+            self.mode = "api"
 
     def analyze(self, text: str) -> dict:
         """
@@ -43,7 +48,8 @@ class LocalPerception:
         if not TRANSFORMERS_AVAILABLE:
             import requests
             try:
-                resp = requests.post("http://127.0.0.1:8001/analyze", json={"text": text}, timeout=10)
+                from config import Config
+                resp = requests.post(f"{Config.GPU_SERVICE_URL}/analyze", json={"text": text}, timeout=10)
                 if resp.status_code == 200:
                     return resp.json()
             except Exception as e:

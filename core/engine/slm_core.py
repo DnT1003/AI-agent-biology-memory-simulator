@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import importlib.util
 from config import Config
@@ -102,10 +102,11 @@ class SLMCore:
             import requests
 
             try:
+                # Thay vì local loopback, sử dụng service URL từ Config (hỗ trợ K8s)
                 resp = requests.post(
-                    "http://127.0.0.1:8001/generate",
+                    f"{Config.GPU_SERVICE_URL}/generate",
                     json={"prompt": prompt_text, "max_new_tokens": max_tokens},
-                    timeout=10,
+                    timeout=20,
                 )
                 if resp.status_code == 200:
                     return resp.json().get("thought", "...")

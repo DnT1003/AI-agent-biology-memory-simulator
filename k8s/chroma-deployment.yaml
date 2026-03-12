@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-chromadb
+  namespace: default
+  labels:
+    app: aura-chromadb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-chromadb
+  template:
+    metadata:
+      labels:
+        app: aura-chromadb
+    spec:
+      containers:
+        - name: chromadb
+          image: aura/chromadb:latest
+          imagePullPolicy: Never  # Do build ở máy local
+          ports:
+            - containerPort: 8000
+          # TEST IDE EXTENSION Ở ĐÂY: Bạn hãy thử xuống dòng dưới chữ "8000",
+          # Gõ chữ "env" hoặc "resources" và ấn Ctr+Space xem IDE có gợi ý 
+          # cấu trúc K8s hoàn chỉnh (limits, requests...) không nhé!
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /chroma_data
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: chroma-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aura-chromadb-svc
+spec:
+  selector:
+    app: aura-chromadb
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
