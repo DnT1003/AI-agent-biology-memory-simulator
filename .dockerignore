@@ -15,6 +15,11 @@ novel/
 *.log
 error_log.txt
 
+# Bo qua secrets - tranh copy vao Docker image
+.env
+.env.*
+k8s/aura-secrets.yaml
+
 # Bo qua Mieu/MoE checkpoint models (se duoc tai ve tu xa, hoac tu mount, tuy kien truc, 
 # neu muon copy vao container thi comment dong nay lai)
 # core/engine/nanogpt/*.pth

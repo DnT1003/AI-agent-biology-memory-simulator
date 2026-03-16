@@ -15,12 +15,24 @@ spec:
       labels:
         app: aura-brain
     spec:
+      # FIX: Them initContainers de Brain cho Chroma san sang truoc khi khoi dong
+      initContainers:
+        - name: wait-for-chroma
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Cho Chroma khoi dong..."
+              until curl -sf http://aura-chromadb-svc:8000/api/v1/heartbeat; do
+                echo "Chroma chua san sang, thu lai sau 5 giay..."
+                sleep 5
+              done
+              echo "Chroma da san sang!"
       containers:
         - name: brain
           image: aura/brain:latest
           imagePullPolicy: Never
-          # Vi kien truc script tuong tac STDIN "interactive", se dung tty. 
-          # Co the dung kubectl attach -it đe giao tiep hoac port-forward.
           tty: true
           stdin: true
           env:
@@ -31,6 +43,9 @@ spec:
                   key: API_KEY
             - name: CHROMA_SERVER_HOST
               value: aura-chromadb-svc
+            # FIX: Them CHROMA_SERVER_PORT de tuong minh
+            - name: CHROMA_SERVER_PORT
+              value: "8000"
             - name: GPU_SERVICE_URL
               value: http://aura-gpu-svc:8001
             - name: AURA_OUTPUT_DIR

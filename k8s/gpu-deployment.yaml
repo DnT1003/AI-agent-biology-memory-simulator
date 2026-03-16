@@ -21,7 +21,6 @@ spec:
           imagePullPolicy: Never
           ports:
             - containerPort: 8001
-          # Yeu cau 1 GPU tu worker node K8s co NVIDIA driver
           resources:
             limits:
               nvidia.com/gpu: "1"
@@ -30,12 +29,27 @@ spec:
             requests:
               memory: "4Gi"
               cpu: "1000m"
+          # FIX: Them livenessProbe - gpu_service.py co san /health endpoint
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 60   # GPU model load mat nhieu thoi gian
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 45
+            periodSeconds: 15
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: aura-gpu-svc
+  namespace: default  # FIX: them namespace
 spec:
   selector:
     app: aura-gpu-svc
