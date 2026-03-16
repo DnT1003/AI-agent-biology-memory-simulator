@@ -35,24 +35,41 @@ class LLM:
             return True
         return False
 
-    def _apply_cognitive_throttling(self, prompt: str, max_output_tokens: int = None) -> tuple:
-        """[Phase 22] Điều tiết năng lực xử lý (Tokens) dựa trên độ mệt mỏi và stress."""
+    def _apply_cognitive_throttling(self, prompt: str, temperature: float = 0.7, max_output_tokens: int = None) -> tuple:
+        """[Phase 24] Điều tiết động các tham số (Temp, Top_P, Tokens) dựa trên sinh lý."""
+        params = {
+            "temperature": temperature,
+            "top_p": 1.0,
+            "max_output_tokens": max_output_tokens
+        }
+        
         if not self.ego:
-            return prompt, max_output_tokens
+            return prompt, params
             
         fatigue = getattr(self.ego, 'fatigue', 0.0)
         stress = getattr(self.ego, 'stress', 0.0)
         
-        # Throttling Level 2: Kiệt sức hoặc stress cực độ
+        # 1. Điều chỉnh Temperature: Stress gây loạn (tăng), Fatigue gây rập khuôn (giảm)
+        # Stress-induced Panic: Temperature cao gây ảo giác/loạn ngôn
+        if stress > 0.4:
+            params["temperature"] = min(1.2, params["temperature"] + stress * 0.5)
+        # Fatigue-induced Stereotype: Temperature thấp gây suy nghĩ lối mòn
+        if fatigue > 0.5:
+            params["temperature"] = max(0.2, params["temperature"] - fatigue * 0.4)
+            
+        # 2. Điều chỉnh Top_P: Fatigue làm hẹp không gian lựa chọn từ ngữ (cạn ý tưởng)
+        if fatigue > 0.6:
+            params["top_p"] = max(0.4, 1.0 - (fatigue - 0.6) * 1.5)
+
+        # 3. Throttling Tokens: Stress tột độ hoặc kiệt sức bóp nghẹt độ dài câu
         if fatigue > 0.85 or stress > 0.85:
-            max_output_tokens = min(max_output_tokens or 2048, 150)
+            params["max_output_tokens"] = min(params["max_output_tokens"] or 2048, 150)
             prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang kiệt sức/stress tột độ. TRẢ LỜI CỰC NGẮN GỌN (dưới 3 câu) và không thực hiện hành động phức tạp."
-        # Throttling Level 1: Mệt mỏi trung bình
         elif fatigue > 0.6 or stress > 0.6:
-            max_output_tokens = min(max_output_tokens or 2048, 400)
+            params["max_output_tokens"] = min(params["max_output_tokens"] or 2048, 400)
             prompt += "\n[CẢNH BÁO SINH LÝ]: Bạn đang mệt. Hãy trả lời súc tích."
             
-        return prompt, max_output_tokens
+        return prompt, params
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -60,14 +77,14 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_json_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
+    def _generate_json_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
         if (self._should_use_local(prompt) or force_local) and not model_override:
             if image_path:
                 print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: {'Force Local' if force_local else 'Hệ thần kinh mệt mỏi'}. Sử dụng Local LLM (Phi-3).{Style.RESET_ALL}")
-            return self.local_llm.generate_json(prompt, temperature)
+            return self.local_llm.generate_json(prompt, temperature, top_p=top_p)
 
-        config_params = {"response_mime_type": "application/json", "temperature": temperature}
+        config_params = {"response_mime_type": "application/json", "temperature": temperature, "top_p": top_p}
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
@@ -120,9 +137,9 @@ class LLM:
         return data
 
     def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> dict:
-        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
+        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
-            return self._generate_json_with_retry(prompt, temperature, model_override, max_output_tokens, force_local=force_local, image_path=image_path)
+            return self._generate_json_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], force_local=force_local, image_path=image_path)
         except Exception as e:
             logger.error(f"Lỗi LLM JSON (đã retry 3 lần thất bại): {e}")
             # Fallback cuối cùng sang local nếu cloud chết
@@ -134,14 +151,14 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_text_with_retry(self, prompt: str, temperature: float, model_override: str, max_output_tokens: int = None, image_path: str = None) -> str:
+    def _generate_text_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str = None, max_output_tokens: int = None, image_path: str = None) -> str:
         if self._should_use_local(prompt) and not model_override:
             if image_path:
                 print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: Hệ thần kinh mệt mỏi. Chuyển sang Local LLM (Phi-3) để phản xạ nhanh.{Style.RESET_ALL}")
-            return self.local_llm.generate_text(prompt, temperature)
+            return self.local_llm.generate_text(prompt, temperature, top_p=top_p)
 
-        config_params = {"temperature": temperature}
+        config_params = {"temperature": temperature, "top_p": top_p}
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
@@ -165,23 +182,23 @@ class LLM:
         return resp.text.strip()
 
     def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None, image_path: str = None) -> str:
-        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
+        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
-            return self._generate_text_with_retry(prompt, temperature, model_override, max_output_tokens, image_path=image_path)
+            return self._generate_text_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], image_path=image_path)
         except Exception as e:
             logger.error(f"Lỗi LLM Text (đã retry 3 lần thất bại): {e}")
             return self.local_llm.generate_text(prompt, temperature)
 
     def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None):
-        prompt, max_output_tokens = self._apply_cognitive_throttling(prompt, max_output_tokens)
+        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         if self._should_use_local(prompt) and not model_override:
-            yield from self.local_llm.generate_text_stream(prompt, temperature)
+            yield from self.local_llm.generate_text_stream(prompt, p["temperature"], top_p=p["top_p"])
             return
 
         try:
-            config_params = {"temperature": temperature}
-            if max_output_tokens:
-                config_params["max_output_tokens"] = max_output_tokens
+            config_params = {"temperature": p["temperature"], "top_p": p["top_p"]}
+            if p["max_output_tokens"]:
+                config_params["max_output_tokens"] = p["max_output_tokens"]
             if tools:
                 config_params["tools"] = tools
                 
