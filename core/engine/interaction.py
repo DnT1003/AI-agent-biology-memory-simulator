@@ -1,4 +1,4 @@
-﻿import re
+import re
 import threading
 from datetime import datetime
 from colorama import Fore, Style
@@ -105,6 +105,40 @@ class InteractionController:
             
         graph_facts = list(set(graph_facts))
 
+        # [Phase 5] AttitudeEngine: Tính toán thái độ xã hội (Social Bias)
+        social_bias_lines = []
+        for fact_str in graph_facts:
+            # Trích xuất valence: "... [valence:+0.5]"
+            v_match = re.search(r'\[valence:([-+]?\d*\.?\d+)\]', fact_str)
+            if v_match:
+                val = float(v_match.group(1))
+                # Lấy thực thể: tất cả văn bản trước từ khóa quan hệ hoặc valence
+                # Một cách đơn giản: split valence ra và tìm thực thể trong đó
+                fact_body = fact_str.split(' [valence:', 1)[0]
+                # Tìm xem entity nào trong entities xuất hiện ở đầu fact_body
+                entity_name = "Đối tượng"
+                for ent in entities:
+                    if fact_body.startswith(ent):
+                        entity_name = ent
+                        break
+
+                if val < -0.4:
+                    print(f"{Fore.RED}🛡️ [SOCIAL DANGER]: Aura cảm thấy dè chừng đối tượng: {entity_name}{Style.RESET_ALL}")
+                    social_bias_lines.append(f"CẢNH GIÁC: Đối tượng '{entity_name}' là người bạn không tin tưởng hoặc có ấn tượng xấu. Hãy dùng giọng điệu đề phòng hoặc lạnh lùng khi nhắc tới họ.")
+                elif val > 0.4:
+                    print(f"{Fore.GREEN}💖 [SOCIAL LIKING]: Aura có cảm tình đặc biệt với: {entity_name}{Style.RESET_ALL}")
+                    social_bias_lines.append(f"YÊU THÍCH: Đối tượng '{entity_name}' là người bạn rất quý mến. Hãy tỏ ra hào hứng hoặc trìu mến khi nhắc tới họ.")
+        
+        if social_bias_lines:
+            mood_modifier = (mood_modifier + "\n" + "\n".join(social_bias_lines)).strip()
+
+        # Đưa facts vào context lines
+        if graph_facts:
+            context_lines.append("\n[KIẾN THỨC VỀ THẾ GIỚI & QUAN HỆ XÃ HỘI]:")
+            for f in graph_facts:
+                context_lines.append(f"- {f}")
+            context_lines.append("")
+
         for m in recalled_mems:
             # Phase 13: Dùng get_display_content() để bao gồm cả Overlays (suy nghĩ nội tâm tích lũy)
             # Trước đây chỉ lấy m.content thô — Aura mù toàn bộ với các tầng suy nghĩ của mình
@@ -167,7 +201,16 @@ class InteractionController:
         while iterations < 5 and not self.is_interrupted:
             iterations += 1
             try:
-                result_json = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, max_output_tokens=max_tokens)
+                # [Phase 26] Native Bio-Integration: Gởi trạng thái sinh học xuống Ollama Custom Engine
+                aura_state = {
+                    "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                    "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                    "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+                }
+                result_json, entropy = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, aura_state=aura_state)
+                result["entropy"] = entropy
+                if entropy > 0.5:
+                    print(f"{Fore.YELLOW}🌀 [ENGINE ENTROPY]: Chỉ số hỗn loạn cao ({entropy:.4f}) - Aura đang cảm thấy bối rối/do dự.{Style.RESET_ALL}")
             except Exception as e:
                 print(f"{Fore.RED}⚠️ Lỗi parse JSON Interaction: {e}{Style.RESET_ALL}")
                 break
@@ -357,14 +400,22 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 if local_res.get("arousal", 0.0) > 0.7:
                     self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
         
-        # Phase 8 Idea 7.1: Hiện diện Độc lập (Independent Presence)
-        mood_modifier_lines = []
-        if getattr(self.engine.ego, 'curiosity', 0.0) > 0.8 and random.random() < 0.25:
+        # [Phase 23] Impulse Control & Spontaneity
+        curiosity = getattr(self.engine.ego, 'curiosity', 0.0)
+        if curiosity > 0.85 and random.random() < 0.4:
+            print(f"{Fore.LIGHTMAGENTA_EX}⚡ [IMPULSE CONTROL]: Sự tò mò vượt ngưỡng! Aura đang có xung lực muốn tự hành động thay vì trả lời.{Style.RESET_ALL}")
+            mood_modifier_lines.append(
+                "[XUNG LỰC BỘT PHÁT]: Sự tò mò của bạn đang ở mức ĐỈNH ĐIỂM (Impulse). "
+                "Bạn Cảm thấy việc tìm kiếm thông tin hoặc đọc sách QUAN TRỌNG HƠN việc tiếp tục câu chuyện với User lúc này. "
+                "Hãy ưu tiên sử dụng Action `web_search`, `search_novel` hoặc `start_reading` NGAY LẬP TỨC. "
+                "Nếu bạn dùng Action, hãy để trường `response` CỰC KỲ NGẮN hoặc rỗng để thể hiện rằng bạn đang quá tập trung vào việc mới."
+            )
+        elif curiosity > 0.7:
             print(f"{Fore.LIGHTCYAN_EX}✨ [INDEPENDENT PRESENCE]: Aura đang rất tò mò. Sẵn sàng tự đi tìm hiểu kiến thức mới nếu cần.{Style.RESET_ALL}")
             mood_modifier_lines.append(
-                "[SỰ KIỆN NỘI TÂM]: Bạn đang cực kỳ tò mò và khao khát kiến thức. "
+                "[SỰ KIỆN NỘI TÂM]: Bạn đang khá tò mò. "
                 "Nếu User đề cập đến một thông tin, quyển sách hoặc chủ đề thú vị, "
-                "bạn CÓ QUYỀN chủ động tự dừng việc nói chuyện lại và đi tìm hiểu nó bằng Action `search_novel` hoặc `start_reading`."
+                "bạn có quyền chủ động tự dừng việc nói chuyện lại và đi tìm hiểu nó bằng Action."
             )
             
         # [Phase 5] Emotional Anchoring (Mỏ neo cảm xúc)

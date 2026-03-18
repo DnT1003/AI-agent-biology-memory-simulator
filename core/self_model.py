@@ -82,18 +82,36 @@ class SelfModel:
         from core.engine.bio_controller import BioController
         self.bio_controller = BioController()
 
+        self.evolved_insight = "Tôi đang trong quá trình định hình bản sắc."
+        self.load_identity()
         self.reroll_thresholds()
         self._check_environment()
+
+    def load_identity(self):
+        """Tải bản sắc đã tiến hóa từ identity.json"""
+        try:
+            import json
+            if os.path.exists("identity.json"):
+                with open("identity.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    with self.lock:
+                        self.evolved_insight = data.get("evolved_insight", self.evolved_insight)
+                        if 'actionable_lessons' in data:
+                            self.actionable_lessons = data['actionable_lessons']
+                        print(f"{Fore.GREEN}🧬 [IDENTITY LOADED]: Bản sắc đã tiến hóa được nạp thành công.{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}⚠️ [IDENTITY ERROR]: Không thể nạp bản sắc tiến hóa: {e}{Style.RESET_ALL}")
 
     def _check_environment(self):
         """Kiểm tra thiết bị đang chạy có phải của chủ nhân không (Stranger Danger)"""
         current_id = f"{platform.system()}_{get_mac_address()}"
         try:
             import json
-            with open("identity.json", "r") as f:
-                data = json.load(f)
-                if 'override_device_id' in data:
-                    current_id = data['override_device_id']
+            if os.path.exists("identity.json"):
+                with open("identity.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if 'override_device_id' in data:
+                        current_id = data['override_device_id']
         except FileNotFoundError:
             pass
 
@@ -202,7 +220,13 @@ class SelfModel:
         '''
         
         try:
-            raw_res = llm.generate_text(prompt, temperature=0.1, image_path=image_path)
+            # [Phase 26] Native Bio-Integration for Visual Analysis
+            aura_state = {
+                "dopamine": float(self.dopamine_level),
+                "stress": float(self.stress),
+                "curiosity": float(self.curiosity)
+            }
+            raw_res, entropy = llm.generate_text(prompt, temperature=0.1, aura_state=aura_state, image_path=image_path)
             json_str = raw_res.strip()
             if json_str.startswith("```json"): json_str = json_str[7:]
             if json_str.startswith("```"): json_str = json_str[3:]

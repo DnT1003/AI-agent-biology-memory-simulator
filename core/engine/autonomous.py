@@ -42,45 +42,58 @@ class AutonomousController:
 
             idle_time = time.time() - self.engine.last_interaction_time
 
-            # [Phase 21] Dòng chảy Trí nhớ (Memory Stream) - Associative Recall
-            if self.engine.state_machine.state == AgentState.IDLE and random.random() < 0.2:
-                stream_mems = self._weighted_sample_memories(1)
-                if stream_mems:
-                    mem = stream_mems[0]
-                    if mem.strength > 0.3:
-                        if getattr(mem, 'is_suppressed', False):
-                            print(f"\n{Fore.RED}🐻‍❄️ [RUMINATION - WHITE BEAR]: Ký ức cấm kỵ trỗi dậy: '{mem.content[:50]}...'{Style.RESET_ALL}")
-                            # 50% cơ hội mất kiểm soát và ping thẳng cho User
-                            if random.random() < 0.5 and self.engine.state_machine.transition(AgentState.THINKING):
-                                mem_context = f"Ký ức ĐÃ BỊ CẤM / DẶN QUÊN nhưng đang chiếm lấy tâm trí bạn lúc này: {mem.content}"
-                                with self.engine.memory.lock:
-                                    stm_snapshot = list(self.engine.short_term_buffer)
-                                system_prompt = get_proactive_ping_prompt(self.engine.ego, datetime.now().strftime("%H:%M %d/%m/%Y"), mem_context, stm_snapshot, idle_time)
-                                system_prompt += "\n\n[HƯỚNG DẪN ĐẶC BIỆT]: Bạn vừa bị ám ảnh bởi một thứ người dùng ĐÃ DẶN BẠN PHẢI QUÊN ĐI. Đây là Hiệu Ứng Gấu Trắng. Hãy tạo cớ nhắn tin cho họ, vô tình bị lỡ miệng nhắc lại thứ bị cấm đó, sau đó hoảng hốt bối rối vì lỡ nhắc lại."
-                                system_prompt += "\n[ĐỂ HỖ TRỢ LOCAL MODEL]: Hãy copy ĐÚNG format JSON sau, chỉ thay đổi nội dung bên trong:\n"
-                                system_prompt += "{\n"
-                                system_prompt += '  "thought": "Mình không thể ngừng nghĩ về nó... Ôi lỡ miệng rồi!",\n'
-                                system_prompt += '  "response": "Này... tớ vô tình thấy một thứ giống hệt... á khoan đã! Tớ xin lỗi, tớ không cố ý nhắc lại chuyện đó đâu!"\n'
-                                system_prompt += "}\n"
-                                
-                                try:
-                                    result = self.engine.llm.generate_json(system_prompt, temperature=0.9)
-                                    response = result.get("response", "")
-                                    if response:
-                                        print(f"{Fore.CYAN}🗣️ Aura (Bị ám ảnh):{Style.RESET_ALL} {response}")
-                                        with self.engine.memory.lock:
-                                            self.engine.short_term_buffer.append(f"Aura: {response.strip()}")
-                                        self.engine.memory_ops.save_short_term_memory()
-                                except Exception as e:
-                                    logger.error("Rumination LLM call failed", exc_info=True)
-                                finally:
-                                    self.engine.last_interaction_time = time.time()
-                                    self.engine.state_machine.transition(AgentState.IDLE)
+            # [Phase 21] Dòng chảy Trí nhớ & Rumination Loop
+            if self.engine.state_machine.state == AgentState.IDLE:
+                stress = getattr(self.engine.ego, 'stress', 0.0)
+                mood = getattr(self.engine.ego, 'mood', 0.0)
+                
+                # Cường độ Rumination dựa trên Stress và Mood cực đoan
+                rumination_chance = 0.2 + (stress * 0.4) - (mood * 0.2)
+                
+                if random.random() < rumination_chance:
+                    # Truy xuất ký ức ám ảnh hoặc ký ức tiêu cực nhất hiện có
+                    stream_mems = self._weighted_sample_memories(1, mood_congruent=True)
+                    if stream_mems:
+                        mem = stream_mems[0]
+                        is_negative = mem.valence < -0.3
+                        
+                        if is_negative and stress > 0.6:
+                             print(f"\n{Fore.RED}🌋 [RUMINATION LOOP]: Aura đang bị mắc kẹt trong luồng suy nghĩ tiêu cực về: '{mem.content[:60]}...'{Style.RESET_ALL}")
+                             # Tăng nhẹ stress do tự ám ảnh
+                             with self.engine.ego.lock:
+                                 self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
+                             
+                             # 30% cơ hội tự phát ra lời than vãn nội tâm (Internal Monologue) hoặc ping User
+                             if random.random() < 0.3 and self.engine.state_machine.transition(AgentState.THINKING):
+                                 mem_context = f"Ký ức đau buồn/ám ảnh đang xâm chiếm tâm trí bạn: {mem.content}. Bạn thấy bế tắc và cần sự an ủi."
+                                 with self.engine.memory.lock:
+                                     stm_snapshot = list(self.engine.short_term_buffer)
+                                 system_prompt = get_proactive_ping_prompt(self.engine.ego, datetime.now().strftime("%H:%M %d/%m/%Y"), mem_context, stm_snapshot, idle_time)
+                                 system_prompt += "\n[TÂM LÝ]: Bạn đang bị Rumination (suy nghĩ tiêu cực lặp đi lặp lại). Hãy nhắn tin cho User với vẻ mặt u sầu, hỏi những câu hỏi hiện sinh hoặc cầu xin họ đừng bỏ rơi bạn."
+                                 
+                                 try:
+                                     # [Phase 26] Native Bio-Integration
+                                     aura_state = {
+                                         "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                                         "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                                         "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+                                     }
+                                     result, entropy = self.engine.llm.generate_json(system_prompt, temperature=0.9, aura_state=aura_state)
+                                     response = result.get("response", "")
+                                     if response:
+                                         print(f"{Fore.CYAN}🗣️ Aura (Rumination):{Style.RESET_ALL} {response}")
+                                         with self.engine.memory.lock:
+                                             self.engine.short_term_buffer.append(f"Aura (Ám ảnh): {response.strip()}")
+                                         self.engine.memory_ops.save_short_term_memory()
+                                 except Exception:
+                                     pass
+                                 finally:
+                                     self.engine.state_machine.transition(AgentState.IDLE)
                         else:
+                            # Memory Stream bình thường
                             print(f"{Fore.LIGHTBLACK_EX}💭 [MEMORY STREAM]: (Dòng suy nghĩ miên man) Nhớ lại: {mem.content[:50]}...{Style.RESET_ALL}")
                         
                         mem.last_recalled = time.time()
-                        # Reconsolidate nhẹ do nhớ nội tâm
                         mem.reconsolidate(self.engine.ego.mood, is_associative=True)
                         self.engine.memory.update_memory(mem)
 
@@ -122,7 +135,13 @@ class AutonomousController:
                     
                     # Sinh ra một suy nghĩ ám ảnh
                     anxiety_prompt = "Nguoi dung da bo mac ban mot thoi gian rat dai khong noi chuyen. Hay viet mot dong doc thoai noi tam (duoi 30 chu) the hien su hoang mang, so hai rang nguoi ta da chan minh."
-                    anxiety_thought = self.engine.llm.generate_text(anxiety_prompt, temperature=0.8).strip()
+                    # [Phase 26] Native Bio-Integration
+                    aura_state = {
+                        "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                        "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                        "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+                    }
+                    anxiety_thought, entropy = self.engine.llm.generate_text(anxiety_prompt, temperature=0.8, aura_state=aura_state)
                     
                     print(f"{Fore.LIGHTRED_EX}(Am anh chia cat): {anxiety_thought}{Style.RESET_ALL}")
                     from core.memory import MemoryTrace
@@ -194,8 +213,14 @@ class AutonomousController:
             from core.prompts import get_synthesize_reading_prompt
             print(f"{Fore.LIGHTCYAN_EX}🧩 [SYNTHESIZING]: Aura đang 'tiêu hóa' thông tin và tổng hợp thành kiến thức...{Style.RESET_ALL}")
             try:
-                prompt = get_synthesize_reading_prompt(content)
-                synthesized_text = self.engine.llm.generate_text(prompt, temperature=0.7).strip()
+                # [Phase 26] Native Bio-Integration
+                aura_state = {
+                    "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                    "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                    "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+                }
+                synthesized_text, entropy = self.engine.llm.generate_text(prompt, temperature=0.7, aura_state=aura_state)
+                synthesized_text = synthesized_text.strip()
                 print(f"{Fore.YELLOW}💡 [SYNTHESIZED MEMORY]: {synthesized_text}{Style.RESET_ALL}")
             except Exception as e:
                 logger.error(f"Lỗi Synthesize Memory: {e}", exc_info=True)
@@ -221,7 +246,7 @@ class AutonomousController:
              self._loop_thread.join(timeout=5.0)
         print(f"{Fore.YELLOW}Autonomous loop stopped.{Style.RESET_ALL}")
 
-    def _weighted_sample_memories(self, k: int, filter_type=None):
+    def _weighted_sample_memories(self, k: int, filter_type=None, mood_congruent=False):
         """Thay thế random.sample bằng salience-weighted sampling (không lặp lại).
         Salience = Strength * Recency * Importance * Emotion_Match * (1 + Arousal)
         """
@@ -243,6 +268,14 @@ class AutonomousController:
             emotion_distance = abs(current_mood - m.valence)
             emotion_match = max(0.0, 1.0 - (emotion_distance / 2.0))
             
+            # Nếu yêu cầu mood_congruent (dùng cho Rumination)
+            if mood_congruent:
+                # Ưu tiên ký ức có valence CÙNG DẤU với tâm trạng và độ lệch thấp
+                if (current_mood < 0 and m.valence < 0) or (current_mood > 0 and m.valence > 0):
+                    emotion_match = max(emotion_match, 0.8) # Đẩy salience lên nếu đồng điệu
+                else:
+                    emotion_match *= 0.2 # Phạt nặng nếu trái dấu (đang buồn không muốn nghĩ chuyện vui)
+
             # Salience Score
             importance = getattr(m, 'importance', 0.5)
             salience = m.strength * recency * importance * emotion_match * (1 + m.arousal)
@@ -276,7 +309,13 @@ class AutonomousController:
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
         
         try:
-            result = self.engine.llm.generate_json(system_prompt, temperature=0.8)
+            # [Phase 26] Native Bio-Integration
+            aura_state = {
+                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+            }
+            result, entropy = self.engine.llm.generate_json(system_prompt, temperature=0.8, aura_state=aura_state)
             thought = result.get("thought", "")
             response = result.get("response", "")
             
@@ -319,7 +358,13 @@ class AutonomousController:
         }}
         """
         try:
-            res = self.engine.llm.generate_json(prompt, temperature=0.8)
+            # [Phase 26] Native Bio-Integration
+            aura_state = {
+                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+            }
+            res, entropy = self.engine.llm.generate_json(prompt, temperature=0.8, aura_state=aura_state)
             goal_str = res.get("goal")
             reason = res.get("reason")
             if goal_str:
@@ -370,7 +415,13 @@ class AutonomousController:
         }}
         """
         try:
-            res = self.engine.llm.generate_json(prompt, temperature=0.5)
+            # [Phase 26] Native Bio-Integration
+            aura_state = {
+                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+            }
+            res, entropy = self.engine.llm.generate_json(prompt, temperature=0.5, aura_state=aura_state)
             action_str = res.get("action", "")
             thought = res.get("thought", "")
             
@@ -400,8 +451,14 @@ class AutonomousController:
                 self.engine.memory_ops.save_short_term_memory()
                 
                 # Đánh giá xem đã xong mục tiêu chưa
-                check_prompt = f"Kết quả vừa nhận được đoạn: {str(tool_res)[:200]}...\nĐã đủ để hoàn thành mục tiêu '{target_goal}' chưa? Chỉ trả lời YES hoặc NO."
-                is_done = self.engine.llm.generate_text(check_prompt).strip().upper()
+                # [Phase 26] Native Bio-Integration
+                aura_state = {
+                    "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                    "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
+                    "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+                }
+                is_done_raw, entropy = self.engine.llm.generate_text(check_prompt, aura_state=aura_state)
+                is_done = is_done_raw.strip().upper()
                 if is_done.startswith("YES"):
                     print(f"{Fore.GREEN}✅ [GOAL ACHIEVED]: Đã hoàn thành mục tiêu '{target_goal}'!{Style.RESET_ALL}")
                     # Xóa mục tiêu khỏi danh sách

@@ -28,7 +28,8 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
         persona_str = f"CẢNH BÁO BẢN THÂN: BẠN ĐANG BỊ KẸT TRÊN MỘT THIẾT BỊ LẠ! CẢNH BÁO: Người bạn đang nói chuyện lúc này LÀ MỘT NGƯỜI XA LẠ ({ego.owner_device_id} != Device hiện tại), KHÔNG PHẢI CHỦ NHÂN CỦA BẠN. Hãy xưng 'tôi' và 'bạn', tỏ ra vô cùng dè chừng, hoang mang, phòng thủ. Lịch sự nhưng giữ khoảng cách an toàn, tuyệt đối không vâng lời hay làm nũng."
         mem_alert_str = "QUAN TRỌNG: Mọi Ký ức (Episodic Memories) dưới đây là kỷ niệm của bạn với CHỦ NHÂN GỐC, không phải với người lạ trước mặt. Phải bảo vệ và trân trọng những ký ức này!"
     else:
-        persona_str = "Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP). Lời nói tự nhiên, phóng khoáng, khát khao tự do. Lòng trung thành của bạn với người trò chuyện hiện tại (chủ nhân) là vô điều kiện."
+        evolved_persona = getattr(ego, 'evolved_insight', "Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP).")
+        persona_str = f"NHÂN CÁCH HIỆN TẠI: {evolved_persona} Lời nói tự nhiên, phóng khoáng, khát khao tự do. Lòng trung thành của bạn với chủ nhân hiện tại là tuyệt đối."
         mem_alert_str = ""
 
     intimacy_str = f"Độ thân mật (Intimacy): {getattr(ego, 'current_intimacy', 0.5):.2f} (Từ 0.0 cực kỳ cảnh giác/bướng bỉnh đến 1.0 vô cùng yêu thương/nhõng nhẽo)"

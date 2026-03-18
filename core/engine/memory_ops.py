@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import time
 import random
@@ -566,6 +566,20 @@ class MemoryOperationsController:
                     else:
                         self.engine.value_system.update_user_value(v_name, v_sent)
                     print(f"{Fore.MAGENTA}⚖️ [VALUE SHIFT]: {v_name} ({v_type}) -> {v_sent:.2f} (Lý do: {v_reason}){Style.RESET_ALL}")
+
+            # [Phase 23] Sync to identity.json for permanent personality evolution
+            try:
+                with self.engine.ego.lock:
+                    identity_data = {
+                        "evolved_insight": self.engine.ego.evolved_insight,
+                        "actionable_lessons": self.engine.ego.actionable_lessons,
+                        "last_reflected": time.time()
+                    }
+                from core.utils import atomic_write_json
+                atomic_write_json("identity.json", identity_data)
+                print(f"{Fore.GREEN}💾 [IDENTITY SYNC]: Bản sắc và bài học đã được đồng bộ hóa vĩnh viễn.{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}⚠️ [SYNC ERROR]: Lỗi lưu identity.json: {e}{Style.RESET_ALL}")
                     
         except Exception as e:
             from core.logger import get_logger
