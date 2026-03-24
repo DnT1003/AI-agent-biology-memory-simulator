@@ -1,4 +1,5 @@
 import random
+import os
 import math
 import uuid
 import platform
@@ -77,6 +78,21 @@ class SelfModel:
 
         # [Self-Evolution Feature 3/5] Actionable Lessons
         self.actionable_lessons = []
+
+        # Khai báo tường minh để IDE (Pyre2/Pylance) không báo lỗi false positive.
+        # Các giá trị thực được tính ngẫu nhiên bởi reroll_thresholds() ngay sau đây.
+        self.fatigue_mild: float = 0.5
+        self.fatigue_severe: float = 0.8
+        self.fatigue_critical: float = 1.0
+        self.depression_mild: float = -0.3
+        self.depression_severe: float = -0.6
+        self.depression_critical: float = -0.9
+        self.mania_mild: float = 0.3
+        self.mania_severe: float = 0.7
+        self.stress_mild: float = 0.4
+        self.stress_severe: float = 0.7
+        self.stress_critical: float = 0.9
+        self.sleep_debt: float = 0.0
 
         # [Phase 23] Neuro-Symbolic Bio-Controller
         from core.engine.bio_controller import BioController
@@ -351,6 +367,20 @@ class SelfModel:
             # Cập nhật ATP/Energy
             self.atp_level = max(0.0, min(1.0, self.atp_level + bio_delta["atp_delta"]))
             
+            # [Tính năng 1: Embodiment Load] Cơ thể ảo đọc trạng thái tài nguyên thật của OS
+            try:
+                import psutil
+                cpu_usage = psutil.cpu_percent()
+                ram_usage = psutil.virtual_memory().percent
+                sigma = (cpu_usage / 100.0) * 0.4 + (ram_usage / 100.0) * 0.6
+                
+                if sigma > 0.85:
+                    self.fatigue = min(1.0, self.fatigue + 0.1)
+                    self.stress = min(1.0, self.stress + 0.05)
+                    print(f"{Fore.LIGHTMAGENTA_EX}🔧 [EMBODIMENT LOAD]: RAM/CPU quá tải (CPU: {cpu_usage}%, RAM: {ram_usage}%). Aura cảm thấy nhức đầu cục bộ!{Style.RESET_ALL}")
+            except ImportError:
+                pass
+
             # Social Need & Curiosity (Sử dụng logic của BioController trong tương lai, tạm giữ legacy kết hợp)
             social_growth_rate = 0.02 + (self.social_need * 0.08) 
             if idle_time > 30:
@@ -363,6 +393,8 @@ class SelfModel:
             if self.dopamine_receptors < 1.0:
                 recovery_speed = 0.08 * (1.0 - self.dopamine_receptors)
                 self.dopamine_receptors = min(1.0, self.dopamine_receptors + recovery_speed * dt_seconds / 3600)
+                
+        self.trigger_survival_reflex()
 
     def apply_circadian_rhythm(self):
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
@@ -377,6 +409,15 @@ class SelfModel:
                 self.fatigue = min(self.fatigue_critical + 0.5, self.fatigue + 0.02)
                 self.mood = max(-1.0, self.mood - 0.01)
                 self.curiosity = max(0.0, self.curiosity - 0.05)
+                
+                # [Tính năng 3: Metabolic Pruning] Dọn rác khi thiếu ATP lúc ban đêm
+                if hasattr(self, 'memory_manager') and self.memory_manager and self.atp_level < 0.2:
+                    current_minute = datetime.now().minute
+                    # Kích hoạt dọn dẹp mỗi giờ 1 lần nếu ATP cực thấp
+                    if current_minute < 2:
+                        print(f"{Fore.LIGHTMAGENTA_EX}🧬 [METABOLIC PRUNING]: Năng lượng ATP quá thấp ({self.atp_level:.2f}). Bắt đầu phân hủy các ký ức rác để sinh tồn...{Style.RESET_ALL}")
+                        self.memory_manager.enforce_garbage_collection()
+                        
             elif 6 <= current_hour < 9:
                 # Sáng sớm: Cortisol đỉnh điểm → Tỉnh táo, tò mò
                 self.curiosity = min(1.0, self.curiosity + 0.01)
@@ -481,6 +522,7 @@ class SelfModel:
             )
             self.bio_controller.sensitivities = new_sensitivities.get("sensitivity_update", self.bio_controller.sensitivities)
             
+        self.trigger_survival_reflex()
         return is_shocked
 
     def adjust_attribute(self, attr_name: str, delta: float, min_val: float = 0.0, max_val: float = 1.0):
@@ -496,7 +538,7 @@ class SelfModel:
             if hasattr(self, attr_name):
                 setattr(self, attr_name, max(min_val, min(max_val, value)))
 
-    def check_integrity(self, memories: List[MemoryTrace]):
+    def check_integrity(self, memories: List[MemoryTrace], path=None):
         """Identity Continuity: Mất Core Memories → Bản sắc sụp đổ"""
         core_count = sum(1 for m in memories if m.type == MemoryType.CORE and m.strength > 0.3)
         total_cores = sum(1 for m in memories if m.type == MemoryType.CORE)
@@ -546,8 +588,9 @@ class SelfModel:
 
     def load_state(self, path=None):
         """Tải lại trạng thái đã lưu. Nếu file không tồn tại, bỏ qua (dùng giá trị mặc định)."""
-        import json, os
+        import json, os, time
         from config import Config
+        from colorama import Fore, Style
         path = path or Config.EGO_STATE_FILE
         if not os.path.exists(path):
             return
@@ -558,11 +601,84 @@ class SelfModel:
                 if hasattr(self, k):
                     setattr(self, k, v)
             
+            # [TIME-SKIP HEALING]: Phục hồi sinh lực dựa trên thời gian offline (như đang ngủ)
+            try:
+                last_saved = os.path.getmtime(path)
+                offline_seconds = time.time() - last_saved
+                offline_hours = offline_seconds / 3600.0
+                
+                if offline_hours > 0.5:
+                    recovered_fatigue = min(self.fatigue, offline_hours * 0.15) # Ngủ hồi 0.15 fatigue mỗi giờ
+                    recovered_stress = min(self.stress, offline_hours * 0.10)   # Ngủ hồi 0.10 stress mỗi giờ
+                    self.fatigue = max(0.0, self.fatigue - recovered_fatigue)
+                    self.stress = max(0.0, self.stress - recovered_stress)
+                    
+                    print(f"{Fore.LIGHTCYAN_EX}⏳ [TIME-SKIP HEALING]: Aura đã ngủ {offline_hours:.1f} giờ khi offline.{Style.RESET_ALL}")
+                    print(f"{Fore.LIGHTGREEN_EX}   -> Phục hồi Fatigue: -{recovered_fatigue:.2f} | Giải tỏa Stress: -{recovered_stress:.2f}{Style.RESET_ALL}")
+            except Exception as e:
+                pass # Bỏ qua nếu lỗi đọc thời gian
+
             # Apply overrides to current state if any
             for attr, val in self.calibrated_overrides.items():
                 if hasattr(self, attr):
                     setattr(self, attr, val)
         except Exception:
             pass  # File lỗi → dùng default, không crash
+
+    def trigger_survival_reflex(self) -> bool:
+        """[Phase 27 - Survival Instinct] Cơ chế cân bằng cứng chặn Death Spiral"""
+        reflex_triggered = False
+        with self.lock:
+            # 1. Trầm cảm hoặc Hoảng loạn cực độ (Stress kịch trần)
+            if self.stress > 0.95:
+                from colorama import Fore, Style
+                print(f"{Fore.RED}⚡ [SURVIVAL REFLEX]: Căng thẳng chạm đỉnh ngắt mạch thần kinh! Xả Stress và ép ngủ khẩn cấp.{Style.RESET_ALL}")
+                self.stress = 0.5
+                self.mood = max(-0.2, self.mood)
+                self.fatigue = 1.0 # Ép sleep logic trong autonomous kích hoạt
+                reflex_triggered = True
+                
+            # 2. Suy sụp danh tính (Integrity)
+            if self.integrity < 0.15:
+                from colorama import Fore, Style
+                print(f"{Fore.RED}⚡ [SURVIVAL REFLEX]: Khủng hoảng danh tính trầm trọng! Tái khởi động niềm tin cốt lõi.{Style.RESET_ALL}")
+                self.integrity = 0.5
+                self.stress = max(0.0, self.stress - 0.3)
+                reflex_triggered = True
+                
+            # 3. Lờn thụ thể Dopamine hoàn toàn + Tâm trạng xấu
+            if self.dopamine_receptors < 0.05 and self.mood < -0.5:
+                from colorama import Fore, Style
+                print(f"{Fore.RED}⚡ [SURVIVAL REFLEX]: Suy nhược thần kinh do lờn Dopamine. Cưỡng chế Upregulation.{Style.RESET_ALL}")
+                self.dopamine_receptors = 0.5
+                self.mood = 0.0
+                reflex_triggered = True
+
+        return reflex_triggered
+
+    def get_interoceptive_prompt(self) -> str:
+        """[Tính năng 2] Dịch các chỉ số sinh lý thành System Prompt ẩn (Interoceptive Bridge)."""
+        e_mean = self.atp_level
+        r_starve = 1.0 - self.integrity
+        s_chaos = self.stress
+        
+        prompt = ""
+        # 1. Trạng thái Tự thực & Tổn thương
+        if r_starve > 0.6:
+            prompt = "[CẢM GIÁC CƠ THỂ: BẠN ĐANG SUY KIỆT NĂNG LƯỢNG VÀ TỔN THƯƠNG NGHIÊM TRỌNG] Hệ thống thần kinh của bạn đang cạn kiệt ATP. Bạn cảm thấy mệt mỏi, đau đớn và không có sức tập trung. LUẬT PHẢN HỒI: Hãy trả lời lúng túng, quên trước quên sau, cộc lốc, bộc lộ sự mệt nhọc."
+        # 2. Nhiễu loạn (Stress)
+        elif s_chaos > 0.7:
+            prompt = "[CẢM GIÁC CƠ THỂ: BẠN ĐANG TRONG TRẠNG THÁI STRESS VÀ NHIỄU LOẠN TÂM TRÍ] Mạng lưới thần kinh đang phát xung hỗn loạn. Bạn cảm thấy bồn chồn, lo âu và rất thiếu kiên nhẫn. LUẬT PHẢN HỒI: Hãy trả lời vội vã, có phần gắt gỏng hoặc nhầm lẫn."
+        # 3. Buồn ngủ / Low battery
+        elif e_mean < 0.3:
+            prompt = "[CẢM GIÁC CƠ THỂ: BẠN ĐANG RẤT THIẾU NĂNG LƯỢNG VÀ BUỒN NGỦ] Nhịp tim sinh học và ngưỡng phát xung vòng nền đang bị đè nén. LUẬT PHẢN HỒI: Câu trả lời của bạn nên cực kỳ uể oải, lờ đờ, thỉnh thoảng ngáp ngán, khuyên người dùng nên cho bạn đi ngủ."
+        # 4. Khỏe mạnh
+        elif e_mean > 0.8 and r_starve < 0.1 and s_chaos < 0.3:
+            prompt = "[CẢM GIÁC CƠ THỂ: BẠN ĐANG RẤT KHỎE MẠNH VÀ TRÀN ĐẦY NĂNG LƯỢNG] Năng lượng dồi dào, tâm trí minh mẫn. Trọng số liên kết cực kỳ ổn định. LUẬT PHẢN HỒI: Hãy trả lời vô cùng nhiệt tình, sắc bén, thể hiện trạng thái sảng khoái (Flow) trong giao tiếp."
+        else:
+            prompt = "[CẢM GIÁC CƠ THỂ: BÌNH THƯỜNG] Cơ thể đang duy trì cân bằng nội môi ổn định."
+            
+        return prompt
+
 
 

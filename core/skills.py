@@ -1,4 +1,4 @@
-﻿from typing import List, Dict, Callable
+from typing import List, Dict, Callable
 
 import time
 import random
@@ -127,9 +127,11 @@ class SkillRegistry:
             atomic_write_json(Config.SKILLS_FILE, data)
 
     def load_dynamic_skills(self):
-        """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills."""
-        import os, importlib.util, inspect
+        """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills, chạy qua Sandbox."""
+        import os, ast, subprocess, json
         from config import Config
+        from colorama import Fore, Style
+        
         if not getattr(Config, 'ALLOW_DYNAMIC_SKILLS', False):
             return
 
@@ -137,34 +139,97 @@ class SkillRegistry:
         if not os.path.exists(dynamic_dir):
             return
 
-        from colorama import Fore, Style
-        print(f"{Fore.CYAN}🔌 [DYNAMISM]: Đang kiểm tra các kỹ năng tự học trong {dynamic_dir}...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}🔌 [DYNAMISM]: Đang kiểm tra an toàn và nạp kỹ năng tại {dynamic_dir}...{Style.RESET_ALL}")
+
+        dangerous_imports = {'os', 'sys', 'shutil', 'subprocess', 'socket', 'threading', 'multiprocessing'}
+        dangerous_calls = {'exec', 'eval', 'open', '__import__'}
+
+        def create_sandbox_executor(f_path, f_name):
+            def executor(args_str):
+                snippet = f"""
+import sys, json, os
+sys.path.insert(0, os.path.dirname(r'{f_path}'))
+import {os.path.basename(f_path)[:-3]} as mod
+try:
+    res = mod.{f_name}(sys.argv[1])
+    print(json.dumps({{"result": res}}))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}))
+"""
+                try:
+                    proc = subprocess.run(
+                        [sys.executable, "-c", snippet, args_str],
+                        capture_output=True, text=True, timeout=5.0
+                    )
+                    if proc.returncode != 0:
+                        return f"[SANDBOX FATAL]: {proc.stderr.strip()}"
+                    
+                    return_lines = [l for l in proc.stdout.strip().split('\\n') if l]
+                    if not return_lines:
+                        return "[SANDBOX EMPTY]"
+                    try:
+                        data = json.loads(return_lines[-1])
+                        if "error" in data: return f"[SKILL ERROR]: {data['error']}"
+                        return data.get("result", str(return_lines[-1]))
+                    except json.JSONDecodeError:
+                        return f"[SKILL OUTPUT]: {proc.stdout.strip()}"
+                except subprocess.TimeoutExpired:
+                    return f"{Fore.RED}[SANDBOX BLOCKED]: Kỹ năng '{f_name}' chạy quá 5 giây (Nguy cơ Infinite Loop) và đã bị ngắt!{Style.RESET_ALL}"
+                except Exception as e:
+                    return f"[SANDBOX FAULT]: {e}"
+            return executor
 
         for filename in os.listdir(dynamic_dir):
             if filename.endswith(".py") and filename != "__init__.py":
-                module_name = f"core.dynamic_skills.{filename[:-3]}"
                 file_path = os.path.join(dynamic_dir, filename)
                 
                 try:
-                    spec = importlib.util.spec_from_file_location(module_name, file_path)
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        source = f.read()
+                    tree = ast.parse(source)
                     
-                    for name, func in inspect.getmembers(module, inspect.isfunction):
-                        if getattr(func, '__qualname__', '').startswith(name): 
-                            desc = getattr(module, "DESCRIPTION", "Kỹ năng tự học mới.")
-                            usage = getattr(module, "USAGE", f"ACTION: {name} | <tham số>")
+                    is_unsafe = False
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                if alias.name.split('.')[0] in dangerous_imports: is_unsafe = True
+                        elif isinstance(node, ast.ImportFrom):
+                            if node.module and node.module.split('.')[0] in dangerous_imports: is_unsafe = True
+                        elif isinstance(node, ast.Call):
+                            if isinstance(node.func, ast.Name) and node.func.id in dangerous_calls: is_unsafe = True
+                    
+                    if is_unsafe:
+                        print(f"{Fore.RED}   ❌ BLOCK: Kỹ năng {filename} chứa mã nguy hiểm (import os/sys hoặc exec/open).{Style.RESET_ALL}")
+                        continue
+                        
+                    desc = "Kỹ năng tự học hệ thống."
+                    usage = "ACTION: func | <tham số>"
+                    funcs = []
+
+                    for node in tree.body:
+                        if isinstance(node, ast.Assign):
+                            for target in node.targets:
+                                if isinstance(target, ast.Name):
+                                    if target.id == 'DESCRIPTION' and isinstance(node.value, ast.Constant):
+                                        desc = node.value.value
+                                    elif target.id == 'USAGE' and isinstance(node.value, ast.Constant):
+                                        usage = node.value.value
+                        elif isinstance(node, ast.FunctionDef):
+                            if not node.name.startswith('_'):
+                                funcs.append(node.name)
+
+                    for name in funcs:
+                        if name not in self.skills:
+                            self.register(Skill(
+                                name=name,
+                                description=desc,
+                                usage_format=usage,
+                                func=create_sandbox_executor(file_path, name)
+                            ))
+                            print(f"{Fore.GREEN}   🛡️ Đã nạp Sandbox an toàn cho kỹ năng: {name}{Style.RESET_ALL}")
                             
-                            if name not in self.skills:
-                                self.register(Skill(
-                                    name=name,
-                                    description=desc,
-                                    usage_format=usage,
-                                    func=func
-                                ))
-                                print(f"{Fore.GREEN}   ✅ Đã nạp kỹ năng mới: {name}{Style.RESET_ALL}")
                 except Exception as e:
-                    print(f"{Fore.RED}   ❌ Lỗi khi nạp kỹ năng {filename}: {e}{Style.RESET_ALL}")
+                    print(f"{Fore.RED}   ❌ Lỗi khi phân tích Sandbox {filename}: {e}{Style.RESET_ALL}")
 
     def load(self):
         from core.utils import atomic_read_json

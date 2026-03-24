@@ -6,7 +6,6 @@ from typing import List, Optional, Union
 from dataclasses import dataclass, field
 import numpy as np
 from colorama import Fore, Style
-
 from config import Config
 from components.vector_store import VectorStore
 from components.embedder import Embedder
@@ -49,6 +48,7 @@ class MemoryTrace:
     is_suppressed: bool = False # Thẻ "Gấu Trắng" - Cố quên nhưng lại càng nhớ
     impact_weight: float = 1.0 # Trọng số tác động đến Mood (Phase 19)
     overlays: List[str] = field(default_factory=list)  # Lớp cảm xúc tích lũy (max 5)
+    reality_score: float = 1.0 # [Tính năng 4] Điểm thực tại (1.0 = Thật, 0.3 = Ảo/Suy diễn)
 
     def __post_init__(self):
         """Invariant enforcement — vào lúc khởi tạo, clamp tất cả số về dải hợp lệ."""
@@ -57,6 +57,7 @@ class MemoryTrace:
         self.importance    = max(0.0,  min(1.0, self.importance))
         self.strength      = max(0.0,  min(1.0, self.strength))
         self.impact_weight = max(0.0,  min(2.0, self.impact_weight))
+        self.reality_score = max(0.0,  min(1.0, self.reality_score))
 
     def decay(self, stress_level: float, elapsed_days: float = 1.0, 
               homeostasis_recovery: bool = False, nightly_stress_drop: float = 0.0, nightly_fatigue_drop: float = 0.0):
@@ -96,6 +97,12 @@ class MemoryTrace:
             
         self.strength = decayed_strength
 
+        # --- 4. Reality Probability Drift (Phase ALIFE OS) ---
+        # Khi thời gian trôi, ranh giới Thực/Ảo sẽ mờ dần, hội tụ về 0.5 (nghi ngờ)
+        if hasattr(self, 'reality_score'):
+            drift_to_center = (0.5 - self.reality_score) * 0.05 * elapsed_days
+            self.reality_score += drift_to_center
+
     def reconsolidate(self, current_mood: float, is_associative: bool = False) -> bool:
         """Ký ức bị thay đổi cảm xúc khi nhớ lại (Reconsolidation)"""
         self.last_recalled = time.time()
@@ -118,6 +125,14 @@ class MemoryTrace:
             # Nếu chênh lệch quá lớn (Phase 17B True False Memories)
             if abs(mood_diff) > 0.6 and t != MemoryType.CORE:
                 needs_rewrite = True
+                
+            # [Tính năng 4: False Memory Trigger] Ký ức mờ ảo (0.4-0.6) có nguy cơ rất cao bị ghi đè nhầm
+            is_uncertain = hasattr(self, 'reality_score') and 0.4 <= self.reality_score <= 0.6
+            if is_uncertain and not needs_rewrite:
+                import random
+                if random.random() < 0.3: # Lệch lạc 30% khi ký ức đã mù mờ
+                    needs_rewrite = True
+                    self.reality_score = 0.8 # Một khi bị nhớ nhầm (ngữ nghĩa hóa), người ta sẽ tự thuyết phục mình đó là Hàng Thật!
 
             drift = mood_diff * drift_factor
             self.valence = max(-1.0, min(1.0, self.valence + drift))

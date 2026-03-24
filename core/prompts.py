@@ -41,6 +41,9 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     THỜI GIAN THỰC TẾ: {current_time}
     TRẠNG THÁI ĐỌC SÁCH: {reader_status}
     {mood_modifier}
+    
+    CẢM BIẾN NỘI CẢM (INTEROCEPTION):
+    {ego.get_interoceptive_prompt()}
 
     HỆ SỐ TÂM LÝ & SINH HỌC (SELF-MODEL):
     - Niềm tin cốt lõi: {json.dumps(ego.get_active_beliefs(), ensure_ascii=False)}

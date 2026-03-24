@@ -2,6 +2,7 @@ import time
 import random
 import re
 import threading
+import asyncio
 from datetime import datetime
 from colorama import Fore, Style
 from core.prompts import get_proactive_ping_prompt
@@ -14,31 +15,56 @@ logger = get_logger("autonomous")
 class AutonomousController:
     def __init__(self, engine):
         self.engine = engine
-        self._stop_event = threading.Event()
+        self._stop_event = asyncio.Event()
         self._loop_thread = None
+        self.event_queue = None
+        self._loop = None
     def start(self):
         """Khởi động vòng lặp nền nếu chưa chạy."""
         from core.agent_state import AgentState
         if self.engine.state_machine.state == AgentState.SHUTDOWN or self.engine.state_machine.state == AgentState.IDLE:
-            self._stop_event.clear() # Ensure the event is clear for a new start
+            self._stop_event.clear()
             self.engine.state_machine.transition(AgentState.IDLE)
-            self._loop_thread = threading.Thread(target=self.background_loop, daemon=True)
+            self._loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
             self._loop_thread.start()
-            print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Cognitive Loop started.{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Event-Driven Loop (asyncio) started.{Style.RESET_ALL}")
 
-    def background_loop(self):
-        time.sleep(10)
+    def _run_async_loop(self):
+        asyncio.run(self.background_loop_async())
+
+    def trigger_event(self, event_type, data=None):
+        """Đẩy sự kiện vào giao thức Event-Driven."""
+        if self.event_queue is not None and self._loop is not None:
+            self._loop.call_soon_threadsafe(self.event_queue.put_nowait, {"type": event_type, "data": data})
+
+    async def background_loop_async(self):
+        self._loop = asyncio.get_running_loop()
+        self.event_queue = asyncio.Queue()
+        await asyncio.sleep(10)
         from core.agent_state import AgentState
         
-        while not self._stop_event.is_set(): # Changed condition to use _stop_event
-            time.sleep(30)
+        last_tick_time = time.time()
+        
+        while not self._stop_event.is_set():
+            try:
+                # Event-Driven Architecture: Đợi sự kiện hoặc timeout sau 30s
+                event = await asyncio.wait_for(self.event_queue.get(), timeout=30.0)
+                if event and event.get("type") == "SHUTDOWN":
+                    break
+            except asyncio.TimeoutError:
+                pass
+
+            current_time = time.time()
+            dt = current_time - last_tick_time
+            last_tick_time = current_time
+
             if self.engine.state_machine.state in [AgentState.THINKING, AgentState.READING]:
                 continue
                 
-            # Module 1: cognitive_tick chạy mỗi vòng loop (~30s)
-            # Sinh học tiến hóa dù không có tương tác
+            # Module 1: cognitive_tick chạy mỗi khi có event hoặc sau 30s timeout
+            # Sử dụng delta_time (dt) thực tế
             if hasattr(self.engine, 'cognitive_tick'):
-                self.engine.cognitive_tick(dt=30.0)
+                await asyncio.to_thread(self.engine.cognitive_tick, dt)
 
             idle_time = time.time() - self.engine.last_interaction_time
 
@@ -183,7 +209,7 @@ class AutonomousController:
                 elif dominant == "hunger" and val > 0.8:
                     # Năng lượng thấp -> Aura lờ đờ, giảm hoạt động nền
                     print(f"{Fore.LIGHTYELLOW_EX}🔋 [LOW ENERGY]: Aura đang lờ đờ vì đói năng lượng...{Style.RESET_ALL}")
-                    time.sleep(60) # Tạm dừng loop lâu hơn để "tiết kiệm"
+                    await asyncio.sleep(60) # Tạm dừng loop lâu hơn để "tiết kiệm"
 
             # Reset logic cho Separation Anxiety để không lặp lại
             if idle_time > ANXIETY_THRESHOLD:
@@ -241,7 +267,13 @@ class AutonomousController:
             print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
 
     def stop(self):
-        self._stop_event.set()
+        if hasattr(self, '_loop') and self._loop:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+            self.trigger_event("SHUTDOWN")
+        else:
+            # Fallback nếu event loop chưa chạy
+            try: self._stop_event.set() 
+            except Exception: pass
         if self._loop_thread and self._loop_thread.is_alive():
              self._loop_thread.join(timeout=5.0)
         print(f"{Fore.YELLOW}Autonomous loop stopped.{Style.RESET_ALL}")

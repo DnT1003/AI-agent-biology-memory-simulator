@@ -46,7 +46,7 @@ class SLMCore:
         self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
         self.model = None
         self.is_ready = False
-        self.use_gpu_service = not TORCH_AVAILABLE
+        self.use_gpu_service = True
         self.tokenizer = None
 
         if Config.SLM_ENABLED and AuraFlashModel and TORCH_AVAILABLE:
@@ -85,7 +85,10 @@ class SLMCore:
                 except TypeError:
                     state = torch.load(self.model_path, map_location=self.device)
 
-                self.model.load_state_dict(state)
+                try:
+                    self.model.load_state_dict(state, strict=False)
+                except Exception as ex:
+                    logging.warning(f"Could not load state dict cleanly: {ex}")
 
             dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
             self.model.to(device=self.device, dtype=dtype)

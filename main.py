@@ -72,7 +72,7 @@ if __name__ == "__main__":
     ai.autonomous.start()
 
     async def interactive_loop():
-        use_prompt_toolkit = HAS_PROMPT_TOOLKIT
+        use_prompt_toolkit = False
         try:
             if use_prompt_toolkit:
                 session = PromptSession(f"\n{Fore.WHITE}👤 Bạn: {Style.RESET_ALL}")
