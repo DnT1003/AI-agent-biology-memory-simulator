@@ -15,19 +15,19 @@ logger = get_logger("autonomous")
 class AutonomousController:
     def __init__(self, engine):
         self.engine = engine
-        self._stop_event = asyncio.Event()
+        self._stop_event = threading.Event()  # Use threading.Event for cross-thread safety
         self._loop_thread = None
         self.event_queue = None
         self._loop = None
     def start(self):
         """Khởi động vòng lặp nền nếu chưa chạy."""
-        from core.agent_state import AgentState
-        if self.engine.state_machine.state == AgentState.SHUTDOWN or self.engine.state_machine.state == AgentState.IDLE:
-            self._stop_event.clear()
-            self.engine.state_machine.transition(AgentState.IDLE)
-            self._loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
-            self._loop_thread.start()
-            print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Event-Driven Loop (asyncio) started.{Style.RESET_ALL}")
+        if self._loop_thread is not None and self._loop_thread.is_alive():
+            print(f"{Fore.YELLOW}[SYSTEM]: Background loop already running.{Style.RESET_ALL}")
+            return
+        self._stop_event.clear()
+        self._loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
+        self._loop_thread.start()
+        print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Event-Driven Loop (asyncio) started.{Style.RESET_ALL}")
 
     def _run_async_loop(self):
         asyncio.run(self.background_loop_async())
@@ -40,19 +40,41 @@ class AutonomousController:
     async def background_loop_async(self):
         self._loop = asyncio.get_running_loop()
         self.event_queue = asyncio.Queue()
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
         from core.agent_state import AgentState
         
         last_tick_time = time.time()
         
         while not self._stop_event.is_set():
             try:
-                # Event-Driven Architecture: Đợi sự kiện hoặc timeout sau 30s
-                event = await asyncio.wait_for(self.event_queue.get(), timeout=30.0)
+                # Event-Driven Architecture: Đợi sự kiện hoặc timeout
+                event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)
                 if event and event.get("type") == "SHUTDOWN":
                     break
             except asyncio.TimeoutError:
                 pass
+
+            # Polling Web Chat - use absolute path to avoid cwd issues in thread
+            try:
+                import os, json
+                # Always resolve to absolute path based on the project root
+                _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+                _out_dir = os.path.join(_project_root, Config.OUTPUT_DIR)
+                chat_in_path = os.path.join(_out_dir, "web_chat_in.txt")
+                if os.path.exists(chat_in_path) and os.path.getsize(chat_in_path) > 0:
+                    with open(chat_in_path, "r", encoding="utf-8") as f:
+                        lines = f.read().strip().split('\n')
+                    open(chat_in_path, "w").close()
+                    for line in lines:
+                        if not line.strip(): continue
+                        msg = json.loads(line).get("content", "")
+                        if msg:
+                            print(f"\n{Fore.WHITE}👤 Web User:{Style.RESET_ALL} {msg}")
+                            self.engine.last_interaction_time = time.time()
+                            self.engine.interaction.is_interrupted = False
+                            await asyncio.to_thread(self.engine.interaction.interaction_loop, msg)
+            except Exception as e:
+                print(f"{Fore.RED}[AUTONOMOUS LOOP ERROR]: {e}{Style.RESET_ALL}")
 
             current_time = time.time()
             dt = current_time - last_tick_time

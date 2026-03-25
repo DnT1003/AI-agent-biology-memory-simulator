@@ -74,9 +74,9 @@ class PerceptionController:
         try:
             with os.scandir(path) as it:
                 for entry in it:
-                    if entry.is_file(): total += entry.stat().size
+                    if entry.is_file(): total += entry.stat().st_size
                     elif entry.is_dir(): total += self._get_dir_size(entry.path)
         except Exception as e:
             from core.logger import get_logger
-            get_logger("perception").warning(f"Lỗi phân tích cảm xúc cục bộ: {e}")
+            get_logger("perception").warning(f"Lỗi đọc kích thước thư mục: {e}")
         return total

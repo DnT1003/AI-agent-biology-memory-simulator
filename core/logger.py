@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from colorama impopprt Fore, Style
+from colorama import Fore, Style
 from logging.handlers import RotatingFileHandler
 
 def get_logger(name="aura"):

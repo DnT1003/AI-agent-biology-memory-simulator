@@ -552,6 +552,10 @@ class SelfModel:
         elif self.integrity > 0.4:
             self.is_identity_crisis = False
 
+        self.save_state(path)
+
+    def save_state(self, path=None):
+        """Lưu trạng thái nội tại ra file."""
         from core.utils import atomic_write_json
         from config import Config
         path = path or Config.EGO_STATE_FILE

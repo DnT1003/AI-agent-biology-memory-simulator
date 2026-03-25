@@ -207,7 +207,7 @@ class InteractionController:
                     "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
                     "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
                 }
-                result_json, entropy = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, aura_state=aura_state)
+                result_json, entropy = self.engine.llm.generate_json(prompt_in_use, temperature=0.7)
                 result["entropy"] = entropy
                 if entropy > 0.5:
                     print(f"{Fore.YELLOW}🌀 [ENGINE ENTROPY]: Chỉ số hỗn loạn cao ({entropy:.4f}) - Aura đang cảm thấy bối rối/do dự.{Style.RESET_ALL}")
@@ -318,7 +318,8 @@ Nếu CÓ, trả về JSON array (tối đa 2 items):
 Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm thông thường, chỉ thị kỹ thuật,...), trả về mảng rỗng: []"""
             try:
                 import json
-                res = self.engine.llm.generate_text(prompt, temperature=0.1).strip()
+                res, _ = self.engine.llm.generate_text(prompt, temperature=0.1)
+                res = res.strip()
                 if res.startswith("```json"): res = res[7:]
                 if res.startswith("```"): res = res[3:]
                 if res.endswith("```"): res = res[:-3]
@@ -401,6 +402,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                     self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
         
         # [Phase 23] Impulse Control & Spontaneity
+        mood_modifier_lines = []
         curiosity = getattr(self.engine.ego, 'curiosity', 0.0)
         if curiosity > 0.85 and random.random() < 0.4:
             print(f"{Fore.LIGHTMAGENTA_EX}⚡ [IMPULSE CONTROL]: Sự tò mò vượt ngưỡng! Aura đang có xung lực muốn tự hành động thay vì trả lời.{Style.RESET_ALL}")
@@ -419,6 +421,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             )
             
         # [Phase 5] Emotional Anchoring (Mỏ neo cảm xúc)
+        valences = [getattr(m, 'valence', 0.0) for m in recalled]
         dominant_recalled_valence = sum(valences) / len(valences) if valences else 0.0
         current_mood = getattr(self.engine.ego, 'mood', 0.0)
         
@@ -434,7 +437,8 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
              mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT MỆT MỎI (Fatigue > 0.7). Chỉ được dùng CÂU CỰC KỲ NGẮN, lười biếng, thiếu mạch lạc. Không được phân tích logic cầu kỳ. Dùng cảm tính để trả lời.")
              
         # Tính toán Arousal dựa trên input hiện tại thay vì self.engine.ego.arousal (SelfModel ko lưu arousal)
-        user_arousal_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", self.engine.llm.generate_text(f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", temperature=0.1).strip() + "0")[0])
+        arousal_text, _ = self.engine.llm.generate_text(f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", temperature=0.1)
+        user_arousal_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", arousal_text.strip() + "0")[0])
         user_arousal_score = max(0.0, min(1.0, user_arousal_score))
         
         if user_arousal_score > 0.6 or abs(self.engine.ego.mood) > 0.6 or self.engine.ego.stress > 0.6:
@@ -452,6 +456,9 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         # ==========================================================
         # Phase 7 Idea 10: Tiến hóa Ngôn ngữ & Bắt chước Giọng điệu (Lexical Evolution)
         # ==========================================================
+        if not hasattr(self.engine.ego, 'vocabulary'):
+            self.engine.ego.vocabulary = []
+            
         words = re.findall(r'\b\w{3,}\b', user_input.lower())
         for w in words:
             # Loại bỏ các stop words cơ bản của tiếng Việt (có thể mở rộng thêm)
@@ -494,7 +501,19 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         # --- GỌI LLM SINH LỜI NÓI & THỰC THI CHUỖI NHẬN THỨC ---
         final_result = self.perceive_and_respond(user_input, recalled, mood_modifier)
         if final_result and final_result.get("response"):
-            print(f"\n{Fore.GREEN}🤖 Aura:{Style.RESET_ALL} {final_result['response']}\n")
+            reply_text = final_result['response']
+            print(f"\n{Fore.GREEN}🤖 Aura:{Style.RESET_ALL} {reply_text}\n")
+            
+            # Write to web_chat_out.txt
+            try:
+                import os, json
+                from config import Config
+                out_path = os.path.join(Config.OUTPUT_DIR, "web_chat_out.txt")
+                with open(out_path, "a", encoding="utf-8") as f:
+                    json.dump({"role": "aura", "content": reply_text}, f, ensure_ascii=False)
+                    f.write("\n")
+            except Exception as e:
+                print(f"File write error: {e}")
         
         self.engine.memory_ops.save_short_term_memory()
         # Phase 7 Idea 1: Áp dụng nhịp sinh học sau mỗi interaction
