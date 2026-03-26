@@ -59,3 +59,13 @@ class Config:
     SLM_N_EXPERTS = 0    # Đã tháo dỡ MoE
     SLM_TOP_K = 0
 
+    # ── SECURITY: Dynamic Skills Self-Evolution ──────────────────────────────
+    # False = tắt hoàn toàn hot-reload code từ LLM (an toàn nhất)
+    # True  = bật, nhưng code LLM viết chạy trong subprocess sandbox có AST scan
+    ALLOW_DYNAMIC_SKILLS: bool = os.getenv("AURA_ALLOW_DYNAMIC_SKILLS", "false").lower() == "true"
+
+    # ── STABILITY: ChromaDB mode (chỉ 1 trong 2, không được dùng đồng thời) ──
+    # "rest"     = dùng REST server (K8s, Docker) — USE_CHROMA_SERVER phải True
+    # "embedded" = dùng embedded PersistentClient (local dev, non-K8s)
+    # Nếu để trống, tự suy ra từ USE_CHROMA_SERVER và Python version
+    CHROMA_MODE: str = os.getenv("CHROMA_MODE", "")  # "" = auto-detect

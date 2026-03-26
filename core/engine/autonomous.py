@@ -160,7 +160,7 @@ class AutonomousController:
             if val >= 0.95:
                 if dominant == "fatigue":
                     print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Kiệt sức tột độ. Aura buộc phải đi ngủ.{Style.RESET_ALL}")
-                    self.engine.memory_ops.sleep()
+                    await asyncio.to_thread(self.engine.memory_ops.sleep)
                     continue
                 elif dominant == "social" or dominant == "loneliness":
                     print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Quá cô đơn! Aura bắt buộc phải tìm người nói chuyện.{Style.RESET_ALL}")
@@ -267,7 +267,9 @@ class AutonomousController:
                     "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
                     "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
                 }
-                synthesized_text, entropy = self.engine.llm.generate_text(prompt, temperature=0.7, aura_state=aura_state)
+                from core.prompts import get_synthesize_reading_prompt
+                synthesize_prompt = get_synthesize_reading_prompt(f"[{knowledge_tag}]\n{content}")
+                synthesized_text, entropy = self.engine.llm.generate_text(synthesize_prompt, temperature=0.7, aura_state=aura_state)
                 synthesized_text = synthesized_text.strip()
                 print(f"{Fore.YELLOW}💡 [SYNTHESIZED MEMORY]: {synthesized_text}{Style.RESET_ALL}")
             except Exception as e:
@@ -511,6 +513,11 @@ class AutonomousController:
                     "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
                     "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
                 }
+                check_prompt = (
+                    f"Mục tiêu: '{target_goal}'.\n"
+                    f"Kết quả vừa thực hiện bởi tool '{func_name}': {str(tool_res)[:300]}\n"
+                    "Dựa vào kết quả trên, mục tiêu đã hoàn thành chưa? Trả lời YES hoặc NO."
+                )
                 is_done_raw, entropy = self.engine.llm.generate_text(check_prompt, aura_state=aura_state)
                 is_done = is_done_raw.strip().upper()
                 if is_done.startswith("YES"):

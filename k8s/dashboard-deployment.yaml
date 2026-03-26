@@ -1,0 +1,70 @@
+# ================================================================
+# DASHBOARD DEPLOYMENT + SERVICE
+# Nginx serving static web UI
+# Shared brain-pvc de doc/ghi web_chat_in.txt, web_chat_out.txt
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-dashboard
+  namespace: aura
+  labels:
+    app: aura-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-dashboard
+  template:
+    metadata:
+      labels:
+        app: aura-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: aura/dashboard:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 80
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            # Chia se outputs/ voi Brain de doc web_chat_out.txt
+            - name: brain-storage
+              mountPath: /app/outputs
+      volumes:
+        - name: brain-storage
+          persistentVolumeClaim:
+            claimName: brain-pvc   # ReadWriteMany via hostPath
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aura-dashboard-svc
+  namespace: aura
+spec:
+  selector:
+    app: aura-dashboard
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP

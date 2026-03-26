@@ -129,6 +129,7 @@ Không dùng markdown, viết liền mạch.
             model.train()
             print(f"   >>> EVAL step {step}: mean loss {losses.mean():.4f}")
 
+        autocast_enabled = (device_type == "cuda")
         model.train()
         for step in range(max_iters):
             if step % eval_interval == 0:

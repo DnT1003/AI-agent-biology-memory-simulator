@@ -15,16 +15,41 @@ class VectorStore:
     def __init__(self):
         from config import Config
         import sys
-        
-        is_py314 = sys.version_info.major == 3 and sys.version_info.minor == 14
+        from colorama import Fore, Style
 
-        if Config.USE_CHROMA_SERVER or is_py314:
-            if is_py314:
-                print(f"{Fore.YELLOW}🐍 [VECTOR STORE]: Python 3.14 detected. Switching to ChromaRestClient (REST Mode) to avoid Pydantic v1 issues.{Style.RESET_ALL}")
-            
-            print(f"{Fore.CYAN}🌐 [VECTOR STORE]: Connecting to Chroma Server at {Config.CHROMA_SERVER_HOST}:{Config.CHROMA_SERVER_PORT}...{Style.RESET_ALL}")
-            self.client = ChromaRestClient(host=Config.CHROMA_SERVER_HOST, port=Config.CHROMA_SERVER_PORT)
+        # ── Risk #3 Fix: Resolve CHROMA_MODE ONCE, enforce single code path ──
+        # Precedence: explicit CHROMA_MODE env > USE_CHROMA_SERVER > Python version
+        chroma_mode = Config.CHROMA_MODE.strip().lower()
+        if not chroma_mode:
+            is_py314 = sys.version_info.major == 3 and sys.version_info.minor >= 14
+            chroma_mode = "rest" if (Config.USE_CHROMA_SERVER or is_py314) else "embedded"
+
+        if chroma_mode not in ("rest", "embedded"):
+            raise ValueError(
+                f"[VECTOR STORE] CHROMA_MODE='{chroma_mode}' không hợp lệ. "
+                "Chỉ chấp nhận 'rest' hoặc 'embedded'."
+            )
+
+        # Guard: nếu USE_CHROMA_SERVER mâu thuẫn với mode, cảnh báo rõ ràng
+        if chroma_mode == "embedded" and Config.USE_CHROMA_SERVER:
+            print(
+                f"{Fore.YELLOW}⚠️ [VECTOR STORE]: CHROMA_MODE=embedded nhưng "
+                f"USE_CHROMA_SERVER=True. Ưu tiên CHROMA_MODE → dùng embedded.{Style.RESET_ALL}"
+            )
+        if chroma_mode == "rest" and not Config.USE_CHROMA_SERVER:
+            print(
+                f"{Fore.YELLOW}⚠️ [VECTOR STORE]: CHROMA_MODE=rest nhưng "
+                f"USE_CHROMA_SERVER=False. Ưu tiên CHROMA_MODE → dùng REST.{Style.RESET_ALL}"
+            )
+
+        if chroma_mode == "rest":
+            print(f"{Fore.CYAN}🌐 [VECTOR STORE]: Mode=REST → {Config.CHROMA_SERVER_HOST}:{Config.CHROMA_SERVER_PORT}{Style.RESET_ALL}")
+            self.client = ChromaRestClient(
+                host=Config.CHROMA_SERVER_HOST,
+                port=Config.CHROMA_SERVER_PORT
+            )
         else:
+            print(f"{Fore.CYAN}📁 [VECTOR STORE]: Mode=EMBEDDED → {Config.CHROMA_DB_PATH}{Style.RESET_ALL}")
             try:
                 import chromadb
                 db_path = getattr(Config, 'CHROMA_DB_PATH', "outputs/chroma_db")
@@ -32,7 +57,7 @@ class VectorStore:
                     os.makedirs(db_path)
                 self.client = chromadb.PersistentClient(path=db_path)
             except ImportError:
-                print(f"{Fore.RED}❌ [VECTOR STORE]: chromadb not installed. Please use USE_CHROMA_SERVER=True or install it.{Style.RESET_ALL}")
+                print(f"{Fore.RED}❌ [VECTOR STORE]: chromadb not installed. Hãy cài hoặc dùng CHROMA_MODE=rest.{Style.RESET_ALL}")
                 raise
 
         try:

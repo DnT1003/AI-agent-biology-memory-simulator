@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: aura-gpu-deploy
-  namespace: default
+  namespace: aura
   labels:
     app: aura-gpu-svc
 spec:
@@ -43,13 +43,21 @@ spec:
               port: 8001
             initialDelaySeconds: 45
             periodSeconds: 15
+          volumeMounts:
+            # SLM weights: chia se voi brain-pod
+            - name: slm-storage
+              mountPath: /app/slm
+      volumes:
+        - name: slm-storage
+          persistentVolumeClaim:
+            claimName: gpu-pvc
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: aura-gpu-svc
-  namespace: default  # FIX: them namespace
+  namespace: aura
 spec:
   selector:
     app: aura-gpu-svc

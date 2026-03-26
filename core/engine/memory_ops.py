@@ -771,18 +771,44 @@ class MemoryOperationsController:
                 return
 
             print(f"{Fore.CYAN}   📝 Phân tích nội tại: {data.get('analysis')}{Style.RESET_ALL}")
-            
+
+            # ── Risk #4 Fix: Snapshot memories TRƯỚC KHI mutate ────────────────
+            # Lưu bản sao JSON vào outputs/memory_versions/belief_<timestamp>.json
+            # Có thể khôi phục bằng cách đọc file này nếu LLM hallucinate kết quả xấu.
+            try:
+                import datetime
+                version_dir = os.path.join(
+                    getattr(Config, 'OUTPUT_DIR', 'outputs'), "memory_versions"
+                )
+                os.makedirs(version_dir, exist_ok=True)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                version_file = os.path.join(version_dir, f"belief_{ts}.json")
+                snapshot = [
+                    {"id": b.id, "content": b.content, "type": str(b.type),
+                     "valence": b.valence, "importance": b.importance}
+                    for b in beliefs
+                ]
+                with open(version_file, "w", encoding="utf-8") as vf:
+                    import json as _json
+                    _json.dump({"snapshot_at": ts, "memories": snapshot,
+                                "reason": data.get("analysis", "")}, vf,
+                               ensure_ascii=False, indent=2)
+                print(f"{Fore.LIGHTBLACK_EX}   💾 [MEM VERSION]: Đã lưu bản sao {len(beliefs)} ký ức vào {version_file}{Style.RESET_ALL}")
+            except Exception as ve:
+                print(f"{Fore.YELLOW}⚠️ [MEM VERSION]: Không lưu được snapshot: {ve}. Vẫn tiếp tục.{Style.RESET_ALL}")
+            # ────────────────────────────────────────────────────────────────────
+
             ids_to_del = set()
             for res in resolutions:
                 res_type = res.get("type")
                 indices = res.get("indices", [])
-                
+
                 if res_type == "DELETE":
                     for idx in indices:
                         if 0 <= idx < len(beliefs):
                             ids_to_del.add(beliefs[idx].id)
                     print(f"{Fore.YELLOW}   🗑️ [REMOVED CONFLICT]: {res.get('reason')}{Style.RESET_ALL}")
-                    
+
                 elif res_type == "MERGE":
                     new_txt = res.get("new_content")
                     if new_txt:
@@ -797,7 +823,7 @@ class MemoryOperationsController:
                             if 0 <= idx < len(beliefs):
                                 ids_to_del.add(beliefs[idx].id)
                         print(f"{Fore.GREEN}   🧬 [MERGED BELIEF]: {new_txt}{Style.RESET_ALL}")
-            
+
             # Thực thi xóa
             for m_id in ids_to_del:
                 self.engine.memory.store.remove(m_id)

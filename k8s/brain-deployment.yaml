@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: aura-brain
-  namespace: default
+  namespace: aura
   labels:
     app: aura-brain
 spec:
@@ -35,32 +35,34 @@ spec:
           imagePullPolicy: Never
           tty: true
           stdin: true
+          # Nap tat ca bien moi truong chung tu ConfigMap
+          envFrom:
+            - configMapRef:
+                name: aura-config
           env:
+            # Secret rieng (API keys)
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
                   name: aura-secrets
                   key: API_KEY
-            - name: CHROMA_SERVER_HOST
-              value: aura-chromadb-svc
-            # FIX: Them CHROMA_SERVER_PORT de tuong minh
-            - name: CHROMA_SERVER_PORT
-              value: "8000"
-            - name: GPU_SERVICE_URL
-              value: http://aura-gpu-svc:8001
-            - name: AURA_OUTPUT_DIR
-              value: /app/outputs
           resources:
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: "2Gi"
+              cpu: "2000m"
             requests:
-              memory: "256Mi"
+              memory: "512Mi"
               cpu: "500m"
           volumeMounts:
             - name: brain-storage
               mountPath: /app/outputs
+            # SLM weights chia se voi aura-gpu
+            - name: slm-storage
+              mountPath: /app/core/engine/nanogpt
       volumes:
         - name: brain-storage
           persistentVolumeClaim:
             claimName: brain-pvc
+        - name: slm-storage
+          persistentVolumeClaim:
+            claimName: gpu-pvc

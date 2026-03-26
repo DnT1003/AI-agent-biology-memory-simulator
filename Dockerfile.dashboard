@@ -1,0 +1,21 @@
+# Dockerfile cho Aura Web Dashboard
+FROM nginx:1.27-alpine
+
+# Xoa trang mac dinh cua nginx
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy dashboard static files
+COPY web_dashboard/ /usr/share/nginx/html/
+
+# Copy nginx config tuy chinh
+COPY nginx/dashboard.conf /etc/nginx/conf.d/default.conf
+
+# Tao thu muc outputs de lam proxy bridge (neu can)
+RUN mkdir -p /app/outputs
+
+EXPOSE 80
+
+HEALTHCHECK --interval=10s --timeout=3s \
+  CMD wget -qO- http://localhost/health || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

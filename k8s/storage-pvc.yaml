@@ -1,24 +1,128 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: chroma-pvc
-  namespace: default
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
+# ================================================================
+# STORAGE PVCs - SUA DUNG HOSTPATH DE TRANH YEU CAU RWX
+# Thich hop cho 1-node deployment (Docker Desktop / minikube)
+# ================================================================
 
+# --- 1. brain-pvc (RWX via hostPath) ---
+# Chia se giua aura-brain va aura-dashboard
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: brain-pv
+  namespace: aura
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany   # OK voi hostPath tren 1 node
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/outputs   # Docker Desktop (WSL2): C:\aura\outputs → /mnt/c/aura/outputs
+    type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: brain-pvc
-  namespace: default
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# --- 2. chroma-pvc (RWO) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: chroma-pv
+  namespace: aura
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/chroma_db
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chroma-pvc
+  namespace: aura
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: manual
   resources:
     requests:
-      storage: 2Gi
+      storage: 10Gi
+
+---
+# --- 3. ollama-pvc (model weights - lon nhat) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-pv
+  namespace: aura
+spec:
+  capacity:
+    storage: 30Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/ollama
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 30Gi
+
+---
+# --- 4. gpu-pvc (SLM weights - chia se Brain va GPU) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gpu-pv
+  namespace: aura
+spec:
+  capacity:
+    storage: 3Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/slm
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gpu-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 3Gi

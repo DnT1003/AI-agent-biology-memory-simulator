@@ -189,7 +189,7 @@ class LLM:
             return (data[0] if len(data) > 0 else {}), 0.0
         return data, 0.0
 
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> tuple:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None, aura_state: dict = None) -> tuple:
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
             return self._generate_json_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], force_local=force_local, image_path=image_path)
@@ -273,7 +273,7 @@ class LLM:
         )
         return resp.text.strip(), 0.0
 
-    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None, image_path: str = None) -> tuple:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None, image_path: str = None, aura_state: dict = None) -> tuple:
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
             return self._generate_text_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], image_path=image_path)
@@ -281,7 +281,7 @@ class LLM:
             logger.error(f"Lỗi LLM Text (đã retry 3 lần thất bại): {e}")
             return self.local_llm.generate_text(prompt, temperature)
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None):
+    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None, aura_state: dict = None):
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         if self._should_use_local(prompt) and not model_override:
             yield from self.local_llm.generate_text_stream(prompt, p["temperature"], top_p=p["top_p"])
