@@ -167,6 +167,8 @@ class MemoryManager:
     def add_memory(self, trace: MemoryTrace):
         with self.lock:
             vector = self.embedder.encode(trace.content)
+            if isinstance(vector, list):
+                vector = vector[0] if vector else np.array([])
             self.store.add(trace.id, vector, trace)
 
     def update_memory(self, trace: MemoryTrace):
@@ -178,6 +180,8 @@ class MemoryManager:
         """Tim ky uc theo vector similarity. min_strength duoc day xuong DB layer (Phase 13)."""
         with self.lock:
             query_vec = self.embedder.encode(query)
+            if isinstance(query_vec, list):
+                query_vec = query_vec[0] if query_vec else np.array([])
             return self.store.search(query_vec, top_k=top_k, min_strength=min_strength)
 
     def chronological_recall(self, start_time: float, end_time: float, limit: int = 10) -> List[MemoryTrace]:

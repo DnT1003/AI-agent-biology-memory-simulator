@@ -37,12 +37,12 @@ graph TD
     end
 
     subgraph LocalEngine
-        Ollama[Custom Ollama Engine]
+        Gemma[Custom Gemma Engine]
         NanoGPT[NanoGPT Pocket AI]
     end
 
     SLM -->|Queries| LLM_API
-    SLM -->|Queries| Ollama
+    SLM -->|Queries| Gemma
     SLM -->|Queries| NanoGPT
     Mem -->|Read and Write| VDB
     IO -->|Ticks| CE
@@ -71,13 +71,13 @@ Nơi chứa các **Mô hình con (Sub-models)** hoạt động độc lập và 
 
 ### 🔌 `components/` (External I/O & Drivers)
 Nơi giao tiếp với thế giới hệ thống bên ngoài hoặc Cloud.
-- **`llm.py`**, **`embedder.py`**: Wrapper gọi API lên các mô hình Đám mây (như Gemini) hoặc Ollama nội bộ.
+- **`llm.py`**, **`embedder.py`**: Wrapper gọi API lên các mô hình Đám mây (như Gemini) hoặc Gemma E4B nội bộ.
 - **`chroma_rest_client.py`**, **`vector_store.py`**: Gọi xuống cơ sở dữ liệu Vector để truy xuất ký ức.
 - **`reader.py`**: Tác vụ đọc tài liệu ngầm (Background Reading) khi AI đang rảnh rỗi (Idle).
 
 ### 🛠️ `Root & Scripts` (Infrastructure)
 - **`config.py`**: Trung tâm điều khiển toàn bộ cấu hình (VRAM alloc, Model Names, Sinh học).
-- **`ollama_source/`**: Phiên bản mã nguồn của Ollama (được tinh chỉnh bằng `#cgo` build constraints để chạy `llama.cpp` cho máy của bạn).
+
 - **`main.py`**: File khởi chạy vòng lặp tương tác chính.
 
 ---

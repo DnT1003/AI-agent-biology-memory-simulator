@@ -331,6 +331,23 @@ class SelfModel:
         if total_weight < 0.01: return 0.0
         return max(-1.0, min(1.0, weighted_sum / total_weight))
 
+    def get_bio_state_dict(self) -> dict:
+        """§4 DRY: Trả về snapshot sinh lý hiện tại dùng cho tất cả LLM calls.
+        
+        Thay thế 7+ lần copy-paste khối:
+            aura_state = {
+                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
+                "stress":   float(getattr(self.engine.ego, 'stress', 0.1)),
+                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
+            }
+        bằng một lần gọi duy nhất: ego.get_bio_state_dict()
+        """
+        return {
+            "dopamine":  float(getattr(self, 'dopamine_level', 0.5)),
+            "stress":    float(getattr(self, 'stress', 0.1)),
+            "curiosity": float(getattr(self, 'curiosity', 0.5)),
+        }
+
     def get_drive_status(self) -> dict:
         """[Phase 22] Trả về trạng thái các xung lực (Drives) hiện tại."""
         drives = {
@@ -340,7 +357,7 @@ class SelfModel:
             "hunger": 1.0 - self.energy, # Hunger nghịch đảo với Energy
             "loneliness": self.social_need
         }
-        dominant = max(drives, key=drives.get)
+        dominant = max(drives, key=lambda k: drives[k])
         return {
             "drives": drives,
             "dominant": dominant,
@@ -585,7 +602,8 @@ class SelfModel:
                 "resilience": getattr(self, 'resilience', 0.0),
                 "sleep_debt": getattr(self, 'sleep_debt', 0.0),
                 "calibrated_overrides": self.calibrated_overrides,
-                "actionable_lessons": self.actionable_lessons
+                "actionable_lessons": self.actionable_lessons,
+                "sensitivities": getattr(self.bio_controller, 'sensitivities', {})
             }
         
         atomic_write_json(path, state)
@@ -604,6 +622,8 @@ class SelfModel:
             for k, v in state.items():
                 if hasattr(self, k):
                     setattr(self, k, v)
+            if "sensitivities" in state and hasattr(self, 'bio_controller'):
+                self.bio_controller.sensitivities = state["sensitivities"]
             
             # [TIME-SKIP HEALING]: Phục hồi sinh lực dựa trên thời gian offline (như đang ngủ)
             try:

@@ -12,9 +12,9 @@ data:
   # GPU Service (NanoGPT SLM)
   GPU_SERVICE_URL: "http://aura-gpu-svc:8001"
 
-  # Ollama local LLM (phi3:mini)
-  OLLAMA_URL: "http://aura-ollama-svc:11434/api"
-  LOCAL_MODEL_NAME: "phi3:mini"
+  # Local LLM — Gemma 4 E4B (Unsloth, 4-bit)
+  # Model được mount vào container qua PVC; path trong container là /app/models/Gemma4_E4B
+  GEMMA_MODEL_PATH: "/app/models/Gemma4_E4B"
 
   # Output dir
   AURA_OUTPUT_DIR: "/app/outputs"

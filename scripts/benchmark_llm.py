@@ -36,7 +36,7 @@ def run_benchmark():
         print(f"Running [{test['category']}]...")
         start = time.time()
         try:
-            res = llm.generate_json(test['prompt'])
+            res, _ = llm.generate_json(test['prompt'])
             elapsed = time.time() - start
             passed = test['check'](res)
             results.append({"category": test['category'], "passed": passed, "time": elapsed})

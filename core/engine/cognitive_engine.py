@@ -75,14 +75,23 @@ class CognitiveEngine:
 
         self.memory_ops.load_short_term_memory()
 
-    def cognitive_tick(self, dt: float = 30.0):
+    def cognitive_tick(self, dt: float = 30.0, cancel_event=None):
         """
         Module 1: Vòng tick sinh học trung tâm — chạy mỗi dt giây.
+        
+        §5.4 FIX: Thêm cancel_event (threading.Event) để thread có thể thoát sớm
+        khi asyncio.wait_for() timeout cancel coroutine. Tránh lock bị giữ mãi mãi.
         """
+        def _is_cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
         try:
+            if _is_cancelled(): return
+
             # 1 & 2. Biological decay + Circadian rhythm
             # Using self.ego.lock to ensure atomic biological updates
             with self.ego.lock:
+                if _is_cancelled(): return
                 # Phase 14: Non-linear Metabolism (Exponential Biological Curves)
                 # Fatigue tang nhanh hon khi da met (kieu quadratic resistance)
                 # f_new = f + rate * dt * (1 + f) — cang met cang mat suc nhanh
@@ -123,7 +132,7 @@ class CognitiveEngine:
                         with os.scandir(path) as it:
                             for entry in it:
                                 if entry.is_file():
-                                    total += entry.stat().size
+                                    total += entry.stat().st_size
                                 elif entry.is_dir():
                                     total += get_dir_size(entry.path)
                         return total
@@ -141,9 +150,12 @@ class CognitiveEngine:
 
                 self.ego.apply_circadian_rhythm()
 
+            if _is_cancelled(): return
+
             # 3 & 4. Memory decay + Garbage collection
             # Using self.memory.lock for atomic memory operations
             with self.memory.lock:
+                if _is_cancelled(): return
                 import random
                 mems = self.memory.get_all()
                 if mems:
@@ -155,11 +167,14 @@ class CognitiveEngine:
                 # GC phân trang (đã sửa ở memory.py) được gọi an toàn trong lock này
                 self.memory.enforce_garbage_collection()
 
+            if _is_cancelled(): return
+
             # 5. Dump mind state cho Dashboard
             self._dump_mind_state()
 
         except Exception:
             logger.error("cognitive_tick failed", exc_info=True)
+
 
     def shutdown(self):
         """Dừng toàn bộ engine và lưu trạng thái trước khi thoát."""

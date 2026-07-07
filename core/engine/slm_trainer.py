@@ -1,6 +1,6 @@
 import os
 import sys
-import torch
+import torch # type: ignore
 from config import Config
 from colorama import Fore, Style
 
@@ -8,7 +8,7 @@ from colorama import Fore, Style
 if Config.SLM_DIR not in sys.path:
     sys.path.append(Config.SLM_DIR)
 
-from tokenizer import BPETokenizer
+from tokenizer import BPETokenizer  # type: ignore
 
 class SLMTrainer:
     """Local SLM trainer (legacy path).
@@ -53,7 +53,7 @@ Không dùng markdown, viết liền mạch.
 """.strip()
 
             try:
-                sample = self.engine.llm.generate_text(
+                sample, _ = self.engine.llm.generate_text(
                     prompt, model_override=Config.DEEP_MODEL_NAME
                 )
                 if sample:
@@ -87,7 +87,7 @@ Không dùng markdown, viết liền mạch.
             self.tokenizer.save(vocab_path)
 
         ids = self.tokenizer.encode(text)
-        from model import AuraFlashModel, block_size, batch_size, device, learning_rate, max_iters, eval_interval, eval_iters
+        from model import AuraFlashModel, block_size, batch_size, device, learning_rate, max_iters, eval_interval, eval_iters  # type: ignore
         
         if len(ids) < block_size + 2:
             print("   [ERROR]: Not enough tokens to train.")

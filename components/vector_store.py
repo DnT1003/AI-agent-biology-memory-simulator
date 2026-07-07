@@ -17,6 +17,8 @@ class VectorStore:
         import sys
         from colorama import Fore, Style
 
+        self.client: Any = None
+
         # ── Risk #3 Fix: Resolve CHROMA_MODE ONCE, enforce single code path ──
         # Precedence: explicit CHROMA_MODE env > USE_CHROMA_SERVER > Python version
         chroma_mode = Config.CHROMA_MODE.strip().lower()
@@ -75,7 +77,7 @@ class VectorStore:
     # INTERNAL SERIALIZATION / DESERIALIZATION
     # ─────────────────────────────────────────────────
 
-    def _obj_to_dict(self, obj: Any) -> dict:
+    def _obj_to_dict(self, obj: Any) -> dict[str, Any]:
         """Phase 17B: Metadata Flattening - DB Optimization. Không dùng json.dumps."""
         raw = obj.__dict__.copy()
         meta = {
@@ -97,7 +99,7 @@ class VectorStore:
                 meta[k] = str(v)
         return meta
 
-    def _dict_to_obj(self, metadata_dict: dict) -> Any:
+    def _dict_to_obj(self, metadata_dict: Any) -> Any:
         """Phục hồi Object từ metadata phẳng."""
         from core.memory import MemoryTrace
         try:
@@ -131,7 +133,7 @@ class VectorStore:
             self.collection.upsert(
                 ids=[record_id],
                 embeddings=[vec],
-                metadatas=[self._obj_to_dict(meta)]
+                metadatas=[self._obj_to_dict(meta)]  # type: ignore
             )
         except Exception:
             logger.error(f"Failed to upsert vector {record_id}", exc_info=True)
@@ -142,7 +144,7 @@ class VectorStore:
             self.collection.upsert(
                 ids=record_ids,
                 embeddings=[v.tolist() if isinstance(v, np.ndarray) else list(v) for v in vectors],
-                metadatas=[self._obj_to_dict(m) for m in metas]
+                metadatas=[self._obj_to_dict(m) for m in metas]  # type: ignore
             )
         except Exception:
             logger.error(f"Failed to upsert batch of {len(record_ids)} vectors", exc_info=True)
@@ -151,16 +153,17 @@ class VectorStore:
         try:
             self.collection.update(
                 ids=[record_id],
-                metadatas=[self._obj_to_dict(meta)]
+                metadatas=[self._obj_to_dict(meta)]  # type: ignore
             )
         except Exception:
             logger.error(f"Failed to update_meta for {record_id}", exc_info=True)
 
     def update_vector(self, record_id: str, vector: np.ndarray):
         try:
+            vec = vector.tolist() if isinstance(vector, np.ndarray) else list(vector)
             self.collection.update(
                 ids=[record_id],
-                embeddings=[vector.tolist()]
+                embeddings=[vec]
             )
         except Exception:
             logger.error(f"Failed to update_vector for {record_id}", exc_info=True)
@@ -176,14 +179,16 @@ class VectorStore:
             where={"strength": {"$lt": threshold}},
             include=["metadatas"]
         )
-        if not results or not results.get('ids'):
+        ids = results.get('ids')
+        metadatas = results.get('metadatas')
+        if not ids or not metadatas:
             return 0
             
         ids_to_drop = []
-        for i, meta in enumerate(results['metadatas']):
+        for i, meta in enumerate(metadatas):
             if meta.get("is_flashbulb", 0) == 1: continue
             if meta.get("type") in ["core", "semantic"]: continue
-            ids_to_drop.append(results['ids'][i])
+            ids_to_drop.append(ids[i])
             
         if ids_to_drop:
             self.collection.delete(ids=ids_to_drop)
@@ -218,8 +223,8 @@ class VectorStore:
     # READ OPERATIONS
     # ─────────────────────────────────────────────────
 
-    def get_all_metadata(self, limit: int = None, offset: int = None,
-                         min_strength: float = None) -> List[Any]:
+    def get_all_metadata(self, limit: Optional[int] = None, offset: Optional[int] = None,
+                         min_strength: Optional[float] = None) -> List[Any]:
         """Lấy metadata có hỗ trợ phân trang (Pagination) và pre-filter bằng DB query.
         
         Phase 13: min_strength filter được áp dụng ở tầng DB (dùng lifted metadata)
@@ -237,11 +242,12 @@ class VectorStore:
 
         try:
             results = self.collection.get(**kwargs)
-            if not results or not results.get('metadatas'):
+            metadatas = results.get('metadatas') if results else None
+            if not metadatas:
                 return []
             
             objs = []
-            for meta_dict in results['metadatas']:
+            for meta_dict in metadatas:
                 obj = self._dict_to_obj(meta_dict)
                 if obj is not None:
                     objs.append(obj)
@@ -259,11 +265,12 @@ class VectorStore:
             ]},
             limit=limit
         )
-        if not results or not results['metadatas']:
+        metadatas = results.get('metadatas') if results else None
+        if not metadatas:
             return []
             
         objs = []
-        for meta_dict in results['metadatas']:
+        for meta_dict in metadatas:
             obj = self._dict_to_obj(meta_dict)
             if obj is not None:
                 objs.append(obj)
@@ -272,7 +279,7 @@ class VectorStore:
         return objs
 
     def search(self, query_vec: np.ndarray, top_k: int = 5,
-               min_strength: float = None) -> List[Tuple[float, Any]]:
+               min_strength: Optional[float] = None) -> List[Tuple[float, Any]]:
         """Tìm kiếm vector tương đồng.
         
         Phase 13: Có thể pre-filter bằng 'strength' lifted field trước khi tìm vector,
@@ -283,7 +290,7 @@ class VectorStore:
             return []
 
         vec_to_query = query_vec.tolist() if hasattr(query_vec, 'tolist') else query_vec
-        query_kwargs = {
+        query_kwargs: dict[str, Any] = {
             "query_embeddings": [vec_to_query],
             "n_results": min(top_k, count),
             "include": ["metadatas", "distances"]
@@ -295,14 +302,18 @@ class VectorStore:
             
         results = self.collection.query(**query_kwargs)
         
-        if not results['ids'] or len(results['ids'][0]) == 0:
+        ids = results.get('ids')
+        distances = results.get('distances')
+        metadatas = results.get('metadatas')
+        
+        if not ids or not ids[0] or not distances or not distances[0] or not metadatas or not metadatas[0]:
             return []
 
         formatted_results = []
-        for i in range(len(results['ids'][0])):
-            distance = results['distances'][0][i]
+        for i in range(len(ids[0])):
+            distance = distances[0][i]
             similarity = max(0.0, min(1.0, 1.0 - distance))
-            meta_obj = self._dict_to_obj(results['metadatas'][0][i])
+            meta_obj = self._dict_to_obj(metadatas[0][i])
             if meta_obj is not None:
                 formatted_results.append((similarity, meta_obj))
 

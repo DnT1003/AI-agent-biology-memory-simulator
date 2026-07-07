@@ -2,15 +2,17 @@ from google import genai
 from config import Config
 from colorama import Fore, Style
 import numpy as np
-from typing import List, Union
+from typing import List, Union, Any, cast
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 EMBEDDING_DIM = 1024  # MRL: Giảm chiều Vector xuống 1024 (Phase 17B)
 
 class Embedder:
     def __init__(self):
+        from core.settings_manager import settings_manager
+        self.settings = settings_manager
         print(f"{Fore.CYAN}[WAIT] Connecting to Gemini Embedding ({Config.EMBEDDING_MODEL}, {EMBEDDING_DIM}D MRL)...{Style.RESET_ALL}")
-        self.client = genai.Client(api_key=Config.API_KEY)
+        self.client = None
         self._cache = {} # Bộ đệm Vector
 
     @retry(
@@ -20,12 +22,18 @@ class Embedder:
         reraise=True
     )
     def _call_embedding_api(self, text_list: List[str]) -> List[np.ndarray]:
+        api_key = self.settings.get("gemini_api_key", Config.API_KEY)
+        if not getattr(self, "client", None) or getattr(self, "_current_api_key", "") != api_key:
+            self.client = genai.Client(api_key=api_key)
+            self._current_api_key = api_key
+            
         response = self.client.models.embed_content(
             model=Config.EMBEDDING_MODEL,
-            contents=text_list,
+            contents=cast(Any, text_list),
             config={"output_dimensionality": EMBEDDING_DIM}
         )
-        return [np.array(e.values) for e in response.embeddings]
+        embeddings = response.embeddings or []
+        return [np.array(e.values) for e in embeddings]
 
     def encode(self, text: Union[str, List[str]]) -> Union[np.ndarray, List[np.ndarray]]:
         is_single = isinstance(text, str)

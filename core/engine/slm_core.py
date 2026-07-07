@@ -4,7 +4,7 @@ import importlib.util
 from config import Config
 
 try:
-    import torch
+    import torch  # type: ignore
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -26,8 +26,8 @@ def _load_nanogpt_config():
 
 try:
     if TORCH_AVAILABLE:
-        from model import AuraFlashModel, block_size
-        from tokenizer import BPETokenizer
+        from model import AuraFlashModel, block_size  # type: ignore
+        from tokenizer import BPETokenizer  # type: ignore
     else:
         AuraFlashModel = None
         BPETokenizer = None
@@ -43,7 +43,9 @@ class SLMCore:
 
     def __init__(self):
         self.device = "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu"
-        self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
+        custom_path = os.path.join(Config.SLM_DIR, "aura_moe_700m.pth")
+        default_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
+        self.model_path = custom_path if os.path.exists(custom_path) else default_path
         self.model = None
         self.is_ready = False
         self.use_gpu_service = True
@@ -54,6 +56,8 @@ class SLMCore:
             self.load_model()
 
     def _init_tokenizer(self):
+        if BPETokenizer is None:
+            return
         try:
             vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
             tok = BPETokenizer()
@@ -66,6 +70,8 @@ class SLMCore:
             get_logger("slm_core").error(f"[SLM Tokenizer Init Error]: {e}")
 
     def load_model(self):
+        if AuraFlashModel is None:
+            return
         import logging
 
         try:
@@ -86,6 +92,7 @@ class SLMCore:
                     state = torch.load(self.model_path, map_location=self.device)
 
                 try:
+                    state = {k.replace(".moe.", ".mlp."): v for k, v in state.items()}
                     self.model.load_state_dict(state, strict=False)
                 except Exception as ex:
                     logging.warning(f"Could not load state dict cleanly: {ex}")

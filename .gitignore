@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 .DS_Store
+unsloth_compiled_cache/
+*.exe
+*.dll
+*.node
+**/rg
+
 
 # Environments
 .env

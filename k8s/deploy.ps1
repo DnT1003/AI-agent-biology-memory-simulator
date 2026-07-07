@@ -14,10 +14,9 @@ if (-not (Test-Path $AURA_ROOT)) {
     New-Item -ItemType Directory -Path `
         "$AURA_ROOT\outputs", `
         "$AURA_ROOT\chroma_db", `
-        "$AURA_ROOT\ollama", `
         "$AURA_ROOT\slm" -Force | Out-Null
-    Write-Host "[OK] Tao thu muc: $AURA_ROOT\{outputs, chroma_db, ollama, slm}" -ForegroundColor Green
-    Write-Host "     -> Trong K8s node: /mnt/c/aura/{outputs, chroma_db, ollama, slm}" -ForegroundColor Gray
+    Write-Host "[OK] Tao thu muc: $AURA_ROOT\{outputs, chroma_db, slm}" -ForegroundColor Green
+    Write-Host "     -> Trong K8s node: /mnt/c/aura/{outputs, chroma_db, slm}" -ForegroundColor Gray
 }
 
 # ---- BUOC 1: Build Docker images ----
@@ -63,10 +62,9 @@ kubectl apply -f k8s/chroma-deployment.yaml
 Write-Host "  Cho ChromaDB san sang..."
 kubectl wait --for=condition=available deployment/aura-chromadb -n aura --timeout=120s
 
-# GPU va Ollama song song
+# GPU (Gemma 4 E4B chay trong aura-gpu container hoac aura-brain truc tiep)
 kubectl apply -f k8s/gpu-deployment.yaml
-kubectl apply -f k8s/ollama-deployment.yaml
-Write-Host "  [INFO] Ollama se mat 5-10 phut lan dau (pull model phi3:mini ~2.3GB)"
+Write-Host "  [INFO] Gemma 4 E4B se duoc load tu PVC gemma-pvc khi Brain khoi dong"
 kubectl wait --for=condition=available deployment/aura-gpu-deploy -n aura --timeout=120s
 
 # Brain sau khi Chroma OK (initContainer da xu ly)

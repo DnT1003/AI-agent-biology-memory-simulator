@@ -1,8 +1,8 @@
-﻿import os
+import os
 import json
 import time
 try:
-    import spacy
+    import spacy  #type: ignore
     SPACY_AVAILABLE = True
 except Exception:
     SPACY_AVAILABLE = False
@@ -48,14 +48,10 @@ class WorldGraph:
                 })
         return entities
 
-    def update_from_text(self, text: str, llm):
+    def update_from_text(self, text: str, llm, model_override: str | None = None):
         """
-        Sử dụng LLM (Ưu tiên Local) để trích xuất các quan hệ xã hội phức tạp và thái độ.
-        Phù hợp với hướng tiến hóa: Social Reasoning.
+        Sử dụng LLM để trích xuất các quan hệ xã hội phức tạp và thái độ.
         """
-        # Phase 21 Optimization: Luôn ưu tiên Local LLM cho các tác vụ Extraction cấu trúc
-        # để tiết kiệm API và đảm bảo tính riêng tư dữ liệu xã hội.
-        use_local = True 
         
         prompt = f"""
         Phân tích câu nói sau để trích xuất các thực thể (Tên người, tổ chức) và MỐI QUAN HỆ giữa chúng.
@@ -76,16 +72,16 @@ class WorldGraph:
         """
         
         try:
-            # Ép dùng local nếu có thể (thông qua params giả định hoặc logic trong components/llm.py)
-            res = llm.generate_json(prompt, temperature=0.1, force_local=True)
+            res, _ = llm.generate_json(prompt, temperature=0.1, model_override=model_override)
             items = res if isinstance(res, list) else ([res] if isinstance(res, dict) else [])
             for item in items:
-                self.add_relation(
-                    item.get('source'),
-                    item.get('relation'),
-                    item.get('target'),
-                    valence=item.get('valence', 0.0)
-                )
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get('source') or "")
+                relation = str(item.get('relation') or "")
+                target = str(item.get('target') or "")
+                valence = float(item.get('valence') or 0.0)
+                self.add_relation(source, relation, target, valence)
         except Exception as e:
             logger.error(f"WorldGraph update error: {e}")
 

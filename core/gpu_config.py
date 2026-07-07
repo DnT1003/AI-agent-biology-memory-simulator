@@ -1,10 +1,12 @@
 try:
+    # pyrefly: ignore [missing-import]
     import torch
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
 
 try:
+    # pyrefly: ignore [missing-import]
     import spacy
     SPACY_AVAILABLE = True
 except Exception:

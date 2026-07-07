@@ -1,5 +1,5 @@
 try:
-    import torch
+    import torch  #type: ignore
     from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
     TRANSFORMERS_AVAILABLE = True
 except Exception:
@@ -22,7 +22,7 @@ class LocalPerception:
             try:
                 self.device = "cuda" if torch.cuda.is_available() else "cpu"
                 self.sentiment_analyzer = pipeline(
-                    "sentiment-analysis", 
+                    "text-classification", 
                     model=self.model_name, 
                     device=0 if self.device == "cuda" else -1
                 )
@@ -45,7 +45,7 @@ class LocalPerception:
         - Neutral  -> Valence trung bình (0.0), Arousal thấp (0.2)
         - Positive -> Valence cao (0.7), Arousal trung bình (0.5)
         """
-        if not TRANSFORMERS_AVAILABLE:
+        if not TRANSFORMERS_AVAILABLE or self.sentiment_analyzer is None or getattr(self, "mode", "") == "api":
             import requests
             try:
                 from config import Config
@@ -54,9 +54,6 @@ class LocalPerception:
                     return resp.json()
             except Exception as e:
                 pass
-            return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
-
-        if not self.sentiment_analyzer:
             return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
 
         try:

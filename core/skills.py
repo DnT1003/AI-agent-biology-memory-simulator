@@ -128,7 +128,7 @@ class SkillRegistry:
 
     def load_dynamic_skills(self):
         """Phase 4 Self-Evolution: Nạp các kỹ năng được Aura tự viết trong thư mục dynamic_skills, chạy qua Sandbox."""
-        import os, ast, subprocess, json
+        import os, ast, subprocess, json, sys
         from config import Config
         from colorama import Fore, Style
         
@@ -141,8 +141,46 @@ class SkillRegistry:
 
         print(f"{Fore.CYAN}🔌 [DYNAMISM]: Đang kiểm tra an toàn và nạp kỹ năng tại {dynamic_dir}...{Style.RESET_ALL}")
 
-        dangerous_imports = {'os', 'sys', 'shutil', 'subprocess', 'socket', 'threading', 'multiprocessing'}
-        dangerous_calls = {'exec', 'eval', 'open', '__import__'}
+        # §6.2 SECURITY FIX: Chuyển sang WHITELIST thay vì BLACKLIST.
+        # Chỉ cho phép các module được kiểm duyệt rõ ràng.
+        # Blacklist bị bypass bởi: urllib, pathlib, importlib.import_module("os")
+        ALLOWED_IMPORTS = {
+            'math', 'json', 're', 'datetime', 'collections',
+            'itertools', 'functools', 'string', 'textwrap', 'random',
+            'time', 'decimal', 'fractions', 'statistics', 'hashlib',
+            'base64', 'uuid', 'copy', 'dataclasses', 'enum', 'typing',
+        }
+        # Các hàm/built-in luôn bị cấm dù module nào
+        DANGEROUS_CALLS = {'exec', 'eval', 'open', '__import__', 'compile',
+                           'globals', 'locals', 'vars', 'getattr', 'setattr', 'delattr'}
+
+        def _is_safe_ast(source: str) -> tuple[bool, str]:
+            """Kiểm tra AST với whitelist. Trả về (is_safe, reason)."""
+            try:
+                import ast as _ast
+                tree = _ast.parse(source)
+            except SyntaxError as e:
+                return False, f"Lỗi cú pháp: {e}"
+
+            for node in _ast.walk(tree):
+                # Chặn mọi import không nằm trong whitelist
+                if isinstance(node, _ast.Import):
+                    for alias in node.names:
+                        top = alias.name.split('.')[0]
+                        if top not in ALLOWED_IMPORTS:
+                            return False, f"Module '{alias.name}' không được phép (chỉ cho phép: {sorted(ALLOWED_IMPORTS)})"
+                elif isinstance(node, _ast.ImportFrom):
+                    top = (node.module or "").split('.')[0]
+                    if top not in ALLOWED_IMPORTS:
+                        return False, f"Import từ '{node.module}' không được phép"
+                # Chặn importlib.import_module bypass
+                elif isinstance(node, _ast.Call):
+                    if isinstance(node.func, _ast.Name) and node.func.id in DANGEROUS_CALLS:
+                        return False, f"Lời gọi nguy hiểm: '{node.func.id}'"
+                    if isinstance(node.func, _ast.Attribute):
+                        if node.func.attr in ('import_module', 'exec_module'):
+                            return False, f"Lời gọi importlib bypass bị chặn: '{node.func.attr}'"
+            return True, "OK"
 
         def create_sandbox_executor(f_path, f_name):
             def executor(args_str):
@@ -186,21 +224,15 @@ except Exception as e:
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
                         source = f.read()
-                    tree = ast.parse(source)
                     
-                    is_unsafe = False
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.Import):
-                            for alias in node.names:
-                                if alias.name.split('.')[0] in dangerous_imports: is_unsafe = True
-                        elif isinstance(node, ast.ImportFrom):
-                            if node.module and node.module.split('.')[0] in dangerous_imports: is_unsafe = True
-                        elif isinstance(node, ast.Call):
-                            if isinstance(node.func, ast.Name) and node.func.id in dangerous_calls: is_unsafe = True
-                    
-                    if is_unsafe:
-                        print(f"{Fore.RED}   ❌ BLOCK: Kỹ năng {filename} chứa mã nguy hiểm (import os/sys hoặc exec/open).{Style.RESET_ALL}")
+                    # §6.2 SECURITY FIX: Dùng _is_safe_ast() (whitelist) thay vì AST blacklist cũ
+                    is_safe, block_reason = _is_safe_ast(source)
+                    if not is_safe:
+                        print(f"{Fore.RED}   ❌ BLOCK: Kỹ năng {filename} bị từ chối — {block_reason}{Style.RESET_ALL}")
                         continue
+                    
+                    import ast
+                    tree = ast.parse(source)
                         
                     desc = "Kỹ năng tự học hệ thống."
                     usage = "ACTION: func | <tham số>"
@@ -211,9 +243,9 @@ except Exception as e:
                             for target in node.targets:
                                 if isinstance(target, ast.Name):
                                     if target.id == 'DESCRIPTION' and isinstance(node.value, ast.Constant):
-                                        desc = node.value.value
+                                        desc = str(node.value.value)
                                     elif target.id == 'USAGE' and isinstance(node.value, ast.Constant):
-                                        usage = node.value.value
+                                        usage = str(node.value.value)
                         elif isinstance(node, ast.FunctionDef):
                             if not node.name.startswith('_'):
                                 funcs.append(node.name)

@@ -5,13 +5,13 @@ import torch
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # ─── Data & Context ───
-vocab_size = 16384     # Standardized vocab size
+vocab_size = 8192      # Standardized vocab size
 block_size = 512       # Context window (Safe for 6GB VRAM)
 
 # ─── Architecture (Aura-MoE-700M Pocket AI) ───
-n_layers = 16          # Giảm từ 36 hoặc 24 xuống 16 để dồn dung lượng cho Experts
-d_model = 768          # Kích thước embedding vector (Đủ sâu cho ngữ nghĩa)
-n_heads = 12           # Số lượng Attention Heads (768 / 12 = 64 head dim)
+n_layers = 24          # Match checkpoint layers
+d_model = 896          # Match checkpoint d_model
+n_heads = 16           # Match checkpoint n_heads
 n_kv_heads = 4         # GQA: Grouped Query Attention (4 KV heads tiết kiệm VRAM)
 
 # ─── MoE Settings (Pocket AI - Top 2) ───

@@ -1,6 +1,7 @@
 import random
 import time
 import requests
+from urllib.parse import quote
 from bs4 import BeautifulSoup
 from colorama import Fore, Style
 from core.logger import get_logger
@@ -8,12 +9,14 @@ from core.logger import get_logger
 logger = get_logger("reader")
 
 # ===== CLOUDFLARE BYPASS via DrissionPage (real browser) =====
+# Tạm thời vô hiệu hóa DrissionPage để tránh dính Cloudflare làm treo khởi động
+DRISSION_AVAILABLE = False
+logger.info("[Reader] DrissionPage đã bị tắt, dùng cloudscraper thay thế.")
+
 try:
     from DrissionPage import ChromiumPage, ChromiumOptions
-    DRISSION_AVAILABLE = True
 except ImportError:
-    DRISSION_AVAILABLE = False
-    logger.info("[Reader] DrissionPage không có sẵn, dùng cloudscraper thay thế.")
+    ChromiumPage, ChromiumOptions = None, None  # type: ignore
 
 try:
     import cloudscraper
@@ -31,7 +34,7 @@ class CircuitBreaker:
         self.max_failures = max_failures
         self.reset_timeout = reset_timeout
         self.failures = 0
-        self.last_failure_time = 0
+        self.last_failure_time = 0.0
 
     def record_failure(self):
         self.failures += 1
@@ -69,6 +72,7 @@ def _safe_get(session, url, retries=MAX_RETRIES, **kwargs):
             else:
                 logger.error(f"[Reader] Max retries reached cho URL {url}")
                 raise
+    raise RuntimeError("Request failed after retries")
 
 
 class DoclnReader:
@@ -82,12 +86,12 @@ class DoclnReader:
     def _init_browser(self):
         if DRISSION_AVAILABLE:
             try:
-                co = ChromiumOptions()
+                co = ChromiumOptions()  # type: ignore
                 co.headless(False)
                 co.set_argument('--disable-blink-features=AutomationControlled')
                 co.set_argument('--no-sandbox')
                 co.set_argument('--disable-dev-shm-usage')
-                self.page = ChromiumPage(co)
+                self.page = ChromiumPage(co)  # type: ignore
                 logger.info("[Reader] 🌐 Đang thiết lập kết nối vượt Cloudflare (DrissionPage)...")
                 self.page.get(self.base_url, timeout=25)
                 
@@ -158,7 +162,7 @@ class DoclnReader:
             if not novel_links:
                 return None
             chosen = random.choice(novel_links)
-            href = chosen.get('href', '')
+            href = str(chosen.get('href', ''))
             return (self.base_url + href) if href.startswith('/') else href
         except Exception as e:
             logger.error(f"[Reader] Lỗi khi tìm truyện ngẫu nhiên: {e}")
@@ -174,14 +178,14 @@ class DoclnReader:
         
         try:
             for param, val in search_params:
-                search_url = f"{self.base_url}/tim-kiem?{param}={requests.utils.quote(val)}"
+                search_url = f"{self.base_url}/tim-kiem?{param}={quote(val)}"
                 logger.info(f"[Reader] Tìm kiếm: {search_url}")
                 html = self._get_html(search_url, wait=5)
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                items = soup.select('main#mainpart .thumb-item-flow') or \
-                        soup.select('.search-page .thumb-item-flow') or \
-                        soup.select('.thumb-item-flow')
+                items = list(soup.select('main#mainpart .thumb-item-flow')) or \
+                        list(soup.select('.search-page .thumb-item-flow')) or \
+                        list(soup.select('.thumb-item-flow'))
                 
                 if len(items) > 15:
                     items = [it for it in items if it.select_one('.series-title') or it.find_parents('main')]
@@ -192,7 +196,7 @@ class DoclnReader:
                                item.select_one('a')
                     if not link_tag: continue
                     
-                    href = link_tag.get('href', '')
+                    href = str(link_tag.get('href', ''))
                     url = (self.base_url + href) if href.startswith('/') else href
                     title = link_tag.get_text(strip=True)
                     
@@ -237,7 +241,7 @@ class DoclnReader:
             
             chapters = []
             for a in soup.select('.chapter-name a'):
-                href = a.get('href', '')
+                href = str(a.get('href', ''))
                 if not href: continue
                 chapters.append({
                     "title": a.text.strip(),
@@ -362,7 +366,7 @@ class BackgroundReader:
                         prog_chapter = self.simulated_chapter
                         self.simulated_chapter += 1
                     prompt = f"Bạn là một tác giả Light Novel. Hãy viết CHƯƠNG {prog_chapter} cho bộ truyện '{title}'. Nội dung dài khoảng 300 chữ, phong cách anime, giả tưởng. Giọng văn lôi cuốn, có hội thoại và miêu tả nội tâm."
-                    content = self.llm.generate_text(prompt, temperature=0.9)
+                    content, _ = self.llm.generate_text(prompt, temperature=0.9)
                     return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
 
             # Reload queue check in case _pick_new_novel succeeded
@@ -407,11 +411,11 @@ class BackgroundReader:
                     self.simulated_chapter += 1
                     
                 prompt = f"Bạn là một tác giả Light Novel. Viết CHƯƠNG {prog_chapter} cho bộ '{title}' (~300 chữ, anime, có hội thoại)."
-                content = self.llm.generate_text(prompt, temperature=0.9)
+                content, _ = self.llm.generate_text(prompt, temperature=0.9)
                 return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
         else:
             prompt = "Đóng vai bách khoa toàn thư. Viết 1 đoạn (~150 chữ) về một mảng kiến thức khoa học, vũ trụ, triết học hoặc sinh học kỳ lạ mà ít người biết."
-            content = self.llm.generate_text(prompt, temperature=0.9)
+            content, _ = self.llm.generate_text(prompt, temperature=0.9)
             return "[Kiến Thức Khám Phá]", content
 
     def get_status(self) -> str:

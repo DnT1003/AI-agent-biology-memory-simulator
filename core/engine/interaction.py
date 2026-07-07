@@ -15,7 +15,7 @@ class InteractionController:
         self.sensory_preprocessor = SensoryPreprocessor()
         self.reflex_gate = ReflexGate(engine)
         self.compressor = ContextCompressor()
-    def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "") -> dict:
+    def perceive_and_respond(self, user_input: str, recalled_mems: list, mood_modifier: str = "", is_deep_mode: bool = False, model_override: str = None) -> dict:
         current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
         import random
         
@@ -201,13 +201,17 @@ class InteractionController:
         while iterations < 5 and not self.is_interrupted:
             iterations += 1
             try:
-                # [Phase 26] Native Bio-Integration: Gởi trạng thái sinh học xuống Ollama Custom Engine
+                # [Phase 26] Native Bio-Integration: Gởi trạng thái sinh học xuống Gemma Custom Engine
                 aura_state = {
                     "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
                     "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
                     "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
                 }
-                result_json, entropy = self.engine.llm.generate_json(prompt_in_use, temperature=0.7)
+                
+                from config import Config
+                model_ov = model_override or (Config.DEEP_MODEL_NAME if is_deep_mode else None)
+                result_json, entropy = self.engine.llm.generate_json(prompt_in_use, temperature=0.7, model_override=model_ov)
+                
                 result["entropy"] = entropy
                 if entropy > 0.5:
                     print(f"{Fore.YELLOW}🌀 [ENGINE ENTROPY]: Chỉ số hỗn loạn cao ({entropy:.4f}) - Aura đang cảm thấy bối rối/do dự.{Style.RESET_ALL}")
@@ -270,7 +274,7 @@ class InteractionController:
 
         return result
 
-    def interaction_loop(self, user_input: str):
+    def interaction_loop(self, user_input: str, is_deep_mode: bool = False, model_override: str = None):
         """Hàm chính xử lý cuộc hội thoại người dùng."""
         self.is_interrupted = False
         import random
@@ -297,13 +301,13 @@ class InteractionController:
         # giờ đây đều được LLM xử lý tự nhiên thông qua perceives_and_respond và Actions.
 
         # [Phase 21] World Graph Extraction (NLP Engine Version)
-        def _extract_graph():
+        def _extract_graph(model_ov=None):
             # Sử dụng logic spaCy + LLM mới từ WorldGraph
-            self.engine.world_graph.update_from_text(user_input, self.engine.llm)
-        threading.Thread(target=_extract_graph, daemon=True).start()
+            self.engine.world_graph.update_from_text(user_input, self.engine.llm, model_override=model_ov)
+        threading.Thread(target=_extract_graph, args=(model_override,), daemon=True).start()
 
         # [Phase 5] Value System: phát hiện User đang thể hiện giá trị nào
-        def _extract_values():
+        def _extract_values(model_ov=None):
             if not hasattr(self.engine, 'value_system'):
                 return
             prompt = f"""Phân tích câu nói sau của người dùng để xem họ có đang thể hiện THÁI ĐỘ RÕ RÀNG (ủng hộ hoặc phản đối) đối với một giá trị đạo đức/quan điểm sống cụ thể không.
@@ -318,7 +322,7 @@ Nếu CÓ, trả về JSON array (tối đa 2 items):
 Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm thông thường, chỉ thị kỹ thuật,...), trả về mảng rỗng: []"""
             try:
                 import json
-                res, _ = self.engine.llm.generate_text(prompt, temperature=0.1)
+                res, _ = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=model_ov)
                 res = res.strip()
                 if res.startswith("```json"): res = res[7:]
                 if res.startswith("```"): res = res[3:]
@@ -332,7 +336,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             except Exception as e:
                 from core.logger import get_logger
                 get_logger("interaction").error(f"Lỗi extract values: {e}", exc_info=True)
-        threading.Thread(target=_extract_values, daemon=True).start()
+        threading.Thread(target=_extract_values, args=(model_override,), daemon=True).start()
 
         with self.engine.ego.lock:
             self.engine.ego.social_need = max(0.0, self.engine.ego.social_need - 0.2)
@@ -370,15 +374,19 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             
             future_recall = executor.submit(self.engine.memory_ops.recall, user_input)
             
-            sensory_evaluation = future_sensory.result()
+            sensory_evaluation = future_sensory.result(timeout=5)
             
             try:
-                local_res = future_local.result()
+                local_res = future_local.result(timeout=5)
             except Exception as e:
                 print(f"Lỗi Local Empathy: {e}")
                 local_res = {}
                 
-            recalled = future_recall.result()
+            try:
+                recalled = future_recall.result(timeout=8)
+            except concurrent.futures.TimeoutError:
+                print(f"{Fore.YELLOW}⚠️ [RECALL TIMEOUT]: ChromaDB quá chậm, bỏ qua recall lần này.{Style.RESET_ALL}")
+                recalled = []
             
         sensory_vector = sensory_evaluation.get("vector", {})
         sensory_summary = sensory_evaluation.get("summary", "")
@@ -437,7 +445,11 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
              mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT MỆT MỎI (Fatigue > 0.7). Chỉ được dùng CÂU CỰC KỲ NGẮN, lười biếng, thiếu mạch lạc. Không được phân tích logic cầu kỳ. Dùng cảm tính để trả lời.")
              
         # Tính toán Arousal dựa trên input hiện tại thay vì self.engine.ego.arousal (SelfModel ko lưu arousal)
-        arousal_text, _ = self.engine.llm.generate_text(f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", temperature=0.1)
+        arousal_text, _ = self.engine.llm.generate_text(
+            f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", 
+            temperature=0.1,
+            model_override=model_override
+        )
         user_arousal_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", arousal_text.strip() + "0")[0])
         user_arousal_score = max(0.0, min(1.0, user_arousal_score))
         
@@ -499,7 +511,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                         print(f"{Fore.GREEN}✨ Aura đã thoát khỏi khủng hoảng nhân cách!{Style.RESET_ALL}")
 
         # --- GỌI LLM SINH LỜI NÓI & THỰC THI CHUỖI NHẬN THỨC ---
-        final_result = self.perceive_and_respond(user_input, recalled, mood_modifier)
+        final_result = self.perceive_and_respond(user_input, recalled, mood_modifier, is_deep_mode, model_override)
         if final_result and final_result.get("response"):
             reply_text = final_result['response']
             print(f"\n{Fore.GREEN}🤖 Aura:{Style.RESET_ALL} {reply_text}\n")
@@ -522,4 +534,6 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         # Update JSON Dashboard
         if hasattr(self.engine, '_dump_mind_state'):
             self.engine._dump_mind_state()
+
+        return final_result
 

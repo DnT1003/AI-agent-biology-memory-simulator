@@ -72,6 +72,7 @@ def execute_tool(func_name: str, args: dict) -> str:
         return web_search(args.get("query", ""))
     elif func_name == "read_time":
         return read_time()
+    return f"Unknown tool: {func_name}"
 
 def get_skill_registry() -> SkillRegistry:
     """Khởi tạo và trả về SkillRegistry với các kỹ năng mặc định."""
@@ -115,5 +116,15 @@ def get_skill_registry() -> SkillRegistry:
     
     # --- Nạp các kỹ năng tự học (Self-Evolution) ---
     registry.load_dynamic_skills()
-    
+
+    # --- OpenClaw Gateway Skills (tuỳ chọn) ---
+    # Chỉ đăng ký nếu OPENCLAW_GATEWAY_URL có trong .env — không ảnh hưởng gì nếu thiếu
+    import os
+    if os.getenv("OPENCLAW_GATEWAY_URL"):
+        try:
+            from core.skills_openclaw import register_openclaw_skills
+            register_openclaw_skills(registry)
+        except Exception as e:
+            print(f"[tools.py] Không thể nạp OpenClaw skills: {e}")
+
     return registry

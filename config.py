@@ -6,8 +6,8 @@ load_dotenv()
 class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     API_KEY = os.getenv("API_KEY", "")
-    MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.0-flash")
-    DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-3.1-pro")
+    MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3-flash-preview")
+    DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-3.1-pro-preview")
     EMBEDDING_MODEL = "models/gemini-embedding-001"
     
     # HYBRID MODE CONFIG
@@ -43,13 +43,12 @@ class Config:
     # SO ENTRY TOI DA TRONG SHORT-TERM BUFFER
     STM_MAX_ENTRIES: int = int(os.getenv("AURA_STM_MAX", "15"))
 
-    # LOCAL LLM (OLLAMA)
-    OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api")
-    LOCAL_MODEL_NAME = os.getenv("LOCAL_MODEL_NAME", "phi3:mini")
+    # LOCAL LLM (GEMMA 4 E4B — Unsloth, 4-bit, offline)
+    GEMMA_MODEL_PATH = os.getenv("GEMMA_MODEL_PATH", r"d:\python\PythonProject19\Gemma4_E4B")
     
     # CUSTOM SLM (Aura-Flash Core)
     SLM_DIR = os.path.join(os.path.dirname(__file__), "core", "engine", "nanogpt")
-    SLM_ENABLED = True
+    SLM_ENABLED = False
     
     # AURA-FLASH LITE CONFIG (~425M Parameters - Sweet Spot for 6GB VRAM)
     SLM_D_MODEL = 1024

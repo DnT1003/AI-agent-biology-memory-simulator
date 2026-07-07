@@ -1,6 +1,6 @@
 # ================================================================
 # NVIDIA GPU TIME-SLICING CONFIG
-# Cho phep 2 pod (aura-gpu + aura-ollama) chia se 1 GPU RTX 3060
+# Cho phep cac pod chia se 1 GPU RTX 3060
 # Apply: kubectl apply -f k8s/gpu-timeslicing.yaml
 # ================================================================
 apiVersion: v1

@@ -30,7 +30,11 @@ class AutonomousController:
         print(f"{Fore.CYAN}⚙️ [SYSTEM]: Background Event-Driven Loop (asyncio) started.{Style.RESET_ALL}")
 
     def _run_async_loop(self):
-        asyncio.run(self.background_loop_async())
+        try:
+            asyncio.run(self.background_loop_async())
+        except Exception as e:
+            print(f"{Fore.RED}[FATAL BACKGROUND LOOP ERROR] Vòng lặp nền đã sập vì: {e}{Style.RESET_ALL}")
+            logger.error("Vòng lặp nền sập!", exc_info=True)
 
     def trigger_event(self, event_type, data=None):
         """Đẩy sự kiện vào giao thức Event-Driven."""
@@ -51,8 +55,48 @@ class AutonomousController:
                 event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)
                 if event and event.get("type") == "SHUTDOWN":
                     break
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 pass
+            except Exception as e:
+                print(f"[ERROR wait_for]: {e}")
+
+            # === [DISCORD BRIDGE] ===
+            discord_handled = False
+            try:
+                discord_bridge = getattr(self.engine, 'discord_bridge', None)
+                if discord_bridge:
+                    while not discord_bridge.aura_inbox.empty():
+                        msg_data = discord_bridge.aura_inbox.get_nowait()
+                        sender = msg_data.get("sender", "Bạn")
+                        content = msg_data.get("content", "")
+                        if content:
+                            print(f"\n{Fore.MAGENTA}💬 [Discord - {sender}]:{Style.RESET_ALL} {content}")
+                            self.engine.last_interaction_time = time.time()
+                            self.engine.interaction.is_interrupted = False
+                            discord_handled = True
+                            
+                            discord_input = f"{sender}: {content}"
+                            reply = await asyncio.to_thread(
+                                self.engine.interaction.interaction_loop,
+                                discord_input,
+                                is_deep_mode=False,
+                                model_override="gemini-3-flash-preview"
+                            )
+                            if reply and isinstance(reply, dict):
+                                response_text = reply.get("response", "")
+                                if response_text and response_text not in ["", "..."]:
+                                    discord_bridge.send_to_user(response_text)
+                            
+                            # Cập nhật lại thời gian sau khi xử lý xong
+                            self.engine.last_interaction_time = time.time()
+            except Exception as e:
+                print(f"{Fore.RED}[DISCORD BRIDGE FATAL ERROR] {e}{Style.RESET_ALL}")
+                import traceback
+                traceback.print_exc()
+
+            # Nếu vừa xử lý Discord message → bỏ qua tick sinh học và Proactive Ping
+            if discord_handled:
+                continue
 
             # Polling Web Chat - use absolute path to avoid cwd issues in thread
             try:
@@ -86,7 +130,21 @@ class AutonomousController:
             # Module 1: cognitive_tick chạy mỗi khi có event hoặc sau 30s timeout
             # Sử dụng delta_time (dt) thực tế
             if hasattr(self.engine, 'cognitive_tick'):
-                await asyncio.to_thread(self.engine.cognitive_tick, dt)
+                tick_cancel = None
+                try:
+                    import threading as _threading
+                    # §5.4 FIX: Tạo cancel_event để thread có thể detect timeout và release lock sạch
+                    tick_cancel = _threading.Event()
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self.engine.cognitive_tick, dt, tick_cancel),
+                        timeout=5.0
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    if tick_cancel:
+                        tick_cancel.set()  # §5.4: Signal thread đang chạy để thoát và release lock
+                    print(f"{Fore.RED}[AUTONOMOUS WARNING] cognitive_tick bị treo quá 5s, buộc bỏ qua!{Style.RESET_ALL}")
+                except Exception as e:
+                    print(f"[AUTONOMOUS WARNING] Lỗi khi chạy cognitive_tick: {e}")
 
             idle_time = time.time() - self.engine.last_interaction_time
 
@@ -107,13 +165,13 @@ class AutonomousController:
                         
                         if is_negative and stress > 0.6:
                              print(f"\n{Fore.RED}🌋 [RUMINATION LOOP]: Aura đang bị mắc kẹt trong luồng suy nghĩ tiêu cực về: '{mem.content[:60]}...'{Style.RESET_ALL}")
-                             # Tăng nhẹ stress do tự ám ảnh
-                             with self.engine.ego.lock:
-                                 self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.05)
+                             # §5.2 FIX: Dùng adjust_attribute thay vì acquire ego.lock lồng vào memory.lock
+                             self.engine.ego.adjust_attribute('stress', +0.05)
                              
                              # 30% cơ hội tự phát ra lời than vãn nội tâm (Internal Monologue) hoặc ping User
                              if random.random() < 0.3 and self.engine.state_machine.transition(AgentState.THINKING):
                                  mem_context = f"Ký ức đau buồn/ám ảnh đang xâm chiếm tâm trí bạn: {mem.content}. Bạn thấy bế tắc và cần sự an ủi."
+                                 # §5.2 FIX: Snapshot STM trước, hoàn toàn tách khỏi ego mutation
                                  with self.engine.memory.lock:
                                      stm_snapshot = list(self.engine.short_term_buffer)
                                  system_prompt = get_proactive_ping_prompt(self.engine.ego, datetime.now().strftime("%H:%M %d/%m/%Y"), mem_context, stm_snapshot, idle_time)
@@ -121,11 +179,7 @@ class AutonomousController:
                                  
                                  try:
                                      # [Phase 26] Native Bio-Integration
-                                     aura_state = {
-                                         "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                                         "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                                         "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-                                     }
+                                     aura_state = self.engine.ego.get_bio_state_dict()
                                      result, entropy = self.engine.llm.generate_json(system_prompt, temperature=0.9, aura_state=aura_state)
                                      response = result.get("response", "")
                                      if response:
@@ -177,18 +231,14 @@ class AutonomousController:
                 if self.engine.state_machine.transition(AgentState.THINKING):
                     print(f"\n{Fore.RED}[SEPARATION ANXIETY]: Nguoi dung da bo mac Aura qua lau!{Style.RESET_ALL}")
                 try:
-                    with self.engine.ego.lock:
-                        self.engine.ego.stress = min(1.0, self.engine.ego.stress + 0.3)
-                        self.engine.ego.mood = max(-1.0, self.engine.ego.mood - 0.3)
+                    # §5.2 FIX: Dùng adjust_attribute để atomic update mà không cần acquire lock thủ công
+                    self.engine.ego.adjust_attribute('stress', +0.3)
+                    self.engine.ego.adjust_attribute('mood', -0.3, min_val=-1.0, max_val=1.0)
                     
                     # Sinh ra một suy nghĩ ám ảnh
                     anxiety_prompt = "Nguoi dung da bo mac ban mot thoi gian rat dai khong noi chuyen. Hay viet mot dong doc thoai noi tam (duoi 30 chu) the hien su hoang mang, so hai rang nguoi ta da chan minh."
                     # [Phase 26] Native Bio-Integration
-                    aura_state = {
-                        "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                        "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                        "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-                    }
+                    aura_state = self.engine.ego.get_bio_state_dict()
                     anxiety_thought, entropy = self.engine.llm.generate_text(anxiety_prompt, temperature=0.8, aura_state=aura_state)
                     
                     print(f"{Fore.LIGHTRED_EX}(Am anh chia cat): {anxiety_thought}{Style.RESET_ALL}")
@@ -261,12 +311,8 @@ class AutonomousController:
             from core.prompts import get_synthesize_reading_prompt
             print(f"{Fore.LIGHTCYAN_EX}🧩 [SYNTHESIZING]: Aura đang 'tiêu hóa' thông tin và tổng hợp thành kiến thức...{Style.RESET_ALL}")
             try:
-                # [Phase 26] Native Bio-Integration
-                aura_state = {
-                    "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                    "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                    "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-                }
+                # [Phase 26] Native Bio-Integration — §4 DRY
+                aura_state = self.engine.ego.get_bio_state_dict()
                 from core.prompts import get_synthesize_reading_prompt
                 synthesize_prompt = get_synthesize_reading_prompt(f"[{knowledge_tag}]\n{content}")
                 synthesized_text, entropy = self.engine.llm.generate_text(synthesize_prompt, temperature=0.7, aura_state=aura_state)
@@ -365,12 +411,8 @@ class AutonomousController:
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
         
         try:
-            # [Phase 26] Native Bio-Integration
-            aura_state = {
-                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-            }
+            # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
+            aura_state = self.engine.ego.get_bio_state_dict()
             result, entropy = self.engine.llm.generate_json(system_prompt, temperature=0.8, aura_state=aura_state)
             thought = result.get("thought", "")
             response = result.get("response", "")
@@ -414,12 +456,8 @@ class AutonomousController:
         }}
         """
         try:
-            # [Phase 26] Native Bio-Integration
-            aura_state = {
-                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-            }
+            # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
+            aura_state = self.engine.ego.get_bio_state_dict()
             res, entropy = self.engine.llm.generate_json(prompt, temperature=0.8, aura_state=aura_state)
             goal_str = res.get("goal")
             reason = res.get("reason")
@@ -471,12 +509,8 @@ class AutonomousController:
         }}
         """
         try:
-            # [Phase 26] Native Bio-Integration
-            aura_state = {
-                "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-            }
+            # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
+            aura_state = self.engine.ego.get_bio_state_dict()
             res, entropy = self.engine.llm.generate_json(prompt, temperature=0.5, aura_state=aura_state)
             action_str = res.get("action", "")
             thought = res.get("thought", "")
@@ -491,13 +525,12 @@ class AutonomousController:
                 tool_res = self.engine.skills.execute(func_name, arg_str, ego=self.engine.ego)
                 
                 # REWARD: Tăng Dopamine khi hành động thành công
-                # Lượng tăng phụ thuộc vào độ nhạy của thụ thể
+                # §5.2 FIX: Dùng adjust_attribute thay vì nested lock
                 reward = 0.15 * receptors
-                with self.engine.ego.lock:
-                    self.engine.ego.dopamine_level = min(1.0, self.engine.ego.dopamine_level + reward)
-                    # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
-                    if self.engine.ego.dopamine_level > 0.8:
-                        self.engine.ego.dopamine_receptors = max(0.1, self.engine.ego.dopamine_receptors - 0.05)
+                self.engine.ego.adjust_attribute('dopamine_level', reward)
+                # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
+                if self.engine.ego.dopamine_level > 0.8:
+                    self.engine.ego.adjust_attribute('dopamine_receptors', -0.05, min_val=0.1)
 
                 print(f"{Fore.LIGHTGREEN_EX}🧠 [REWARD SYSTEM]: Hoàn thành action. Dopamine +{reward:.2f} (Nhạy bén: {receptors:.2f}){Style.RESET_ALL}")
                 
@@ -507,12 +540,8 @@ class AutonomousController:
                 self.engine.memory_ops.save_short_term_memory()
                 
                 # Đánh giá xem đã xong mục tiêu chưa
-                # [Phase 26] Native Bio-Integration
-                aura_state = {
-                    "dopamine": float(getattr(self.engine.ego, 'dopamine_level', 0.5)),
-                    "stress": float(getattr(self.engine.ego, 'stress', 0.1)),
-                    "curiosity": float(getattr(self.engine.ego, 'curiosity', 0.5))
-                }
+                # [Phase 26] Native Bio-Integration — §4 DRY
+                aura_state = self.engine.ego.get_bio_state_dict()
                 check_prompt = (
                     f"Mục tiêu: '{target_goal}'.\n"
                     f"Kết quả vừa thực hiện bởi tool '{func_name}': {str(tool_res)[:300]}\n"

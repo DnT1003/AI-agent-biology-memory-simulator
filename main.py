@@ -25,6 +25,29 @@ setup_gpu(vram_limit_gb=4.0)
 if __name__ == "__main__":
     ai = CognitiveEngine()
     
+    # === [DISCORD BRIDGE] ===
+    import os
+    DISCORD_TOKEN = os.getenv("OPENCLAW_DISCORD_TOKEN", os.getenv("DISCORD_BOT_TOKEN", ""))
+    DISCORD_CHANNEL = os.getenv("OPENCLAW_DEFAULT_CHANNEL", "general")
+    DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0"))
+    
+    if DISCORD_TOKEN:
+        try:
+            from core.discord_bridge import AuraDiscordBot
+            discord_bridge = AuraDiscordBot(
+                token=DISCORD_TOKEN,
+                guild_id=DISCORD_GUILD_ID,
+                channel_name=DISCORD_CHANNEL
+            )
+            discord_bridge.start_in_thread()
+            ai.discord_bridge = discord_bridge  # Gắn vào CognitiveEngine
+        except Exception as e:
+            print(f"{Fore.RED}[DISCORD BRIDGE] Lỗi khởi động: {e}{Style.RESET_ALL}")
+            ai.discord_bridge = None
+    else:
+        ai.discord_bridge = None
+        
+
     is_shutting_down = False
 
     def handle_exit():

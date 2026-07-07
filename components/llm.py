@@ -1,6 +1,7 @@
 # LLM Component wrapper cho Google GenAI
 import json
 import logging
+from typing import Any, Optional
 from google import genai
 from google.genai import types
 from config import Config
@@ -29,21 +30,39 @@ class LLM:
         self.ego = ego # Tham chiếu tới SelfModel để check Fatigue
 
     def _should_use_local(self, prompt: str = "") -> bool:
-        """Quyết định dùng Local LLM dựa trên: Config, Fatigue, lệnh đặc thù hoặc settings"""
-        provider = self.settings.get("provider", "local")
+        """Quyết định dùng Local LLM dựa trên: Config, Fatigue, lệnh đặc thù hoặc settings.
         
+        §5.3 FIX: Luôn kiểm tra _model_status == "ready" trước khi chọn local.
+        Nếu local chưa sẵn sàng (đang load hoặc lỗi), bắt buộc fallback về Cloud
+        để tránh trả về chuỗi rỗng mà không có cảnh báo (Silent Failure).
+        """
+        from core.local_llm import _model_status
+        provider = self.settings.get("provider", "local")
+
+        # Nếu local model đang load hoặc bị lỗi → không dùng local dù bất cứ lý do gì
+        if _model_status not in ("ready",):
+            if provider == "local":
+                # Log một lần khi chưa sẵn sàng để tránh spam
+                if _model_status == "loading":
+                    logger.debug("[HYBRID LLM]: Local model đang nạp (status='loading'). Fallback về Cloud tạm thời.")
+                elif _model_status in ("error", "unavailable"):
+                    logger.warning(f"[HYBRID LLM]: Local model không khả dụng (status='{_model_status}'). Dùng Cloud.")
+                return False
+            return False  # provider != "local" mà local chưa ready → không route sang local
+
+        # Local đã sẵn sàng (status == "ready") — tiếp tục logic bình thường
         if provider == "local":
             return True
-            
+
         # Kiểm tra lệnh đặc thù ép dùng local
         if prompt and any(cmd in prompt.lower() for cmd in getattr(Config, 'FORCE_LOCAL_COMMANDS', [])):
             return True
-            
+
         if self.ego and getattr(self.ego, 'fatigue', 0.0) > 0.7:
             return True
         return False
 
-    def _apply_cognitive_throttling(self, prompt: str, temperature: float = 0.7, max_output_tokens: int = None) -> tuple:
+    def _apply_cognitive_throttling(self, prompt: str, temperature: float = 0.7, max_output_tokens: Optional[int] = None) -> tuple:
         """[Phase 24] Điều tiết động các tham số (Temp, Top_P, Tokens) dựa trên sinh lý."""
         params = {
             "temperature": temperature,
@@ -85,19 +104,19 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_json_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None) -> tuple:
+    def _generate_json_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str | None = None, max_output_tokens: int | None = None, force_local: bool = False, image_path: str | None = None) -> tuple:
         provider = self.settings.get("provider", "local")
         
         if (self._should_use_local(prompt) or force_local or provider == "local") and not model_override:
             if image_path:
-                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Gemma) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: {'Force Local' if force_local else 'Hệ thần kinh mệt mỏi/Thiết lập Local'}. Sử dụng Local LLM.{Style.RESET_ALL}")
             return self.local_llm.generate_json(prompt, temperature, top_p=top_p)
 
         if provider == "openai":
             import requests
             api_key = self.settings.get("openai_api_key", "")
-            if not api_key: return {}
+            if not api_key: return {}, 0.0
             model = model_override or self.settings.get("openai_model", "gpt-4o-mini")
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
@@ -117,7 +136,7 @@ class LLM:
         elif provider == "anthropic":
             import requests
             api_key = self.settings.get("anthropic_api_key", "")
-            if not api_key: return {}
+            if not api_key: return {}, 0.0
             model = model_override or self.settings.get("anthropic_model", "claude-3-haiku-20240307")
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
             payload = {
@@ -133,12 +152,12 @@ class LLM:
             except: return {}, 0.0
 
         # Default to Gemini
-        gemini_model = model_override or self.settings.get("gemini_model", Config.MODEL_NAME)
+        gemini_model = str(model_override or self.settings.get("gemini_model") or Config.MODEL_NAME)
         config_params = {"response_mime_type": "application/json", "temperature": temperature, "top_p": top_p}
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
-        contents = [prompt]
+        contents: list[Any] = [prompt]
         if image_path:
             if not HAS_PIL:
                 logger.warning(f"Không thể nạp hình ảnh vì chưa cài đặt module Pillow: {image_path}")
@@ -160,7 +179,7 @@ class LLM:
         )
         
         # Robust JSON extraction
-        text = resp.text.strip()
+        text = (resp.text or "").strip()
         try:
             # Try direct load first
             data = json.loads(text)
@@ -189,7 +208,7 @@ class LLM:
             return (data[0] if len(data) > 0 else {}), 0.0
         return data, 0.0
 
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str = None, max_output_tokens: int = None, force_local: bool = False, image_path: str = None, aura_state: dict = None) -> tuple:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str | None = None, max_output_tokens: int | None = None, force_local: bool = False, image_path: str | None = None, aura_state: dict | None = None) -> tuple:
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
             return self._generate_json_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], force_local=force_local, image_path=image_path)
@@ -204,18 +223,18 @@ class LLM:
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _generate_text_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str = None, max_output_tokens: int = None, image_path: str = None) -> tuple:
+    def _generate_text_with_retry(self, prompt: str, temperature: float, top_p: float = 1.0, model_override: str | None = None, max_output_tokens: int | None = None, image_path: str | None = None) -> tuple:
         provider = self.settings.get("provider", "local")
         if (self._should_use_local(prompt) or provider == "local") and not model_override:
             if image_path:
-                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Phi-3) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}⚠️ [HYBRID LLM]: Local LLM (Gemma) không hỗ trợ Vision. Bỏ qua hình ảnh.{Style.RESET_ALL}")
             print(f"{Fore.LIGHTBLACK_EX}⚡ [HYBRID LLM]: Hệ thần kinh mệt mỏi/Thiết lập Local. Chuyển sang Local LLM.{Style.RESET_ALL}")
             return self.local_llm.generate_text(prompt, temperature, top_p=top_p)
 
         if provider == "openai":
             import requests
             api_key = self.settings.get("openai_api_key", "")
-            if not api_key: return ""
+            if not api_key: return "", 0.0
             model = model_override or self.settings.get("openai_model", "gpt-4o-mini")
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
@@ -232,7 +251,7 @@ class LLM:
         elif provider == "anthropic":
             import requests
             api_key = self.settings.get("anthropic_api_key", "")
-            if not api_key: return ""
+            if not api_key: return "", 0.0
             model = model_override or self.settings.get("anthropic_model", "claude-3-haiku-20240307")
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
             payload = {
@@ -246,12 +265,12 @@ class LLM:
             return response.json()["content"][0]["text"], 0.0
 
         # Default back to Gemini
-        gemini_model = model_override or self.settings.get("gemini_model", Config.MODEL_NAME)
+        gemini_model = str(model_override or self.settings.get("gemini_model") or Config.MODEL_NAME)
         config_params = {"temperature": temperature, "top_p": top_p}
         if max_output_tokens:
             config_params["max_output_tokens"] = max_output_tokens
             
-        contents = [prompt]
+        contents: list[Any] = [prompt]
         if image_path:
             if not HAS_PIL:
                 logger.warning(f"Không thể nạp hình ảnh vì chưa cài đặt module Pillow: {image_path}")
@@ -271,9 +290,9 @@ class LLM:
             contents=contents,
             config=types.GenerateContentConfig(**config_params)
         )
-        return resp.text.strip(), 0.0
+        return (resp.text or "").strip(), 0.0
 
-    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str = None, max_output_tokens: int = None, image_path: str = None, aura_state: dict = None) -> tuple:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str | None = None, max_output_tokens: int | None = None, image_path: str | None = None, aura_state: dict | None = None) -> tuple:
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         try:
             return self._generate_text_with_retry(prompt, p["temperature"], p["top_p"], model_override, p["max_output_tokens"], image_path=image_path)
@@ -281,14 +300,17 @@ class LLM:
             logger.error(f"Lỗi LLM Text (đã retry 3 lần thất bại): {e}")
             return self.local_llm.generate_text(prompt, temperature)
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list = None, model_override: str = None, max_output_tokens: int = None, aura_state: dict = None):
+    def generate_text_stream(self, prompt: str, temperature: float = 0.7, tools: list | None = None, model_override: str | None = None, max_output_tokens: int | None = None, aura_state: dict | None = None):
         prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
         if self._should_use_local(prompt) and not model_override:
-            yield from self.local_llm.generate_text_stream(prompt, p["temperature"], top_p=p["top_p"])
+            for chunk, _ in self.local_llm.generate_text_stream(prompt, p["temperature"], top_p=p["top_p"]):
+                yield chunk
             return
 
         try:
-            config_params = {"temperature": p["temperature"], "top_p": p["top_p"]}
+            if not self.client:
+                self.client = genai.Client(api_key=self.settings.get("gemini_api_key", Config.API_KEY))
+            config_params: dict[str, Any] = {"temperature": p["temperature"], "top_p": p["top_p"]}
             if p["max_output_tokens"]:
                 config_params["max_output_tokens"] = p["max_output_tokens"]
             if tools:
@@ -304,4 +326,5 @@ class LLM:
                     yield chunk.text
         except Exception as e:
             logger.error(f"Lỗi LLM Stream: {e}")
-            yield from self.local_llm.generate_text_stream(prompt, temperature)
+            for chunk, _ in self.local_llm.generate_text_stream(prompt, temperature):
+                yield chunk

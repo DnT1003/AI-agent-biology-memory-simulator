@@ -66,27 +66,28 @@ spec:
       storage: 10Gi
 
 ---
-# --- 3. ollama-pvc (model weights - lon nhat) ---
+# --- 3. gemma-pvc (model weights Gemma 4 E4B, ~11GB) ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: ollama-pv
+  name: gemma-pv
   namespace: aura
 spec:
   capacity:
-    storage: 30Gi
+    storage: 20Gi
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
   storageClassName: manual
   hostPath:
-    path: /mnt/c/aura/ollama
-    type: DirectoryOrCreate
+    # Windows: d:\python\PythonProject19\Gemma4_E4B → /mnt/d/python/PythonProject19/Gemma4_E4B
+    path: /mnt/d/python/PythonProject19/Gemma4_E4B
+    type: Directory
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: ollama-pvc
+  name: gemma-pvc
   namespace: aura
 spec:
   accessModes:
@@ -94,7 +95,7 @@ spec:
   storageClassName: manual
   resources:
     requests:
-      storage: 30Gi
+      storage: 20Gi
 
 ---
 # --- 4. gpu-pvc (SLM weights - chia se Brain va GPU) ---

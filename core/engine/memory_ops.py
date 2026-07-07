@@ -159,7 +159,7 @@ class MemoryOperationsController:
                 try:
                     from core.prompts import get_reconsolidate_rewrite_prompt
                     prompt = get_reconsolidate_rewrite_prompt(m.content, self.engine.ego.mood)
-                    new_content = self.engine.llm.generate_text(prompt, temperature=0.7)
+                    new_content, _ = self.engine.llm.generate_text(prompt, temperature=0.7)
                     if new_content and len(new_content) > 10 and new_content != m.content:
                         print(f"{Fore.LIGHTRED_EX}🌀 [FALSE MEMORY]: Ký ức bị bóp méo do tâm trạng:\n   - Cũ: {m.content}\n   - Mới: {new_content}{Style.RESET_ALL}")
                         m.content = new_content
@@ -176,7 +176,7 @@ class MemoryOperationsController:
         if random.random() > Config.SEMANTIC_DRIFT_CHANCE:
             return
         prompt = get_semantic_drift_prompt(memory.content)
-        new_content = self.engine.llm.generate_text(prompt, temperature=0.8)
+        new_content, _ = self.engine.llm.generate_text(prompt, temperature=0.8)
         if new_content and len(new_content) > 10 and new_content != memory.content:
             print(f"{Fore.LIGHTRED_EX}🌀 [SEMANTIC DRIFT]: Ký ức méo mó theo thời gian:\n   - Cũ: {memory.content}\n   - Mới: {new_content}{Style.RESET_ALL}")
             memory.content = new_content
@@ -220,7 +220,7 @@ class MemoryOperationsController:
                     # Gắn flag để LLM supervisor xử lý sau
                     user_input = f"[Conflict] {user_input}"
                 
-                ans = self.engine.llm.generate_text(check_prompt, temperature=0.1).strip().upper()
+                ans, _ = self.engine.llm.generate_text(check_prompt, temperature=0.1); ans = ans.strip().upper()
                 # B15: dùng startswith thày 'in' — 'YES, because...' không bị detect lầm
                 if ans.startswith("YES"):
                     print(f"{Fore.LIGHTYELLOW_EX}🧐 [COGNITIVE REAPPRAISAL]: Aura nhận thấy mâu thuẫn với niềm tin. Gắn thẻ chờ đánh giá lại...{Style.RESET_ALL}")
@@ -326,7 +326,7 @@ class MemoryOperationsController:
         dream_mems = sorted(weak_episodic, key=lambda x: x.strength)[:15]
         
         prompt = get_sleep_dream_prompt("\n".join([f"[{m.created_at}] - {m.content}" for m in dream_mems]))
-        raw_response = self.engine.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
+        raw_response, _ = self.engine.llm.generate_text(prompt, temperature=0.7, model_override=Config.DEEP_MODEL_NAME)
         json_str = raw_response.strip().replace("```json", "").replace("```", "").strip()
         try:
             insights = json.loads(json_str)
@@ -414,7 +414,7 @@ class MemoryOperationsController:
                     "Bạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có không? "
                     "Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn bắt đầu bằng 'Lý do: '."
                 )
-                guilt_res = self.engine.llm.generate_text(guilt_prompt, temperature=0.2).strip()
+                guilt_res, _ = self.engine.llm.generate_text(guilt_prompt, temperature=0.2); guilt_res = guilt_res.strip()
                 # B15: dùng startswith — tránh 'CÓ thể' bị detect lầm
                 if guilt_res.strip().upper().startswith("CÓ") or "LÝ DO" in guilt_res.upper():
                     guilt_reason = guilt_res.replace("CÓ", "").strip(":- ,.\n")
@@ -468,7 +468,7 @@ class MemoryOperationsController:
             }}
             """
             try:
-                res_raw = self.engine.llm.generate_text(prompt, temperature=0.3)
+                res_raw, _ = self.engine.llm.generate_text(prompt, temperature=0.3)
                 import json
                 # Làm sạch chuỗi JSON
                 json_str = res_raw.strip().replace("```json", "").replace("```", "").strip()
@@ -534,7 +534,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            raw_res = self.engine.llm.generate_text(prompt, temperature=0.7)
+            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.7)
             import json
             json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(json_str)
@@ -614,7 +614,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            raw_gap = self.engine.llm.generate_text(gap_prompt, temperature=0.3)
+            raw_gap, _ = self.engine.llm.generate_text(gap_prompt, temperature=0.3)
             gap_data = json.loads(raw_gap.strip().replace("```json", "").replace("```", "").strip())
             
             if not gap_data.get("has_gap"):
@@ -636,7 +636,7 @@ class MemoryOperationsController:
             TRẢ VỀ DUY NHẤT MÃ NGUỒN PYTHON. KHÔNG GIẢI THÍCH.
             """
             
-            python_code = self.engine.llm.generate_text(code_prompt, temperature=0.1)
+            python_code, _ = self.engine.llm.generate_text(code_prompt, temperature=0.1)
             python_code = python_code.strip().replace("```python", "").replace("```", "").strip()
             
             # Kiểm tra cú pháp cơ bản
@@ -708,7 +708,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            raw_res = self.engine.llm.generate_text(prompt, temperature=0.2)
+            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.2)
             json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(json_str)
             
@@ -762,7 +762,7 @@ class MemoryOperationsController:
         Nếu không có mâu thuẫn, trả về {{"analysis": "Nhất quán", "resolutions": []}}.
         """
         try:
-            raw_res = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=Config.DEEP_MODEL_NAME)
+            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=Config.DEEP_MODEL_NAME)
             json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(json_str)
             
