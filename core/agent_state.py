@@ -17,10 +17,31 @@ Dùng:
     if sm.is_in(AgentState.READING, AgentState.THINKING): ...
 """
 
+import time
 from enum import Enum, auto
+from core.event_journal import record_current_event
 from core.logger import get_logger
 
 logger = get_logger("agent_state")
+
+
+def _record_state_change(
+    previous: "AgentState", current: "AgentState", *, forced: bool
+) -> None:
+    """Record after the state lock is released and never affect transitions."""
+
+    try:
+        record_current_event(
+            "runtime.state_changed",
+            {
+                "from_state": previous.name,
+                "to_state": current.name,
+                "forced": forced,
+            },
+            outcome="succeeded",
+        )
+    except Exception:
+        logger.warning("Unable to record state transition", exc_info=True)
 
 
 class AgentState(Enum):
@@ -55,6 +76,8 @@ class StateMachine:
         import threading
         self._lock = threading.Lock()
         self._state = initial
+        self._state_entered_at = time.monotonic()
+        self._duration_totals = {state: 0.0 for state in AgentState}
         logger.info(f"StateMachine khởi tạo: {self._state.name}")
 
     @property
@@ -68,6 +91,7 @@ class StateMachine:
         Không raise exception — hệ thống tiếp tục hoạt động dù transition bị chặn.
         """
         with self._lock:
+            previous_state = self._state
             allowed = _ALLOWED_TRANSITIONS.get(self._state, set())
             if new_state not in allowed:
                 logger.warning(
@@ -75,29 +99,51 @@ class StateMachine:
                     f"(allowed: {[s.name for s in allowed]})"
                 )
                 return False
+            transition_time = time.monotonic()
+            self._duration_totals[self._state] += max(
+                0.0, transition_time - self._state_entered_at
+            )
             logger.debug(f"[STATE MACHINE] {self._state.name} → {new_state.name}")
             self._state = new_state
-            return True
+            self._state_entered_at = transition_time
+        _record_state_change(previous_state, new_state, forced=False)
+        return True
 
     def force(self, new_state: AgentState):
         """Override trực tiếp, dùng khi cần recover từ lỗi."""
         with self._lock:
+            previous_state = self._state
+            transition_time = time.monotonic()
+            self._duration_totals[self._state] += max(
+                0.0, transition_time - self._state_entered_at
+            )
             logger.warning(f"[STATE MACHINE] FORCE override: {self._state.name} → {new_state.name}")
             self._state = new_state
+            self._state_entered_at = transition_time
+        _record_state_change(previous_state, new_state, forced=True)
+
+    def duration_totals(self) -> dict[AgentState, float]:
+        """Return monotonic cumulative seconds spent in every state."""
+        with self._lock:
+            totals = dict(self._duration_totals)
+            totals[self._state] += max(
+                0.0, time.monotonic() - self._state_entered_at
+            )
+            return totals
 
     # ------- Helper predicates ------- #
 
     def is_idle(self) -> bool:
-        return self._state == AgentState.IDLE
+        return self.state == AgentState.IDLE
 
     def is_busy(self) -> bool:
-        return self._state in (AgentState.THINKING, AgentState.READING, AgentState.SLEEPING)
+        return self.state in (AgentState.THINKING, AgentState.READING, AgentState.SLEEPING)
 
     def is_in(self, *states: AgentState) -> bool:
-        return self._state in states
+        return self.state in states
 
     def is_shutdown(self) -> bool:
-        return self._state == AgentState.SHUTDOWN
+        return self.state == AgentState.SHUTDOWN
 
     def __repr__(self) -> str:
-        return f"StateMachine({self._state.name})"
+        return f"StateMachine({self.state.name})"

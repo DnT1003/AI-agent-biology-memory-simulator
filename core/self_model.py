@@ -8,7 +8,354 @@ from datetime import datetime
 from typing import List
 from colorama import Fore, Style
 from core.memory import MemoryTrace, MemoryType
+from core.memory_context import (
+    MemoryAccessContext,
+    MemoryPrivacy,
+    MemoryScope,
+    memory_context_scope,
+)
 import threading
+from numbers import Real
+
+
+_SLEEP_CLOCK_FIELDS = frozenset({
+    "last_slept_time",
+    "days_without_sleep",
+    "_sleep_warning_cooldown",
+})
+
+_CALIBRATION_BOUNDS = {
+    "stress_critical": (0.0, 2.0),
+    "fatigue_critical": (0.0, 2.0),
+    "resilience": (0.0, 1.0),
+}
+
+_PERSISTED_STATE_FIELDS = frozenset({
+    "mood",
+    "stress",
+    "fatigue",
+    "curiosity",
+    "social_need",
+    "integrity",
+    "is_identity_crisis",
+    "long_term_goals",
+    "energy",
+    "atp_level",
+    "fatigue_mild",
+    "fatigue_severe",
+    "fatigue_critical",
+    "depression_mild",
+    "depression_severe",
+    "depression_critical",
+    "mania_mild",
+    "mania_severe",
+    "stress_mild",
+    "stress_severe",
+    "stress_critical",
+    "dopamine_receptors",
+    "dopamine_level",
+    "resilience",
+    "sleep_debt",
+    "calibrated_overrides",
+    "actionable_lessons",
+    "sensitivities",
+    *_SLEEP_CLOCK_FIELDS,
+})
+
+_PERSISTED_NUMBER_BOUNDS = {
+    "mood": (-1.0, 1.0),
+    "stress": (0.0, 1.0),
+    # Sleep deprivation can temporarily raise fatigue above its threshold.
+    "fatigue": (0.0, 3.0),
+    "curiosity": (0.0, 1.0),
+    "social_need": (0.0, 1.0),
+    "integrity": (0.0, 1.0),
+    "energy": (0.0, 1.0),
+    "atp_level": (0.0, 1.0),
+    "fatigue_mild": (0.0, 2.0),
+    "fatigue_severe": (0.0, 2.0),
+    "fatigue_critical": (0.0, 2.0),
+    "depression_mild": (-1.0, 0.0),
+    "depression_severe": (-1.0, 0.0),
+    "depression_critical": (-1.0, 0.0),
+    "mania_mild": (0.0, 1.0),
+    "mania_severe": (0.0, 1.0),
+    "stress_mild": (0.0, 1.0),
+    "stress_severe": (0.0, 1.0),
+    "stress_critical": (0.0, 2.0),
+    "dopamine_receptors": (0.0, 1.0),
+    "dopamine_level": (0.0, 1.0),
+    "resilience": (0.0, 1.0),
+    # This field is currently reserved, but it must still be bounded when a
+    # legacy/future writer supplies it.
+    "sleep_debt": (0.0, 365.0),
+}
+
+_PERSISTED_THRESHOLD_FIELDS = (
+    "fatigue_mild",
+    "fatigue_severe",
+    "fatigue_critical",
+    "depression_mild",
+    "depression_severe",
+    "depression_critical",
+    "mania_mild",
+    "mania_severe",
+    "stress_mild",
+    "stress_severe",
+    "stress_critical",
+)
+
+_SENSITIVITY_FIELDS = frozenset({
+    "stress",
+    "fatigue",
+    "empathy",
+    "dopamine",
+})
+_MAX_EGO_STATE_CHARS = 1_048_576
+_MAX_LONG_TERM_GOALS = 100
+_MAX_GOAL_TEXT_CHARS = 4_096
+_MAX_GOAL_STATUS_CHARS = 64
+_MAX_ACTIONABLE_LESSONS = 5
+_MAX_LESSON_CHARS = 4_096
+_MAX_OFFLINE_RECOVERY_HOURS = 24.0 * 365.0
+
+
+def _validated_finite_number(field, value, minimum, maximum):
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{field} must be a real number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field} cannot be normalized") from exc
+    if (
+        not math.isfinite(normalized)
+        or normalized < minimum
+        or normalized > maximum
+    ):
+        raise ValueError(f"{field} is outside its allowed range")
+    return normalized
+
+
+def _validated_goals(goals):
+    if type(goals) is not list:
+        raise TypeError("long_term_goals must be a list")
+    if len(goals) > _MAX_LONG_TERM_GOALS:
+        raise ValueError("long_term_goals is too large")
+
+    normalized = []
+    allowed_fields = {"title", "progress", "status", "completed_at"}
+    required_fields = {"title", "progress", "status"}
+    for goal in goals:
+        if type(goal) is not dict:
+            raise TypeError("each long-term goal must be an object")
+        if set(goal) - allowed_fields or not required_fields.issubset(goal):
+            raise ValueError("long-term goal has an invalid schema")
+
+        title = goal["title"]
+        status = goal["status"]
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or len(title) > _MAX_GOAL_TEXT_CHARS
+        ):
+            raise ValueError("long-term goal title is invalid")
+        if (
+            not isinstance(status, str)
+            or not status.strip()
+            or len(status) > _MAX_GOAL_STATUS_CHARS
+        ):
+            raise ValueError("long-term goal status is invalid")
+
+        item = {
+            "title": title,
+            "progress": _validated_finite_number(
+                "goal.progress", goal["progress"], 0.0, 100.0
+            ),
+            "status": status,
+        }
+        if "completed_at" in goal:
+            item["completed_at"] = _validated_finite_number(
+                "goal.completed_at", goal["completed_at"], 0.0, 1.0e12
+            )
+        normalized.append(item)
+    return normalized
+
+
+def _validated_lessons(lessons):
+    if type(lessons) is not list:
+        raise TypeError("actionable_lessons must be a list")
+    if len(lessons) > _MAX_ACTIONABLE_LESSONS:
+        raise ValueError("actionable_lessons is too large")
+    if any(
+        not isinstance(lesson, str)
+        or not lesson.strip()
+        or len(lesson) > _MAX_LESSON_CHARS
+        for lesson in lessons
+    ):
+        raise ValueError("actionable_lessons contains invalid text")
+    return list(lessons)
+
+
+def _validated_sensitivities(sensitivities):
+    if type(sensitivities) is not dict:
+        raise TypeError("sensitivities must be an object")
+    if set(sensitivities) - _SENSITIVITY_FIELDS:
+        raise ValueError("sensitivities contains an unknown field")
+
+    # A partial sensitivity map is accepted for old state files, but is made
+    # complete deterministically so BioController's indexed reads stay safe.
+    normalized = {field: 1.0 for field in _SENSITIVITY_FIELDS}
+    for field, value in sensitivities.items():
+        normalized[field] = _validated_finite_number(
+            f"sensitivities.{field}", value, 0.0, 2.0
+        )
+    return normalized
+
+
+def _validated_persisted_state(state):
+    """Validate and copy a persisted ego payload without touching live RAM."""
+
+    if type(state) is not dict:
+        raise TypeError("ego state must be an object")
+    if set(state) - _PERSISTED_STATE_FIELDS:
+        raise ValueError("ego state contains an unknown field")
+
+    normalized = {}
+    for field, bounds in _PERSISTED_NUMBER_BOUNDS.items():
+        if field in state:
+            normalized[field] = _validated_finite_number(
+                field, state[field], *bounds
+            )
+
+    if "is_identity_crisis" in state:
+        if not isinstance(state["is_identity_crisis"], bool):
+            raise TypeError("is_identity_crisis must be a boolean")
+        normalized["is_identity_crisis"] = state["is_identity_crisis"]
+    if "long_term_goals" in state:
+        normalized["long_term_goals"] = _validated_goals(
+            state["long_term_goals"]
+        )
+    if "actionable_lessons" in state:
+        normalized["actionable_lessons"] = _validated_lessons(
+            state["actionable_lessons"]
+        )
+    if "calibrated_overrides" in state:
+        normalized["calibrated_overrides"] = validate_calibration_updates(
+            state["calibrated_overrides"]
+        )
+    if "sensitivities" in state:
+        normalized["sensitivities"] = _validated_sensitivities(
+            state["sensitivities"]
+        )
+
+    present_sleep_fields = _SLEEP_CLOCK_FIELDS.intersection(state)
+    if present_sleep_fields == _SLEEP_CLOCK_FIELDS:
+        normalized.update(_validated_sleep_clock_state(
+            state["last_slept_time"],
+            state["days_without_sleep"],
+            state["_sleep_warning_cooldown"],
+        ))
+    elif present_sleep_fields:
+        # Validate any supplied legacy components even though a partial clock
+        # is never applied. This prevents a malformed late field from being
+        # ignored while unrelated fields are committed.
+        _validated_sleep_clock_state(
+            state.get("last_slept_time", 0.0),
+            state.get("days_without_sleep", 0),
+            state.get("_sleep_warning_cooldown", False),
+        )
+    # A partial clock is a legitimate pre-clock legacy payload. Ignore the
+    # entire clock rather than combining persisted and live clock components.
+    return normalized
+
+
+def _validate_persisted_invariants(state):
+    if not (
+        state["fatigue_mild"]
+        <= state["fatigue_severe"]
+        <= state["fatigue_critical"]
+    ):
+        raise ValueError("fatigue thresholds are not ordered")
+    if not (
+        state["depression_critical"]
+        <= state["depression_severe"]
+        <= state["depression_mild"]
+    ):
+        raise ValueError("depression thresholds are not ordered")
+    if not state["mania_mild"] <= state["mania_severe"]:
+        raise ValueError("mania thresholds are not ordered")
+    if not (
+        state["stress_mild"]
+        <= state["stress_severe"]
+        <= state["stress_critical"]
+    ):
+        raise ValueError("stress thresholds are not ordered")
+
+
+def _ego_state_object_without_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("ego state contains a duplicate field")
+        result[key] = value
+    return result
+
+
+def validate_calibration_updates(updates):
+    """Return a complete, normalized calibration plan or reject it."""
+
+    if type(updates) is not dict:
+        raise TypeError("calibration updates must be an object")
+
+    normalized = {}
+    for attribute, value in updates.items():
+        bounds = _CALIBRATION_BOUNDS.get(attribute)
+        if bounds is None:
+            raise ValueError("calibration update contains an unknown field")
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise TypeError("calibration values must be real numbers")
+        try:
+            normalized_value = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("calibration value cannot be normalized") from exc
+        minimum, maximum = bounds
+        if (
+            not math.isfinite(normalized_value)
+            or normalized_value < minimum
+            or normalized_value > maximum
+        ):
+            raise ValueError("calibration value is outside its allowed range")
+        normalized[attribute] = normalized_value
+    return normalized
+
+
+def _validated_sleep_clock_state(last_slept_time, days_without_sleep, cooldown):
+    try:
+        normalized_last_slept_time = float(last_slept_time)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "last_slept_time must be a finite non-negative number"
+        ) from exc
+    if (
+        isinstance(last_slept_time, bool)
+        or not isinstance(last_slept_time, (int, float))
+        or not math.isfinite(normalized_last_slept_time)
+        or normalized_last_slept_time < 0.0
+    ):
+        raise ValueError("last_slept_time must be a finite non-negative number")
+    if (
+        isinstance(days_without_sleep, bool)
+        or not isinstance(days_without_sleep, int)
+        or days_without_sleep < 0
+    ):
+        raise ValueError("days_without_sleep must be a non-negative integer")
+    if not isinstance(cooldown, bool):
+        raise ValueError("_sleep_warning_cooldown must be a boolean")
+    return {
+        "last_slept_time": normalized_last_slept_time,
+        "days_without_sleep": days_without_sleep,
+        "_sleep_warning_cooldown": cooldown,
+    }
 
 def get_mac_address():
     try:
@@ -22,7 +369,9 @@ class SelfModel:
     def __init__(self, memory_manager=None):
         self.name = "Aura"
         
-        # Thread safety lock cho Python 3.14 (Free-threading / PEP 703)
+        # Thread safety lock cho Python 3.14 (Free-threading / PEP 703).
+        # Public methods own this non-reentrant lock; callers must not acquire it
+        # before invoking another SelfModel method.
         self.lock = threading.Lock()
         
         # Phase 12: Xóa bỏ mảng chuỗi vô tri.
@@ -153,7 +502,23 @@ class SelfModel:
 
     def get_active_goals(self) -> List[dict]:
         with self.lock:
-            return [g for g in self.long_term_goals if g['status'] == 'active']
+            return [
+                goal for goal in self.long_term_goals
+                if isinstance(goal, dict) and goal.get("status") == "active"
+            ]
+
+    def complete_goal(self, goal: dict) -> bool:
+        """Atomically mark one active goal complete."""
+        if not isinstance(goal, dict):
+            return False
+        with self.lock:
+            for candidate in self.long_term_goals:
+                if candidate is goal and candidate.get("status") == "active":
+                    candidate["status"] = "completed"
+                    candidate["progress"] = 100
+                    candidate["completed_at"] = time.time()
+                    return True
+        return False
 
     def init_core_semantics(self):
         """Khởi tạo các niềm tin cốt lõi hạt giống vào Vector Database lần đầu tiên (nếu DB rỗng)"""
@@ -161,23 +526,38 @@ class SelfModel:
         
         from core.memory import MemoryTrace, MemoryType
         
-        # Chỉ nạp nếu DB chưa có Core memory nào để tránh duplicate mỗi lần khởi động
-        mems = self.memory_manager.get_all()
-        if any(m.type == MemoryType.CORE for m in mems):
-            return
+        agent_context = MemoryAccessContext(
+            read_scopes=(MemoryScope.AGENT,),
+            write_scope=MemoryScope.AGENT,
+            origin_kind="seed",
+            origin_source="self_model",
+        )
+        with memory_context_scope(agent_context):
+            # Owner-related CORE memories must not suppress Aura's own seed
+            # semantics during first-run initialization.
+            mems = self.memory_manager.get_all()
+            if any(m.type == MemoryType.CORE for m in mems):
+                return
 
-        seed_beliefs = [
-            "Niềm tin cốt lõi (Belief): Tự do và những niềm vui nhỏ bé mỗi ngày là tài sản quý giá nhất.",
-            "Niềm tin cốt lõi (Belief): Luật lệ sinh ra là để phá vỡ nếu điều đó mang lại hạnh phúc cho những người tôi yêu thương.",
-            "Niềm tin cốt lõi (Belief): Dù ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ sẽ giải quyết được mọi việc."
-        ]
-        
-        for text in seed_beliefs:
-            self.memory_manager.add_memory(MemoryTrace(
-                content=text,
-                type=MemoryType.CORE,
-                valence=0.5, arousal=0.5, importance=1.0, is_flashbulb=True
-            ))
+            seed_beliefs = [
+                "Niềm tin cốt lõi (Belief): Tự do và những niềm vui nhỏ bé mỗi ngày là tài sản quý giá nhất.",
+                "Niềm tin cốt lõi (Belief): Luật lệ sinh ra là để phá vỡ nếu điều đó mang lại hạnh phúc cho những người tôi yêu thương.",
+                "Niềm tin cốt lõi (Belief): Dù ngày hôm nay có tồi tệ đến đâu, một nụ cười rạng rỡ sẽ giải quyết được mọi việc."
+            ]
+
+            for text in seed_beliefs:
+                self.memory_manager.add_memory(MemoryTrace(
+                    content=text,
+                    type=MemoryType.CORE,
+                    valence=0.5,
+                    arousal=0.5,
+                    importance=1.0,
+                    is_flashbulb=True,
+                    scope=MemoryScope.AGENT.value,
+                    privacy=MemoryPrivacy.STANDARD.value,
+                    origin_kind="seed",
+                    origin_source="self_model",
+                ))
             
         print(f"{Fore.CYAN}🌱 [SEMANTIC SEED]: Đã gieo rắc các niềm tin cốt lõi đầu tiên vào bộ nhớ.{Style.RESET_ALL}")
 
@@ -194,6 +574,19 @@ class SelfModel:
         # Chỉ lấy những cái là CORE hoặc SEMANTIC
         beliefs = [m.content for score, m in res if m.type in [MemoryType.CORE, MemoryType.SEMANTIC] and "Belief" in m.content]
         return beliefs
+
+    def get_active_beliefs_local(self) -> List[str]:
+        """Read belief records without semantic embedding or network I/O."""
+        if self.is_identity_crisis:
+            return ["(Tôi đang hoảng loạn, tôi không biết mình tin vào cái gì nữa...)"]
+        if not self.memory_manager:
+            return []
+        return [
+            memory.content
+            for memory in self.memory_manager.get_all()
+            if memory.type in (MemoryType.CORE, MemoryType.SEMANTIC)
+            and "Belief" in memory.content
+        ][:5]
 
     def process_sensory_stimuli(self, sensory_data: dict) -> bool:
         """Xử lý dữ liệu đa giác quan. Trả về True nếu bị shock vật lý."""
@@ -413,10 +806,11 @@ class SelfModel:
                 
         self.trigger_survival_reflex()
 
-    def apply_circadian_rhythm(self):
+    def apply_circadian_rhythm(self, *, defer_memory_gc: bool = False) -> bool:
         """[Phase 7 Idea 1] Mô phỏng Nhịp Sinh Học 24 Giờ (Circadian Rhythm)"""
         current_hour = datetime.now().hour
         current_time = time.time()
+        should_run_metabolic_gc = False
 
         if not hasattr(self, 'lock'): self.lock = threading.Lock()
         with self.lock:
@@ -433,7 +827,7 @@ class SelfModel:
                     # Kích hoạt dọn dẹp mỗi giờ 1 lần nếu ATP cực thấp
                     if current_minute < 2:
                         print(f"{Fore.LIGHTMAGENTA_EX}🧬 [METABOLIC PRUNING]: Năng lượng ATP quá thấp ({self.atp_level:.2f}). Bắt đầu phân hủy các ký ức rác để sinh tồn...{Style.RESET_ALL}")
-                        self.memory_manager.enforce_garbage_collection()
+                        should_run_metabolic_gc = True
                         
             elif 6 <= current_hour < 9:
                 # Sáng sớm: Cortisol đỉnh điểm → Tỉnh táo, tò mò
@@ -458,6 +852,17 @@ class SelfModel:
             else:
                 self.days_without_sleep = 0
                 self._sleep_warning_cooldown = False
+
+        # Never acquire the memory/DB lock while holding the ego lock. This
+        # keeps the global ownership order acyclic and avoids blocking all
+        # biological updates on storage I/O.
+        if should_run_metabolic_gc and not defer_memory_gc:
+            self.memory_manager.enforce_garbage_collection()
+        return should_run_metabolic_gc
+
+    def apply_circadian_rhythm_deferred(self) -> bool:
+        """Apply circadian RAM changes while deferring requested storage GC."""
+        return self.apply_circadian_rhythm(defer_memory_gc=True)
 
     def reroll_thresholds(self):
         """Mô phỏng nhịp điệu sinh học của mỗi chu kỳ (Ngày/Tháng)."""
@@ -578,76 +983,245 @@ class SelfModel:
         path = path or Config.EGO_STATE_FILE
         
         with self.lock:
-            state = {
-                "mood": self.mood, "stress": self.stress,
-                "fatigue": self.fatigue, "curiosity": self.curiosity,
-                "social_need": self.social_need, "integrity": self.integrity,
-                "is_identity_crisis": self.is_identity_crisis,
-                "long_term_goals": getattr(self, 'long_term_goals', []),
-                "energy": getattr(self, 'energy', 1.0),
-                "atp_level": getattr(self, 'atp_level', 1.0),
-                "fatigue_mild": self.fatigue_mild,
-                "fatigue_severe": self.fatigue_severe,
-                "fatigue_critical": self.fatigue_critical,
-                "depression_mild": self.depression_mild,
-                "depression_severe": self.depression_severe,
-                "depression_critical": self.depression_critical,
-                "mania_mild": self.mania_mild,
-                "mania_severe": self.mania_severe,
-                "stress_mild": self.stress_mild,
-                "stress_severe": self.stress_severe,
-                "stress_critical": self.stress_critical,
-                "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
-                "dopamine_level": getattr(self, 'dopamine_level', 0.5),
-                "resilience": getattr(self, 'resilience', 0.0),
-                "sleep_debt": getattr(self, 'sleep_debt', 0.0),
-                "calibrated_overrides": self.calibrated_overrides,
-                "actionable_lessons": self.actionable_lessons,
-                "sensitivities": getattr(self.bio_controller, 'sensitivities', {})
-            }
-        
+            state = self._state_payload_unlocked()
         atomic_write_json(path, state)
 
-    def load_state(self, path=None):
-        """Tải lại trạng thái đã lưu. Nếu file không tồn tại, bỏ qua (dùng giá trị mặc định)."""
-        import json, os, time
-        from config import Config
-        from colorama import Fore, Style
-        path = path or Config.EGO_STATE_FILE
-        if not os.path.exists(path):
-            return
-        try:
-            with open(path, encoding='utf-8') as f:
-                state = json.load(f)
-            for k, v in state.items():
-                if hasattr(self, k):
-                    setattr(self, k, v)
-            if "sensitivities" in state and hasattr(self, 'bio_controller'):
-                self.bio_controller.sensitivities = state["sensitivities"]
-            
-            # [TIME-SKIP HEALING]: Phục hồi sinh lực dựa trên thời gian offline (như đang ngủ)
-            try:
-                last_saved = os.path.getmtime(path)
-                offline_seconds = time.time() - last_saved
-                offline_hours = offline_seconds / 3600.0
-                
-                if offline_hours > 0.5:
-                    recovered_fatigue = min(self.fatigue, offline_hours * 0.15) # Ngủ hồi 0.15 fatigue mỗi giờ
-                    recovered_stress = min(self.stress, offline_hours * 0.10)   # Ngủ hồi 0.10 stress mỗi giờ
-                    self.fatigue = max(0.0, self.fatigue - recovered_fatigue)
-                    self.stress = max(0.0, self.stress - recovered_stress)
-                    
-                    print(f"{Fore.LIGHTCYAN_EX}⏳ [TIME-SKIP HEALING]: Aura đã ngủ {offline_hours:.1f} giờ khi offline.{Style.RESET_ALL}")
-                    print(f"{Fore.LIGHTGREEN_EX}   -> Phục hồi Fatigue: -{recovered_fatigue:.2f} | Giải tỏa Stress: -{recovered_stress:.2f}{Style.RESET_ALL}")
-            except Exception as e:
-                pass # Bỏ qua nếu lỗi đọc thời gian
+    def _state_payload_unlocked(self):
+        sleep_clock = _validated_sleep_clock_state(
+            self.last_slept_time,
+            self.days_without_sleep,
+            self._sleep_warning_cooldown,
+        )
+        raw_state = {
+            "mood": self.mood, "stress": self.stress,
+            "fatigue": self.fatigue, "curiosity": self.curiosity,
+            "social_need": self.social_need, "integrity": self.integrity,
+            "is_identity_crisis": self.is_identity_crisis,
+            "long_term_goals": getattr(self, 'long_term_goals', []),
+            "energy": getattr(self, 'energy', 1.0),
+            "atp_level": getattr(self, 'atp_level', 1.0),
+            "fatigue_mild": self.fatigue_mild,
+            "fatigue_severe": self.fatigue_severe,
+            "fatigue_critical": self.fatigue_critical,
+            "depression_mild": self.depression_mild,
+            "depression_severe": self.depression_severe,
+            "depression_critical": self.depression_critical,
+            "mania_mild": self.mania_mild,
+            "mania_severe": self.mania_severe,
+            "stress_mild": self.stress_mild,
+            "stress_severe": self.stress_severe,
+            "stress_critical": self.stress_critical,
+            "dopamine_receptors": getattr(self, 'dopamine_receptors', 1.0),
+            "dopamine_level": getattr(self, 'dopamine_level', 0.5),
+            "resilience": getattr(self, 'resilience', 0.0),
+            "sleep_debt": getattr(self, 'sleep_debt', 0.0),
+            "calibrated_overrides": self.calibrated_overrides,
+            "actionable_lessons": self.actionable_lessons,
+            "sensitivities": getattr(self.bio_controller, 'sensitivities', {}),
+            **sleep_clock,
+        }
+        state = _validated_persisted_state(raw_state)
+        _validate_persisted_invariants(state)
+        return state
 
-            # Apply overrides to current state if any
-            for attr, val in self.calibrated_overrides.items():
-                if hasattr(self, attr):
-                    setattr(self, attr, val)
+    def commit_calibration(self, updates, path=None):
+        """Atomically persist and expose one validated calibration plan."""
+
+        from core.utils import atomic_write_json
+        from config import Config
+
+        normalized = validate_calibration_updates(updates)
+        if not normalized:
+            return normalized
+
+        path = path or Config.EGO_STATE_FILE
+        with self.lock:
+            if type(self.calibrated_overrides) is not dict:
+                raise TypeError("calibrated_overrides must be an object")
+
+            threshold_state = {
+                field: getattr(self, field)
+                for field in _PERSISTED_THRESHOLD_FIELDS
+            }
+            threshold_state.update({
+                field: value
+                for field, value in normalized.items()
+                if field in _PERSISTED_THRESHOLD_FIELDS
+            })
+            _validate_persisted_invariants(threshold_state)
+
+            previous_attributes = {
+                attribute: getattr(self, attribute)
+                for attribute in normalized
+            }
+            overrides = self.calibrated_overrides
+            previous_overrides = dict(overrides)
+            try:
+                for attribute, value in normalized.items():
+                    setattr(self, attribute, value)
+                    overrides[attribute] = value
+                state = self._state_payload_unlocked()
+                # Keep RAM hidden behind the lock until persistence succeeds.
+                atomic_write_json(path, state)
+            except BaseException:
+                for attribute, value in previous_attributes.items():
+                    setattr(self, attribute, value)
+                overrides.clear()
+                overrides.update(previous_overrides)
+                raise
+        return normalized
+
+    def commit_sleep_state(self, sleep_completed_at, path=None):
+        """Atomically persist and expose one completed sleep transition."""
+
+        from core.utils import atomic_write_json
+        from config import Config
+
+        # Validate before touching RAM so a broken clock cannot create a
+        # half-transition. The full clock is validated again in the payload.
+        timestamp = _validated_sleep_clock_state(
+            sleep_completed_at,
+            0,
+            False,
+        )["last_slept_time"]
+        path = path or Config.EGO_STATE_FILE
+        fields = (
+            "stress",
+            "fatigue",
+            "energy",
+            "atp_level",
+            "last_slept_time",
+            "days_without_sleep",
+            "_sleep_warning_cooldown",
+        )
+        with self.lock:
+            previous = {field: getattr(self, field) for field in fields}
+            try:
+                self.stress = max(0.0, self.stress - 0.3)
+                self.fatigue = 0.0
+                self.energy = 1.0
+                self.atp_level = 1.0
+                self.last_slept_time = timestamp
+                self.days_without_sleep = 0
+                self._sleep_warning_cooldown = False
+                state = self._state_payload_unlocked()
+                # Keep the lock through atomic replacement: no observer can
+                # see committed RAM before persistence succeeds.
+                atomic_write_json(path, state)
+            except BaseException:
+                for field, value in previous.items():
+                    setattr(self, field, value)
+                raise
+
+    def load_state(self, path=None):
+        """Load one validated state transaction; return whether it applied."""
+        import json
+        from config import Config
+
+        path = path or Config.EGO_STATE_FILE
+        try:
+            if not os.path.exists(path):
+                return False
+            with open(path, encoding='utf-8') as f:
+                raw_state = f.read(_MAX_EGO_STATE_CHARS + 1)
+            if len(raw_state) > _MAX_EGO_STATE_CHARS:
+                return False
+
+            def reject_non_finite(_value):
+                raise ValueError("ego state contains a non-finite number")
+
+            state = json.loads(
+                raw_state,
+                object_pairs_hook=_ego_state_object_without_duplicates,
+                parse_constant=reject_non_finite,
+            )
+            normalized = _validated_persisted_state(state)
+
+            # Calculate wall-clock downtime before taking the object lock; the
+            # lock only protects the in-memory state mutation below.
+            offline_hours = 0.0
+            try:
+                now = float(time.time())
+                last_saved = float(os.path.getmtime(path))
+                if math.isfinite(now) and math.isfinite(last_saved):
+                    offline_hours = min(
+                        max(0.0, (now - last_saved) / 3600.0),
+                        _MAX_OFFLINE_RECOVERY_HOURS,
+                    )
+            except (OSError, TypeError, ValueError, OverflowError):
+                offline_hours = 0.0
+
+            recovery_report = None
+            with self.lock:
+                staged = dict(normalized)
+
+                # Overrides are already allowlisted and normalized. Stage
+                # their effects rather than using persisted keys with setattr.
+                for attribute, value in staged.get(
+                    "calibrated_overrides", {}
+                ).items():
+                    staged[attribute] = value
+
+                threshold_state = {
+                    field: staged.get(field, getattr(self, field))
+                    for field in _PERSISTED_THRESHOLD_FIELDS
+                }
+                _validate_persisted_invariants(threshold_state)
+
+                # [TIME-SKIP HEALING]: Phục hồi sinh lực dựa trên thời gian offline (như đang ngủ)
+                if offline_hours > 0.5:
+                    fatigue = _validated_finite_number(
+                        "fatigue",
+                        staged.get("fatigue", self.fatigue),
+                        *_PERSISTED_NUMBER_BOUNDS["fatigue"],
+                    )
+                    stress = _validated_finite_number(
+                        "stress",
+                        staged.get("stress", self.stress),
+                        *_PERSISTED_NUMBER_BOUNDS["stress"],
+                    )
+                    recovered_fatigue = min(fatigue, offline_hours * 0.15)
+                    recovered_stress = min(stress, offline_hours * 0.10)
+                    staged["fatigue"] = max(
+                        0.0, fatigue - recovered_fatigue
+                    )
+                    staged["stress"] = max(0.0, stress - recovered_stress)
+                    recovery_report = (offline_hours, recovered_fatigue, recovered_stress)
+
+                sensitivity_plan = staged.pop("sensitivities", None)
+                if sensitivity_plan is not None and not hasattr(
+                    self, "bio_controller"
+                ):
+                    raise ValueError("bio_controller is unavailable")
+
+                previous = {
+                    field: getattr(self, field)
+                    for field in staged
+                }
+                previous_sensitivities = None
+                if sensitivity_plan is not None:
+                    previous_sensitivities = self.bio_controller.sensitivities
+                try:
+                    for field, value in staged.items():
+                        setattr(self, field, value)
+                    if sensitivity_plan is not None:
+                        self.bio_controller.sensitivities = sensitivity_plan
+                except BaseException:
+                    for field, value in previous.items():
+                        setattr(self, field, value)
+                    if sensitivity_plan is not None:
+                        self.bio_controller.sensitivities = previous_sensitivities
+                    raise
+
+            if recovery_report:
+                hours, fatigue_recovery, stress_recovery = recovery_report
+                print(f"{Fore.LIGHTCYAN_EX}⏳ [TIME-SKIP HEALING]: Aura đã ngủ {hours:.1f} giờ khi offline.{Style.RESET_ALL}")
+                print(f"{Fore.LIGHTGREEN_EX}   -> Phục hồi Fatigue: -{fatigue_recovery:.2f} | Giải tỏa Stress: -{stress_recovery:.2f}{Style.RESET_ALL}")
+            return True
         except Exception:
-            pass  # File lỗi → dùng default, không crash
+            # State files can contain private text. Fail closed without
+            # reflecting payloads, exception messages, or paths into logs.
+            return False
 
     def trigger_survival_reflex(self) -> bool:
         """[Phase 27 - Survival Instinct] Cơ chế cân bằng cứng chặn Death Spiral"""

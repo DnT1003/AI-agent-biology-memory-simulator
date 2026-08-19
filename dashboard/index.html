@@ -498,6 +498,10 @@
                         </select>
                     </div>
 
+                    <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">
+                        API keys are read from environment variables or Kubernetes Secrets and are never exposed by this dashboard.
+                    </p>
+
                     <div id="group_local" class="provider-group">
                         <div class="form-group">
                             <label>Local Model Name (e.g., phi3:mini)</label>
@@ -506,41 +510,23 @@
                     </div>
 
                     <div id="group_gemini" class="provider-group" style="display:none;">
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Gemini API Key</label>
-                                <input type="password" id="gemini_api_key" class="form-control" placeholder="AIzaSy...">
-                            </div>
-                            <div class="form-group">
-                                <label>Model Name</label>
-                                <input type="text" id="gemini_model" class="form-control" placeholder="gemini-3.0-flash">
-                            </div>
+                        <div class="form-group">
+                            <label>Model Name</label>
+                            <input type="text" id="gemini_model" class="form-control" placeholder="gemini-3.0-flash">
                         </div>
                     </div>
 
                     <div id="group_openai" class="provider-group" style="display:none;">
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>OpenAI API Key</label>
-                                <input type="password" id="openai_api_key" class="form-control" placeholder="sk-...">
-                            </div>
-                            <div class="form-group">
-                                <label>Model Name</label>
-                                <input type="text" id="openai_model" class="form-control" placeholder="gpt-4o-mini">
-                            </div>
+                        <div class="form-group">
+                            <label>Model Name</label>
+                            <input type="text" id="openai_model" class="form-control" placeholder="gpt-4o-mini">
                         </div>
                     </div>
 
                     <div id="group_anthropic" class="provider-group" style="display:none;">
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Anthropic API Key</label>
-                                <input type="password" id="anthropic_api_key" class="form-control" placeholder="sk-ant-...">
-                            </div>
-                            <div class="form-group">
-                                <label>Model Name</label>
-                                <input type="text" id="anthropic_model" class="form-control" placeholder="claude-3-haiku-20240307">
-                            </div>
+                        <div class="form-group">
+                            <label>Model Name</label>
+                            <input type="text" id="anthropic_model" class="form-control" placeholder="claude-3-haiku-20240307">
                         </div>
                     </div>
 
@@ -641,10 +627,6 @@
                 if(data.openai_model) document.getElementById('openai_model').value = data.openai_model;
                 if(data.anthropic_model) document.getElementById('anthropic_model').value = data.anthropic_model;
                 
-                if(data.gemini_api_key) document.getElementById('gemini_api_key').value = data.gemini_api_key;
-                if(data.openai_api_key) document.getElementById('openai_api_key').value = data.openai_api_key;
-                if(data.anthropic_api_key) document.getElementById('anthropic_api_key').value = data.anthropic_api_key;
-                
                 toggleProviderFields();
             } catch(e) { console.error("Could not load settings"); }
         }
@@ -662,9 +644,6 @@
                 gemini_model: document.getElementById('gemini_model').value,
                 openai_model: document.getElementById('openai_model').value,
                 anthropic_model: document.getElementById('anthropic_model').value,
-                gemini_api_key: document.getElementById('gemini_api_key').value,
-                openai_api_key: document.getElementById('openai_api_key').value,
-                anthropic_api_key: document.getElementById('anthropic_api_key').value,
             };
 
             try {
@@ -693,14 +672,93 @@
         }
 
         // Chat System
+        const seenChatIds = new Set(
+            JSON.parse(sessionStorage.getItem('auraSeenChatIds') || '[]')
+        );
+        const pendingChatIds = new Set(
+            JSON.parse(sessionStorage.getItem('auraPendingChatIds') || '[]')
+        );
+
+        function rememberChatId(id) {
+            seenChatIds.add(id);
+            const bounded = Array.from(seenChatIds).slice(-500);
+            if (bounded.length !== seenChatIds.size) {
+                seenChatIds.clear();
+                bounded.forEach(value => seenChatIds.add(value));
+            }
+            sessionStorage.setItem('auraSeenChatIds', JSON.stringify(bounded));
+        }
+
+        function persistPendingChatIds() {
+            const bounded = Array.from(pendingChatIds).slice(-500);
+            if (bounded.length !== pendingChatIds.size) {
+                pendingChatIds.clear();
+                bounded.forEach(value => pendingChatIds.add(value));
+            }
+            sessionStorage.setItem(
+                'auraPendingChatIds',
+                JSON.stringify(bounded)
+            );
+        }
+
         async function fetchChat() {
             try {
-                const res = await fetch('/api/chat');
+                const requestedIds = Array.from(pendingChatIds).slice(0, 50);
+                if(requestedIds.length === 0) return;
+                // Rotate the polling window so stale/orphaned ids cannot keep
+                // newer responses permanently outside the first batch.
+                requestedIds.forEach(id => {
+                    pendingChatIds.delete(id);
+                    pendingChatIds.add(id);
+                });
+                const params = new URLSearchParams();
+                requestedIds.forEach(id => params.append('id', id));
+                const res = await fetch(`/api/chat?${params.toString()}`);
+                if(!res.ok) return;
                 const data = await res.json();
+                const receipts = [];
                 if(data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
-                        appendMessage(msg.role, msg.content);
+                        if(msg.receipt) receipts.push({receipt: msg.receipt, id: msg.id});
+                        if(msg.id && !seenChatIds.has(msg.id)) {
+                            appendMessage(msg.role, msg.content);
+                            rememberChatId(msg.id);
+                        }
                     });
+                }
+                let pendingChanged = false;
+                if(data.terminal && data.terminal.length > 0) {
+                    data.terminal.forEach(item => {
+                        if(!item.id) return;
+                        pendingChanged = pendingChatIds.delete(item.id) || pendingChanged;
+                        if(item.state !== 'completed' && !seenChatIds.has(item.id)) {
+                            appendMessage(
+                                'aura',
+                                'Yêu cầu này đã hết hạn hoặc không thể hoàn tất.'
+                            );
+                            rememberChatId(item.id);
+                        }
+                    });
+                }
+                if(receipts.length > 0) {
+                    const ackResponse = await fetch('/api/chat/ack', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({receipts: receipts.map(item => item.receipt)})
+                    });
+                    if(ackResponse.ok) {
+                        const ackData = await ackResponse.json();
+                        const ackedReceipts = new Set(ackData.acked || []);
+                        receipts.forEach(item => {
+                            if(ackedReceipts.has(item.receipt)) {
+                                pendingChanged = pendingChatIds.delete(item.id) || pendingChanged;
+                            }
+                        });
+                    }
+                }
+                // Persist both round-robin order and terminal cleanup.
+                if(pendingChanged || requestedIds.length > 0) {
+                    persistPendingChatIds();
                 }
             } catch(e) {}
         }
@@ -727,18 +785,30 @@
             input.value = '';
             
             try {
-                await fetch('/api/chat', {
+                const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({message: msg})
                 });
-            } catch(e) {}
+                if(!res.ok) {
+                    appendMessage('aura', 'Không thể xếp hàng tin nhắn lúc này. Vui lòng thử lại.');
+                } else {
+                    const queued = await res.json();
+                    if(queued.id) {
+                        pendingChatIds.add(queued.id);
+                        persistPendingChatIds();
+                    }
+                }
+            } catch(e) {
+                appendMessage('aura', 'Dashboard đang mất kết nối với hàng đợi chat.');
+            }
         }
 
         // Init
         setInterval(fetchState, 1500);
         setInterval(fetchChat, 1000);
         fetchState();
+        fetchChat();
         loadSettings();
     </script>
 </body>

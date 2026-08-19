@@ -36,18 +36,31 @@ class PerceptionController:
 
         return f"[MÔI TRƯỜNG]: {time_desc}. {storage_info}"
 
-    def process_text_input(self, text: str) -> dict:
+    def process_text_input(self, text: str, *, force_local: bool = False) -> dict:
         """Phân tích cảm xúc từ text input của User."""
         if hasattr(self.engine, 'local_perception'):
-            return self.engine.local_perception.analyze(text)
+            perception = self.engine.local_perception
+            if force_local and getattr(perception, "mode", None) != "native":
+                return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+            return perception.analyze(text)
         return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
 
-    def get_sensory_summary(self, user_input: str) -> str:
+    def get_sensory_summary(
+        self,
+        user_input: str,
+        *,
+        force_local: bool = False,
+        perception_result: dict | None = None,
+    ) -> str:
         """Tổng hợp toàn bộ context cảm giác thành một chuỗi prompt."""
         env = self.get_environmental_context()
         
         # Lấy kết quả từ Local Perception
-        sentiment = self.process_text_input(user_input)
+        sentiment = (
+            self.process_text_input(user_input, force_local=force_local)
+            if perception_result is None
+            else dict(perception_result)
+        )
         valence = sentiment.get('valence', 0.0)
         arousal = sentiment.get('arousal', 0.5)
         

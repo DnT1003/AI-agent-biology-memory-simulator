@@ -1,172 +1,220 @@
+import logging
 import os
 import sys
-import importlib.util
+from collections.abc import Mapping
+from typing import Any, Literal
+
 from config import Config
 
-try:
-    import torch  # type: ignore
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
 
-# Make NanoGPT SLM directory importable (model.py, tokenizer.py, config.py live there)
-if Config.SLM_DIR not in sys.path:
-    sys.path.append(Config.SLM_DIR)
+logger = logging.getLogger(__name__)
+
+SLMMode = Literal["remote", "native"]
 
 
-def _load_nanogpt_config():
-    cfg_path = os.path.join(Config.SLM_DIR, "config.py")
-    spec = importlib.util.spec_from_file_location("aura_nanogpt_config", cfg_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load SLM config at {cfg_path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+class SLMError(RuntimeError):
+    """Base error for SLM routing and inference failures."""
 
 
-try:
-    if TORCH_AVAILABLE:
-        from model import AuraFlashModel, block_size  # type: ignore
-        from tokenizer import BPETokenizer  # type: ignore
-    else:
-        AuraFlashModel = None
-        BPETokenizer = None
-        block_size = 0
-except Exception:
-    AuraFlashModel = None
-    BPETokenizer = None
-    block_size = 0
+class SLMNotReadyError(SLMError):
+    """Raised when native inference is requested before the model is ready."""
+
+
+class SLMServiceError(SLMError):
+    """Raised when the remote GPU service cannot provide a valid response."""
 
 
 class SLMCore:
-    """Native SLM inference wrapper for the local NanoGPT core."""
+    """SLM inference wrapper with structurally separate remote and native modes.
 
-    def __init__(self):
-        self.device = "cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu"
-        custom_path = os.path.join(Config.SLM_DIR, "aura_moe_700m.pth")
-        default_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
-        self.model_path = custom_path if os.path.exists(custom_path) else default_path
+    ``remote`` is the backwards-compatible default for the main brain process.
+    ``native`` is reserved for the GPU service and never performs HTTP calls.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: SLMMode = "remote",
+        service_url: str | None = None,
+        http_client: Any | None = None,
+    ):
+        if mode not in ("remote", "native"):
+            raise ValueError("mode must be either 'remote' or 'native'")
+
+        self.mode: SLMMode = mode
+        self.service_url = (service_url or Config.GPU_SERVICE_URL).rstrip("/")
+        self._http_client = http_client
+
+        self.device = "cpu"
         self.model = None
-        self.is_ready = False
-        self.use_gpu_service = True
         self.tokenizer = None
+        self.is_ready = False
+        self.init_error: str | None = None
 
-        if Config.SLM_ENABLED and AuraFlashModel and TORCH_AVAILABLE:
+        self._torch = None
+        self._model_class = None
+        self._tokenizer_class = None
+        self._block_size = 0
+
+        self.model_path = Config.SLM_MODEL_PATH
+        self.vocab_path = os.path.join(Config.SLM_MODEL_DIR, "vocab.json")
+
+        # Remote clients must not import torch/NanoGPT or allocate model memory.
+        if self.mode == "native":
+            self._initialize_native_backend()
+
+    def _initialize_native_backend(self) -> None:
+        try:
+            self._validate_native_assets()
+            import torch  # type: ignore
+
+            if Config.SLM_DIR not in sys.path:
+                sys.path.append(Config.SLM_DIR)
+
+            from model import AuraFlashModel, block_size  # type: ignore
+            from tokenizer import BPETokenizer  # type: ignore
+
+            self._torch = torch
+            self._model_class = AuraFlashModel
+            self._tokenizer_class = BPETokenizer
+            self._block_size = int(block_size)
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
             self._init_tokenizer()
             self.load_model()
+        except Exception as exc:
+            self.init_error = str(exc)
+            self.is_ready = False
+            logger.error("[SLM Native Init Error]: %s", exc, exc_info=True)
 
-    def _init_tokenizer(self):
-        if BPETokenizer is None:
+    def _validate_native_assets(self) -> None:
+        if not os.path.isfile(self.model_path):
+            raise FileNotFoundError(f"SLM checkpoint not found: {self.model_path}")
+        if not os.path.isfile(self.vocab_path):
+            raise FileNotFoundError(f"SLM vocabulary not found: {self.vocab_path}")
+
+    def _init_tokenizer(self) -> None:
+        if self._tokenizer_class is None:
             return
         try:
-            vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
-            tok = BPETokenizer()
-            if os.path.exists(vocab_path):
-                tok.load(vocab_path)
-            self.tokenizer = tok
-        except Exception as e:
-            from core.logger import get_logger
+            tokenizer = self._tokenizer_class()
+            tokenizer.load(self.vocab_path)
+            if not getattr(tokenizer, "vocab_size", 0):
+                raise ValueError("SLM vocabulary is empty")
+            self.tokenizer = tokenizer
+        except Exception as exc:
+            self.init_error = str(exc)
+            self.tokenizer = None
+            logger.error("[SLM Tokenizer Init Error]: %s", exc, exc_info=True)
 
-            get_logger("slm_core").error(f"[SLM Tokenizer Init Error]: {e}")
-
-    def load_model(self):
-        if AuraFlashModel is None:
+    def load_model(self) -> None:
+        if self.mode != "native":
+            raise RuntimeError("load_model() is only valid in native mode")
+        if self._model_class is None or self._torch is None:
+            self.is_ready = False
             return
-        import logging
 
         try:
+            self._validate_native_assets()
             if not self.tokenizer:
                 self._init_tokenizer()
+            if not self.tokenizer or not getattr(self.tokenizer, "vocab_size", 0):
+                raise RuntimeError("SLM tokenizer is not ready")
 
-            if self.tokenizer and getattr(self.tokenizer, "vocab_size", None):
-                model_vocab_size = int(self.tokenizer.vocab_size)
-            else:
-                model_vocab_size = int(_load_nanogpt_config().vocab_size)
+            model_vocab_size = int(self.tokenizer.vocab_size)
 
-            self.model = AuraFlashModel(model_vocab_size)
+            self.model = self._model_class(model_vocab_size)
+            try:
+                state = self._torch.load(
+                    self.model_path, map_location=self.device, weights_only=True
+                )
+            except TypeError:
+                state = self._torch.load(self.model_path, map_location=self.device)
+            if not isinstance(state, Mapping):
+                raise ValueError("SLM checkpoint does not contain a state mapping")
 
-            if os.path.exists(self.model_path):
-                try:
-                    state = torch.load(self.model_path, map_location=self.device, weights_only=True)
-                except TypeError:
-                    state = torch.load(self.model_path, map_location=self.device)
+            state = {
+                key.replace(".moe.", ".mlp."): value
+                for key, value in state.items()
+            }
+            self.model.load_state_dict(state, strict=False)
 
-                try:
-                    state = {k.replace(".moe.", ".mlp."): v for k, v in state.items()}
-                    self.model.load_state_dict(state, strict=False)
-                except Exception as ex:
-                    logging.warning(f"Could not load state dict cleanly: {ex}")
-
-            dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+            dtype = self._torch.bfloat16 if self.device == "cuda" else self._torch.float32
             self.model.to(device=self.device, dtype=dtype)
             self.model.eval()
-            self.is_ready = True
-        except Exception as e:
-            logging.error(f"[SLM Model Load Error]: {e}", exc_info=True)
+            self.is_ready = self.model is not None and self.tokenizer is not None
+            self.init_error = None if self.is_ready else "Native SLM is not ready"
+        except Exception as exc:
+            self.init_error = str(exc)
             self.is_ready = False
+            logger.error("[SLM Model Load Error]: %s", exc, exc_info=True)
 
-    def generate_thought(self, prompt_text: str, max_tokens: int = 50):
-        """Generate a short local thought sequence."""
+    def generate_thought(self, prompt_text: str, max_tokens: int = 50) -> str:
+        """Generate a short thought using exactly the configured execution mode."""
+        if self.mode == "remote":
+            return self._generate_remote(prompt_text, max_tokens)
+        return self._generate_native(prompt_text, max_tokens)
 
-        if self.use_gpu_service:
+    def _generate_remote(self, prompt_text: str, max_tokens: int) -> str:
+        client = self._http_client
+        if client is None:
             import requests
 
-            try:
-                # Thay vì local loopback, sử dụng service URL từ Config (hỗ trợ K8s)
-                resp = requests.post(
-                    f"{Config.GPU_SERVICE_URL}/generate",
-                    json={"prompt": prompt_text, "max_new_tokens": max_tokens},
-                    timeout=20,
-                )
-                if resp.status_code == 200:
-                    return resp.json().get("thought", "...")
-            except Exception as e:
-                import logging
+            client = requests
 
-                logging.error(f"[SLM GPU API Error]: {e}", exc_info=True)
-            return "..."
+        try:
+            response = client.post(
+                f"{self.service_url}/generate",
+                json={"prompt": prompt_text, "max_new_tokens": max_tokens},
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            thought = payload.get("thought") if isinstance(payload, dict) else None
+            if not isinstance(thought, str) or not thought.strip():
+                raise ValueError("GPU service returned an invalid thought payload")
+            return thought
+        except Exception as exc:
+            raise SLMServiceError("GPU SLM service request failed") from exc
 
-        if not self.is_ready or not self.model or not self.tokenizer:
-            return "..."
+    def _generate_native(self, prompt_text: str, max_tokens: int) -> str:
+        if not self.is_ready or self.model is None or self.tokenizer is None:
+            raise SLMNotReadyError(self.init_error or "Native SLM is not ready")
+        if self._torch is None:
+            raise SLMNotReadyError("Torch is unavailable for native SLM inference")
 
         try:
             encoded = self.tokenizer.encode(prompt_text)
             if not encoded:
-                return "..."
+                raise ValueError("Prompt produced no tokens")
 
-            context = torch.tensor(encoded, dtype=torch.long, device=self.device).unsqueeze(0)
-            context = context[:, -block_size:]
+            context = self._torch.tensor(
+                encoded, dtype=self._torch.long, device=self.device
+            ).unsqueeze(0)
+            context = context[:, -self._block_size :]
 
             device_type = "cuda" if self.device == "cuda" else "cpu"
             autocast_enabled = device_type == "cuda"
-
-            with torch.no_grad(), torch.amp.autocast(
-                device_type, dtype=torch.bfloat16, enabled=autocast_enabled
+            with self._torch.no_grad(), self._torch.amp.autocast(
+                device_type,
+                dtype=self._torch.bfloat16,
+                enabled=autocast_enabled,
             ):
-                out = self.model.generate(context, max_new_tokens=max_tokens)
+                output = self.model.generate(context, max_new_tokens=max_tokens)
 
+            return self.tokenizer.decode(output[0].tolist())
+        except Exception as exc:
+            raise SLMError("Native SLM inference failed") from exc
+        finally:
             if self.device == "cuda":
-                torch.cuda.empty_cache()
+                self._torch.cuda.empty_cache()
 
-            return self.tokenizer.decode(out[0].tolist())
-        except Exception as e:
-            import logging
-
-            logging.error(f"[SLM Native Inference Error]: {e}", exc_info=True)
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
-            return f"[SLM Error]: {e}"
-
-    def log_experience_for_finetuning(self, text_data: str):
+    def log_experience_for_finetuning(self, text_data: str) -> None:
         """Append data to a finetune queue for offline training."""
-
         try:
-            log_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
+            log_path = os.path.join(Config.OUTPUT_DIR, "slm_finetune_data.txt")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(text_data.strip() + "\n\n")
+            with open(log_path, "a", encoding="utf-8") as file_handle:
+                file_handle.write(text_data.strip() + "\n\n")
             print("[SLM]: Logged finetune experience.")
-        except Exception as e:
-            import logging
-
-            logging.error(f"[SLM Finetune Logging Error]: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error("[SLM Finetune Logging Error]: %s", exc, exc_info=True)

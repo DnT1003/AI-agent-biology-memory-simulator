@@ -85,6 +85,16 @@ class CollectionWrapper:
         }
         return self.client._request("POST", f"collections/{self.id}/upsert", json=payload)
 
+    def add(self, ids: List[str], embeddings: List[List[float]], metadatas: List[Dict]):
+        """Create records without allowing an existing vector to be replaced."""
+        payload = {
+            "ids": ids,
+            "embeddings": embeddings,
+            "metadatas": metadatas,
+            "documents": [None] * len(ids),
+        }
+        return self.client._request("POST", f"collections/{self.id}/add", json=payload)
+
     def update(self, ids: List[str], embeddings: Optional[List[List[float]]] = None, metadatas: Optional[List[Dict]] = None):
         payload = {"ids": ids}
         if embeddings: payload["embeddings"] = embeddings
@@ -101,10 +111,12 @@ class CollectionWrapper:
             payload["where"] = where
         return self.client._request("POST", f"collections/{self.id}/query", json=payload)
 
-    def get(self, where: Optional[Dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: List[str] = None):
+    def get(self, ids: Optional[List[str]] = None, where: Optional[Dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: List[str] = None):
         payload = {
             "include": include or ["metadatas"]
         }
+        if ids is not None:
+            payload["ids"] = ids
         if where:
             payload["where"] = where
         if limit: payload["limit"] = limit
@@ -113,8 +125,13 @@ class CollectionWrapper:
 
     def delete(self, ids: Optional[List[str]] = None, where: Optional[Dict] = None):
         payload = {}
-        if ids: payload["ids"] = ids
+        if ids is not None:
+            if not ids:
+                return None
+            payload["ids"] = ids
         if where: payload["where"] = where
+        if not payload:
+            return None
         return self.client._request("POST", f"collections/{self.id}/delete", json=payload)
 
     def count(self):

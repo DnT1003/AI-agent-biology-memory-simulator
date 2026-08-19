@@ -7,6 +7,8 @@ metadata:
     app: aura-brain
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: aura-brain
@@ -15,6 +17,7 @@ spec:
       labels:
         app: aura-brain
     spec:
+      terminationGracePeriodSeconds: 60
       # FIX: Them initContainers de Brain cho Chroma san sang truoc khi khoi dong
       initContainers:
         - name: wait-for-chroma
@@ -46,6 +49,18 @@ spec:
                 secretKeyRef:
                   name: aura-secrets
                   key: API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
           resources:
             limits:
               memory: "2Gi"
@@ -56,13 +71,7 @@ spec:
           volumeMounts:
             - name: brain-storage
               mountPath: /app/outputs
-            # SLM weights chia se voi aura-gpu
-            - name: slm-storage
-              mountPath: /app/core/engine/nanogpt
       volumes:
         - name: brain-storage
           persistentVolumeClaim:
             claimName: brain-pvc
-        - name: slm-storage
-          persistentVolumeClaim:
-            claimName: gpu-pvc

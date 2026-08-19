@@ -5,6 +5,10 @@ __pycache__/
 .git/
 .idea/
 .vscode/
+.agents/
+.codex/
+test/
+tests/
 
 # Bo qua thu muc output dia phuong (khi dua len K8s se dung PVC)
 outputs/
@@ -22,5 +26,6 @@ k8s/aura-secrets.yaml
 
 # Bo qua Mieu/MoE checkpoint models (se duoc tai ve tu xa, hoac tu mount, tuy kien truc, 
 # neu muon copy vao container thi comment dong nay lai)
-# core/engine/nanogpt/*.pth
-# core/engine/nanogpt/*.bin
+core/engine/nanogpt/*.pth
+core/engine/nanogpt/*.bin
+core/engine/nanogpt/input.txt

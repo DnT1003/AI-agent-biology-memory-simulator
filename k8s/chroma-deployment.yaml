@@ -7,6 +7,8 @@ metadata:
     app: aura-chromadb
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: aura-chromadb
@@ -15,6 +17,7 @@ spec:
       labels:
         app: aura-chromadb
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: chromadb
           image: aura/chromadb:latest

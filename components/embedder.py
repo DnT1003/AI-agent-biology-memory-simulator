@@ -8,6 +8,8 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 EMBEDDING_DIM = 1024  # MRL: Giảm chiều Vector xuống 1024 (Phase 17B)
 
 class Embedder:
+    requires_network = True
+
     def __init__(self):
         from core.settings_manager import settings_manager
         self.settings = settings_manager

@@ -20,11 +20,12 @@ class SLMTrainer:
 
     def __init__(self, engine):
         self.engine = engine
-        self.training_file = os.path.join(Config.SLM_DIR, "input.txt")
-        self.model_path = os.path.join(Config.SLM_DIR, "aura_flash_v5.pth")
+        os.makedirs(Config.SLM_MODEL_DIR, exist_ok=True)
+        self.training_file = os.path.join(Config.SLM_MODEL_DIR, "input.txt")
+        self.model_path = Config.SLM_MODEL_PATH
 
         self.tokenizer = BPETokenizer(vocab_size=16384)
-        vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
+        vocab_path = os.path.join(Config.SLM_MODEL_DIR, "vocab.json")
         if os.path.exists(vocab_path):
             try:
                 self.tokenizer.load(vocab_path)
@@ -79,7 +80,7 @@ Không dùng markdown, viết liền mạch.
             text = f.read()
 
         # Tokenizer
-        vocab_path = os.path.join(Config.SLM_DIR, "vocab.json")
+        vocab_path = os.path.join(Config.SLM_MODEL_DIR, "vocab.json")
         if os.path.exists(vocab_path):
             self.tokenizer.load(vocab_path)
         else:
@@ -156,7 +157,7 @@ Không dùng markdown, viết liền mạch.
         )
 
     def distill_memories_to_dataset(self):
-        queue_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
+        queue_path = os.path.join(Config.OUTPUT_DIR, "slm_finetune_data.txt")
         if not os.path.exists(queue_path):
             return
 

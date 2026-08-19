@@ -11,13 +11,20 @@ data:
 
   # GPU Service (NanoGPT SLM)
   GPU_SERVICE_URL: "http://aura-gpu-svc:8001"
+  AURA_SLM_ENABLED: "false"
+  AURA_SLM_TRAINING_ENABLED: "false"
+  SLM_MODEL_DIR: "/app/slm"
+  SLM_MODEL_PATH: "/app/slm/aura_flash_v5.pth"
 
-  # Local LLM — Gemma 4 E4B (Unsloth, 4-bit)
-  # Model được mount vào container qua PVC; path trong container là /app/models/Gemma4_E4B
-  GEMMA_MODEL_PATH: "/app/models/Gemma4_E4B"
+  # Brain image is CPU-only; do not pretend the CUDA/Unsloth Gemma backend is ready.
+  # A future GPU inference endpoint should own this capability.
+  AURA_LOCAL_LLM_ENABLED: "false"
 
   # Output dir
   AURA_OUTPUT_DIR: "/app/outputs"
+  # Release abandoned browser responses after one day so the outbox cannot
+  # remain backpressured forever when a tab disappears without ACKing.
+  AURA_CHAT_RESPONSE_RETENTION_SECONDS: "86400"
 
   # Embedding
   EMBEDDING_DIM: "1024"
@@ -26,3 +33,4 @@ data:
   AURA_PING_THRESHOLD: "60"
   AURA_ANXIETY_THRESHOLD: "600"
   AURA_STM_MAX: "15"
+  AURA_COGNITIVE_TICK_INTERVAL_SECONDS: "30"

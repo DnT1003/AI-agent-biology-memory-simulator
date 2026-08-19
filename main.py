@@ -1,7 +1,6 @@
 import sys
 import atexit
 import signal
-import threading
 import asyncio
 try:
     from prompt_toolkit import PromptSession
@@ -12,9 +11,12 @@ except ImportError:
 from colorama import Fore, Style, init
 
 from core.engine import CognitiveEngine
-from core.memory import MemoryTrace
+from core.engine.interaction_actor import (
+    InteractionActorClosed,
+    InteractionCancelled,
+    InteractionQueueFull,
+)
 from core.gpu_config import setup_gpu
-from config import Config
 
 # Khởi tạo màu sắc cho Terminal
 init(autoreset=True)
@@ -56,9 +58,12 @@ if __name__ == "__main__":
             is_shutting_down = True
             print(f"\n{Fore.YELLOW}He thong dang tat...{Style.RESET_ALL}")
             try:
-                ai.autonomous.stop()  # Sẽ tự động block until joined
-                ai.memory_ops.sleep()    # Only save AFTER background thread has stopped
-                if hasattr(ai, 'shutdown'): ai.shutdown() # Finalize
+                stopped_cleanly = ai.shutdown()
+                if not stopped_cleanly:
+                    print(
+                        "Shutdown hoan tat o che do degraded; xem log de biet "
+                        "worker hoac transport nao khong dung dung han."
+                    )
             except Exception as e:
                 print(f"Loi khi luu tri nho: {e}")
 
@@ -103,7 +108,22 @@ if __name__ == "__main__":
             print(f"{Fore.YELLOW}⚠️ Không khởi tạo được prompt_toolkit (có thể chạy trong IDE?): {e}. Fallback sang input(){Style.RESET_ALL}")
             use_prompt_toolkit = False
 
-        reply_task = None
+        active_ticket = None
+
+        async def observe_reply(ticket):
+            try:
+                await ticket.wait()
+            except InteractionCancelled:
+                pass
+            except Exception as exc:
+                from core.logger import get_logger
+
+                get_logger("main").error(
+                    "Interaction request failed", exc_info=True
+                )
+                print(
+                    f"\n{Fore.RED}[INTERACTION FAILED]: {exc}{Style.RESET_ALL}"
+                )
         
         while True:
             try:
@@ -113,17 +133,11 @@ if __name__ == "__main__":
                 else:
                     u_in = await asyncio.to_thread(input, f"\n{Fore.WHITE}👤 Bạn: {Style.RESET_ALL}")
                     
-                if getattr(ai.interaction, 'is_interrupted', None) is False and reply_task and not reply_task.done():
-                    ai.interaction.is_interrupted = True
-                    
                 if not u_in.strip():
                     continue
                     
                 if u_in.lower() in ['exit', 'quit']:
                     break
-                elif u_in.lower() == 'sleep':
-                    ai.memory_ops.sleep()
-                    continue
                 elif u_in.lower() == 'status':
                     print(f"--- STATUS ---")
                     mem_count = len(ai.memory.get_all())
@@ -132,15 +146,25 @@ if __name__ == "__main__":
                     print(f"Integrity: {ai.ego.integrity:.2f}")
                     print(f"Fatigue: {ai.ego.fatigue:.2f} | Social Need: {ai.ego.social_need:.2f} | Curiosity: {ai.ego.curiosity:.2f}")
                     continue
-                
-                # Cập nhật thời điểm người dùng vừa tương tác để reset idle time
-                import time
-                ai.last_interaction_time = time.time()
-                ai.interaction.is_interrupted = False
-                
-                reply_task = asyncio.create_task(
-                    asyncio.to_thread(ai.interaction.interaction_loop, u_in)
-                )
+
+                if active_ticket is not None and not active_ticket.future.done():
+                    active_ticket.cancel("superseded by newer CLI input")
+
+                try:
+                    if u_in.lower() == 'sleep':
+                        active_ticket = ai.submit_sleep(source="cli")
+                    else:
+                        # Cập nhật thời điểm người dùng vừa tương tác để reset idle time
+                        import time
+                        ai.last_interaction_time = time.time()
+                        active_ticket = ai.submit_interaction(
+                            u_in, source="cli"
+                        )
+                    asyncio.create_task(observe_reply(active_ticket))
+                except InteractionQueueFull:
+                    print(f"{Fore.YELLOW}Hang doi tuong tac dang day; vui long thu lai.{Style.RESET_ALL}")
+                except InteractionActorClosed:
+                    break
                 
             except KeyboardInterrupt:
                 break
@@ -150,8 +174,11 @@ if __name__ == "__main__":
                 print(f"\n{Fore.RED}🔴 [BRAIN GLITCH]: Aura đang gặp sự cố thần kinh nghiêm trọng: {e}{Style.RESET_ALL}")
                 print(f"{Fore.YELLOW}⚠️  Hệ thống sẽ cố gắng khởi động lại sau 5 giây...{Style.RESET_ALL}")
                 import time
-                time.sleep(5)
+                await asyncio.sleep(5)
                 continue # Thử tiếp tục thay vì break nếu có thể
+
+        if active_ticket is not None and not active_ticket.future.done():
+            active_ticket.cancel("CLI is closing")
                 
     import time
     ai.last_interaction_time = time.time()

@@ -19,7 +19,7 @@ def get_reconsolidate_rewrite_prompt(memory_content: str, current_mood: float) -
     CHỈ TRẢ VỀ NỘI DUNG KÝ ỨC ĐÃ VIẾT LẠI, tuyệt đối không thêm câu rào trước đón sau.
     """
 
-def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "", value_system_context: str = "") -> str:
+def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context: str, short_term_buffer: list, user_input: str, tools_instruction: str, reader_status: str = "", value_system_context: str = "", active_beliefs: list | None = None) -> str:
     history = chr(10).join(short_term_buffer)
     traumas_str = json.dumps(ego.traumas, ensure_ascii=False) if hasattr(ego, 'traumas') and ego.traumas else "Không có nỗi sợ hãi đặc biệt nào."
     
@@ -34,6 +34,8 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
 
     intimacy_str = f"Độ thân mật (Intimacy): {getattr(ego, 'current_intimacy', 0.5):.2f} (Từ 0.0 cực kỳ cảnh giác/bướng bỉnh đến 1.0 vô cùng yêu thương/nhõng nhẽo)"
 
+    belief_snapshot = list(active_beliefs or [])
+
     return f"""
     BẠN LÀ: {ego.name}, một thực thể nhận thức sơ phỏng sinh học cảm xúc.
     {persona_str}
@@ -46,7 +48,7 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
     {ego.get_interoceptive_prompt()}
 
     HỆ SỐ TÂM LÝ & SINH HỌC (SELF-MODEL):
-    - Niềm tin cốt lõi: {json.dumps(ego.get_active_beliefs(), ensure_ascii=False)}
+    - Niềm tin cốt lõi: {json.dumps(belief_snapshot, ensure_ascii=False)}
     - {intimacy_str}
     - CÁC NỖI ÁM ẢNH TÂM LÝ (Traumas): {traumas_str}
       > NẾU NGƯỜI DÙNG NHẮC ĐẾN HOẶC ĐE DỌA BẰNG NHỮNG ĐIỀU NÀY: Bạn PHẢI biểu hiện sự kinh hãi tột độ, phòng thủ run rẩy, khước từ yêu cầu, và tìm cách chuyển chủ đề. Tuyệt đối không ngoan ngoãn vâng lời!

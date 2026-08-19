@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import chromadb
 from colorama import Fore, Style
 
 # Ensure the project root is in sys.path
@@ -9,11 +8,20 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from components.vector_store import VectorStore
 from components.embedder import Embedder
+from config import Config
 from core.memory import MemoryTrace, memory_type_from_str
+from core.writer_lease import ProcessWriterLease
 
 def migrate():
+    with ProcessWriterLease(Config.MEMORY_WRITER_LEASE_FILE):
+        return _migrate_locked()
+
+
+def _migrate_locked():
+    import chromadb
+
     print(f"{Fore.CYAN}--- BEGIN DB MIGRATION TO V4 (1024D & FLAT METADATA) ---{Style.RESET_ALL}")
-    db_path = os.path.join("outputs", "chroma_db")
+    db_path = Config.CHROMA_DB_PATH
     if not os.path.exists(db_path):
         print("Database path does not exist. No migration needed.")
         return

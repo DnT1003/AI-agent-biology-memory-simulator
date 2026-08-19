@@ -17,8 +17,28 @@ logger = logging.getLogger(__name__)
 _model = None
 _tokenizer = None
 _model_lock = threading.Lock()
-_model_status = "not_loaded"   # not_loaded | loading | ready | error
+_model_status = "not_loaded"   # not_loaded | loading | ready | error | unavailable | disabled
 _load_error = ""
+
+
+class LocalInferenceError(RuntimeError):
+    """Base error for a local inference request that produced no usable result."""
+
+
+class LocalInferenceUnavailableError(LocalInferenceError):
+    """The local model cannot currently serve inference requests."""
+
+
+class LocalInferenceRuntimeError(LocalInferenceError):
+    """The local model failed while tokenizing or generating a response."""
+
+
+class LocalInferenceOutputError(LocalInferenceError):
+    """The local model completed but returned an unusable output."""
+
+
+class LocalInferenceJSONError(LocalInferenceOutputError):
+    """The local model did not produce a valid JSON object."""
 
 
 def _load_model_once(model_path: str):
@@ -55,19 +75,19 @@ def _load_model_once(model_path: str):
     except ImportError as e:
         # unsloth hoặc torchao không tương thích với phiên bản CUDA/torch hiện tại
         # → Graceful degradation: hệ thống tiếp tục chạy với Gemini Cloud
-        _load_error = f"[LocalLLM] unsloth không khả dụng (CUDA/torch conflict): {e}"
+        _load_error = type(e).__name__
         with _model_lock:
             _model_status = "unavailable"
         logger.warning(
             f"[LocalLLM] ⚠️ Bỏ qua Gemma E4B — unsloth không tương thích với môi trường hiện tại.\n"
-            f"  Lý do: {e}\n"
+            f"  Loại lỗi: {type(e).__name__}\n"
             f"  → Hệ thống sẽ dùng Gemini Cloud thay thế."
         )
     except Exception as e:
-        _load_error = str(e)
+        _load_error = type(e).__name__
         with _model_lock:
             _model_status = "error"
-        logger.error(f"[LocalLLM] ❌ Lỗi load model: {e}", exc_info=True)
+        logger.error("[LocalLLM] ❌ Lỗi load model (%s)", type(e).__name__)
 
 
 class LocalLLM:
@@ -77,6 +97,13 @@ class LocalLLM:
         from config import Config
         self.model_path = Config.GEMMA_MODEL_PATH
         self.max_new_tokens = 512
+        if not Config.LOCAL_LLM_ENABLED:
+            global _model_status
+            with _model_lock:
+                if _model_status != "ready":
+                    _model_status = "disabled"
+            logger.info("[LocalLLM] Local backend is disabled by configuration.")
+            return
         # Bắt đầu load model trong background ngay khi khởi tạo
         t = threading.Thread(
             target=_load_model_once, args=(self.model_path,), daemon=True
@@ -88,29 +115,34 @@ class LocalLLM:
     def _wait_ready(self, timeout: float = 120.0) -> bool:
         """Chờ model load xong (tối đa timeout giây). Trả về True nếu ready."""
         # Nếu unavailable (CUDA/unsloth conflict) → trả về False ngay, không chờ
-        if _model_status == "unavailable":
+        if _model_status in ("unavailable", "disabled"):
             return False
         deadline = time.time() + timeout
         while time.time() < deadline:
             if _model_status == "ready":
                 return True
-            if _model_status in ("error", "unavailable"):
+            if _model_status in ("error", "unavailable", "disabled"):
                 return False
             time.sleep(1.0)
         return False
 
     def _infer(self, prompt: str, temperature: float = 0.7,
                max_new_tokens: int | None = None) -> str:
-        """Gọi model sinh text thô. Trả về chuỗi hoặc rỗng nếu lỗi."""
-        import torch  #type: ignore
+        """Generate non-empty text or raise a typed local-inference error."""
         if not self._wait_ready():
-            logger.error("[LocalLLM] Model chưa sẵn sàng!")
-            return ""
+            detail = _load_error or f"status={_model_status}"
+            raise LocalInferenceUnavailableError(
+                f"Local model is not ready for inference ({detail})."
+            )
 
         with _model_lock:
             if _model is None or _tokenizer is None:
-                return ""
+                raise LocalInferenceUnavailableError(
+                    "Local model reported ready without model/tokenizer state."
+                )
             try:
+                import torch  # type: ignore
+
                 inputs = _tokenizer([prompt], return_tensors="pt").to("cuda")
                 n_tok = max_new_tokens or self.max_new_tokens
 
@@ -124,11 +156,26 @@ class LocalLLM:
 
                 input_len = inputs["input_ids"].shape[1]
                 generated = output_ids[0][input_len:]
-                return _tokenizer.decode(generated, skip_special_tokens=True).strip()
+                text = _tokenizer.decode(
+                    generated, skip_special_tokens=True
+                ).strip()
 
             except Exception as e:
-                logger.error(f"[LocalLLM] Lỗi inference: {e}", exc_info=True)
-                return ""
+                # Explicit /local requests share this boundary. Third-party
+                # exception messages/tracebacks can echo prompt fragments, so
+                # persist only the stable exception class.
+                logger.error(
+                    "[LocalLLM] Inference failed (%s)", type(e).__name__
+                )
+                raise LocalInferenceRuntimeError(
+                    "Local model inference failed."
+                ) from e
+
+        if not text:
+            raise LocalInferenceOutputError(
+                "Local model returned an empty text response."
+            )
+        return text
 
     # ── Public API (giữ nguyên signature để tương thích toàn bộ codebase) ──────
 
@@ -160,7 +207,7 @@ class LocalLLM:
     ) -> tuple[dict, float]:
         """
         Sinh JSON.  Trả về (dict, entropy).
-        Nếu parse thất bại 3 lần, trả về ({}, 0.0).
+        Nếu parse thất bại 3 lần, raise ``LocalInferenceJSONError``.
         """
         json_prompt = (
             f"{prompt}\n\n"
@@ -184,10 +231,15 @@ class LocalLLM:
                 except json.JSONDecodeError:
                     pass
 
-            logger.warning(f"[LocalLLM] JSON parse fail lần {attempt+1}: {raw[:200]}")
+            # Raw local-model output can repeat private input; never persist it.
+            logger.warning(
+                "[LocalLLM] JSON parse failed on attempt %d", attempt + 1
+            )
 
         logger.error("[LocalLLM] Không parse được JSON sau 3 lần thử.")
-        return {}, 0.0
+        raise LocalInferenceJSONError(
+            "Local model did not return a valid JSON object after 3 attempts."
+        )
 
     def generate_text_stream(
         self,

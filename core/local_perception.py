@@ -1,105 +1,190 @@
-try:
-    import torch  #type: ignore
-    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
-    TRANSFORMERS_AVAILABLE = True
-except Exception:
-    TRANSFORMERS_AVAILABLE = False
-from core.gpu_config import get_max_memory_map
-import os
+import logging
+import math
+from typing import Any, Literal
+
 from colorama import Fore, Style
 
+from config import Config
+
+
+logger = logging.getLogger(__name__)
+PerceptionMode = Literal["remote", "native"]
+
+NEUTRAL_RESULT = {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+
+
+class PerceptionError(RuntimeError):
+    """Base error for local-perception failures."""
+
+
+class PerceptionNotReadyError(PerceptionError):
+    """Raised when the native sentiment model is unavailable."""
+
+
 class LocalPerception:
+    """Sentiment inference with separate remote and native execution modes.
+
+    The main brain uses the backwards-compatible ``remote`` default. The GPU
+    service must opt into ``native`` so a failed model load can never make the
+    service call its own ``/analyze`` endpoint.
     """
-    Local Perception Engine - Phase 8 & 12
-    Sử dụng các mô hình nhỏ (Encoder-only) chạy trên GPU RTX 3060 để phân tích 
-    cảm xúc và sắc thái ngay lập tức mà không cần gọi LLM API.
-    """
-    def __init__(self, model_name="cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual"):
-        print(f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: Đang khởi tạo mô hình {model_name}...{Style.RESET_ALL}")
+
+    def __init__(
+        self,
+        model_name: str = "cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
+        *,
+        mode: PerceptionMode = "remote",
+        service_url: str | None = None,
+        http_client: Any | None = None,
+    ):
+        if mode not in ("remote", "native"):
+            raise ValueError("mode must be either 'remote' or 'native'")
+
+        self.mode: PerceptionMode = mode
         self.model_name = model_name
+        self.service_url = (service_url or Config.GPU_SERVICE_URL).rstrip("/")
+        self._http_client = http_client
         self.sentiment_analyzer = None
-        if TRANSFORMERS_AVAILABLE:
-            try:
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
-                self.sentiment_analyzer = pipeline(
-                    "text-classification", 
-                    model=self.model_name, 
-                    device=0 if self.device == "cuda" else -1
-                )
-                print(f"{Fore.GREEN}✅ [LOCAL PERCEPTION]: Engine sẵn sàng trên {self.device.upper()}.{Style.RESET_ALL}")
-            except Exception as e:
-                print(f"{Fore.RED}❌ [LOCAL PERCEPTION]: Lỗi khi nạp mô hình: {e}{Style.RESET_ALL}")
-                from config import Config
-                print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice at {Config.GPU_SERVICE_URL}.{Style.RESET_ALL}")
-                self.mode = "api"
-        else:
-            from config import Config
-            print(f"{Fore.YELLOW}⚠️ [LOCAL PERCEPTION]: Transformers not available locally. Using GPU Microservice at {Config.GPU_SERVICE_URL}.{Style.RESET_ALL}")
-            self.mode = "api"
+        self.device: str | None = None
+        self.init_error: str | None = None
+
+        # Remote clients must not import torch/transformers or load a model.
+        if self.mode == "native":
+            self._initialize_native_backend()
+
+    @property
+    def is_ready(self) -> bool:
+        return self.mode == "native" and self.sentiment_analyzer is not None
+
+    def _initialize_native_backend(self) -> None:
+        print(
+            f"{Fore.LIGHTCYAN_EX}👁️ [LOCAL PERCEPTION]: "
+            f"Đang khởi tạo mô hình {self.model_name}...{Style.RESET_ALL}"
+        )
+        try:
+            import torch  # type: ignore
+            from transformers import pipeline  # type: ignore
+
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.sentiment_analyzer = pipeline(
+                "text-classification",
+                model=self.model_name,
+                device=0 if self.device == "cuda" else -1,
+            )
+            print(
+                f"{Fore.GREEN}✅ [LOCAL PERCEPTION]: "
+                f"Engine sẵn sàng trên {self.device.upper()}.{Style.RESET_ALL}"
+            )
+        except Exception as exc:
+            self.init_error = str(exc)
+            self.sentiment_analyzer = None
+            logger.error("[LocalPerception Native Init Error]: %s", exc, exc_info=True)
 
     def analyze(self, text: str) -> dict:
-        """
-        Phân tích văn bản và trả về valence, arousal
-        Mapping từ RoBERTa Sentiment:
-        - Negative -> Valence thấp (-0.7), Arousal cao (0.8)
-        - Neutral  -> Valence trung bình (0.0), Arousal thấp (0.2)
-        - Positive -> Valence cao (0.7), Arousal trung bình (0.5)
-        """
-        if not TRANSFORMERS_AVAILABLE or self.sentiment_analyzer is None or getattr(self, "mode", "") == "api":
+        if self.mode == "remote":
+            return self._analyze_remote(text)
+        return self._analyze_native(text)
+
+    def _analyze_remote(self, text: str) -> dict:
+        client = self._http_client
+        if client is None:
             import requests
-            try:
-                from config import Config
-                resp = requests.post(f"{Config.GPU_SERVICE_URL}/analyze", json={"text": text}, timeout=10)
-                if resp.status_code == 200:
-                    return resp.json()
-            except Exception as e:
-                pass
-            return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+
+            client = requests
+
+        try:
+            response = client.post(
+                f"{self.service_url}/analyze",
+                json={"text": text},
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("GPU service returned an invalid sentiment payload")
+            ranges = {
+                "valence": (-1.0, 1.0),
+                "arousal": (0.0, 1.0),
+                "importance": (0.0, 1.0),
+            }
+            for field, (minimum, maximum) in ranges.items():
+                value = payload.get(field)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or not minimum <= float(value) <= maximum
+                ):
+                    raise ValueError(f"GPU service returned invalid {field}")
+            return payload
+        except Exception as exc:
+            # Preserve the historical neutral fallback for brain callers while
+            # logging the outage. Native mode never takes this branch.
+            logger.warning("[LocalPerception Remote Error]: %s", exc)
+            return dict(NEUTRAL_RESULT)
+
+    def _analyze_native(self, text: str) -> dict:
+        if not self.is_ready:
+            raise PerceptionNotReadyError(
+                self.init_error or "Native sentiment model is not ready"
+            )
 
         try:
             results = self.sentiment_analyzer(text)
             if not results:
-                return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+                raise PerceptionError("Native sentiment model returned no result")
 
-            res = results[0]
-            label = res['label']
-            score = res['score']
+            result = results[0]
+            label = str(result["label"])
+            score = float(result["score"])
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise PerceptionError("Native sentiment model returned an invalid score")
 
-            # Mapping logic cho mô hình cardiffnlp/twitter-roberta-base-sentiment
-            # Labels: 'LABEL_0' (negative), 'LABEL_1' (neutral), 'LABEL_2' (positive)
-            if label == 'LABEL_0': # Negative
+            # CardiffNLP publishes semantic labels (negative/neutral/positive),
+            # while some Transformers versions expose generic LABEL_0..2.
+            normalized_label = label.strip().lower()
+
+            if normalized_label in {"negative", "label_0"}:
                 valence = -0.7 * score
-                arousal = 0.8  # Thường mang tính kích thích cao (giận dữ, buồn bã)
-            elif label == 'LABEL_1': # Neutral
+                arousal = 0.8
+            elif normalized_label in {"neutral", "label_1"}:
                 valence = 0.0
                 arousal = 0.3
-            else: # LABEL_2 - Positive
+            elif normalized_label in {"positive", "label_2"}:
                 valence = 0.7 * score
                 arousal = 0.5
+            else:
+                raise PerceptionError(
+                    f"Native sentiment model returned an unknown label: {label!r}"
+                )
 
-            # Tính toán Importance cơ bản dựa trên độ dài và cường độ sentiment
-            importance = min(0.9, 0.3 + (score * 0.4) + (min(len(text), 100) / 200))
-
+            importance = min(
+                0.9, 0.3 + (score * 0.4) + (min(len(text), 100) / 200)
+            )
             return {
                 "valence": valence,
                 "arousal": arousal,
                 "importance": importance,
                 "raw_label": label,
-                "confidence": score
+                "confidence": score,
             }
-        except Exception as e:
-            print(f"Lỗi Local Perception Analyze: {e}")
-            return {"valence": 0.0, "arousal": 0.5, "importance": 0.5}
+        except PerceptionError:
+            raise
+        except Exception as exc:
+            raise PerceptionError("Native sentiment analysis failed") from exc
+
 
 if __name__ == "__main__":
-    # Test script nhanh
-    lp = LocalPerception()
-    tests = [
+    perception = LocalPerception(mode="native")
+    samples = [
         "I love you so much!",
         "You are so annoying and stupid.",
         "What is the weather today?",
-        "Hôm nay trời đẹp quá, đi chơi không?"
+        "Hôm nay trời đẹp quá, đi chơi không?",
     ]
-    for t in tests:
-        res = lp.analyze(t)
-        print(f"Text: {t}\nResult: {res}\n")
+    for sample in samples:
+        try:
+            result = perception.analyze(sample)
+        except PerceptionError as exc:
+            result = {"error": str(exc)}
+        print(f"Text: {sample}\nResult: {result}\n")

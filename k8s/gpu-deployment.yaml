@@ -19,6 +19,9 @@ spec:
         - name: gpu-service
           image: aura/gpuservice:latest
           imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: aura-config
           ports:
             - containerPort: 8001
           resources:
@@ -29,20 +32,25 @@ spec:
             requests:
               memory: "4Gi"
               cpu: "1000m"
-          # FIX: Them livenessProbe - gpu_service.py co san /health endpoint
+          # Allow native model initialization to finish before liveness begins.
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 30
           livenessProbe:
             httpGet:
-              path: /health
+              path: /live
               port: 8001
-            initialDelaySeconds: 60   # GPU model load mat nhieu thoi gian
             periodSeconds: 30
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 8001
-            initialDelaySeconds: 45
-            periodSeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             # SLM weights: chia se voi brain-pod
             - name: slm-storage

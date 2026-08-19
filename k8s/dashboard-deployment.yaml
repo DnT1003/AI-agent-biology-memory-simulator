@@ -1,7 +1,7 @@
 # ================================================================
 # DASHBOARD DEPLOYMENT + SERVICE
-# Nginx serving static web UI
-# Shared brain-pvc de doc/ghi web_chat_in.txt, web_chat_out.txt
+# FastAPI serving the web UI and same-origin API
+# Shared brain-pvc cho durable request/response chat spool
 # ================================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -25,7 +25,10 @@ spec:
           image: aura/dashboard:latest
           imagePullPolicy: Never
           ports:
-            - containerPort: 80
+            - containerPort: 8050
+          env:
+            - name: AURA_OUTPUT_DIR
+              value: /app/outputs
           resources:
             limits:
               memory: "256Mi"
@@ -36,17 +39,17 @@ spec:
           livenessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8050
             initialDelaySeconds: 5
             periodSeconds: 15
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8050
             initialDelaySeconds: 3
             periodSeconds: 5
           volumeMounts:
-            # Chia se outputs/ voi Brain de doc web_chat_out.txt
+            # Chia se outputs/chat_spool voi Brain
             - name: brain-storage
               mountPath: /app/outputs
       volumes:
@@ -66,5 +69,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8050
   type: ClusterIP

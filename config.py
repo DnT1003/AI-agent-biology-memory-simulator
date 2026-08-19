@@ -1,7 +1,58 @@
+import math
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _bounded_env_int(name: str, default: int, minimum: int) -> int:
+    """Parse optional operational limits without making module import fatal."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, value)
+
+
+def _bounded_env_float(name: str, default: float, minimum: float) -> float:
+    """Return a finite optional timeout, falling back on invalid input."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(value):
+        return default
+    return max(minimum, value)
+
+
+def _optional_discord_snowflake(value) -> str | None:
+    """Return a canonical Discord snowflake or ``None`` for unsafe input."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        candidate = value.strip()
+        if not candidate or not candidate.isascii() or not candidate.isdigit():
+            return None
+        try:
+            number = int(candidate, 10)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    if number <= 0 or number > (2**64 - 1):
+        return None
+    return str(number)
 
 class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,9 +62,19 @@ class Config:
     EMBEDDING_MODEL = "models/gemini-embedding-001"
     
     # HYBRID MODE CONFIG
-    USE_HYBRID = True                # Cho phép tự động chuyển đổi Cloud/Local
-    USE_LOCAL_ONLY = False           # Nếu True, ngắt hoàn toàn Gemini
+    USE_HYBRID = os.getenv("AURA_USE_HYBRID", "true").lower() == "true"
+    USE_LOCAL_ONLY = os.getenv("AURA_USE_LOCAL_ONLY", "false").lower() == "true"
     FORCE_LOCAL_COMMANDS = ["/local", "offline"] # Câu lệnh ép dùng local
+
+    # Discord inbound is single-owner and fail-closed. Keep the identifier as
+    # a canonical string to avoid accidental use of mutable display names.
+    _DISCORD_OWNER_RAW = os.getenv("AURA_DISCORD_OWNER_USER_ID")
+    if _DISCORD_OWNER_RAW is None:
+        _DISCORD_OWNER_RAW = os.getenv("DISCORD_OWNER_USER_ID")
+    DISCORD_OWNER_USER_ID: str | None = _optional_discord_snowflake(
+        _DISCORD_OWNER_RAW
+    )
+    del _DISCORD_OWNER_RAW
 
     # GIOI HAN SINH HOC (BOUNDED MEMORY)
     FORGETTING_RATE = 0.05          # Toc do quen co ban
@@ -22,6 +83,28 @@ class Config:
 
     # DUONG DAN ĐAU RA (OUTPUT PATHS) — Phase 15: tap trung, thay vi hardcode khap noi
     OUTPUT_DIR = os.getenv("AURA_OUTPUT_DIR", "outputs")
+    _OUTPUT_DIR_ABSOLUTE = (
+        OUTPUT_DIR
+        if os.path.isabs(OUTPUT_DIR)
+        else os.path.join(BASE_DIR, OUTPUT_DIR)
+    )
+    # Every durable-memory writer contends on the same path even when its
+    # process starts with a different current working directory.
+    MEMORY_WRITER_LEASE_FILE = os.path.join(
+        os.path.abspath(_OUTPUT_DIR_ABSOLUTE),
+        ".aura-memory-writer.lock",
+    )
+    # M3 durable operation plans.  Keep this absolute for the same reason as
+    # the writer lease: every runtime process must resolve one shared ledger
+    # even when it starts with a different current working directory.
+    OPERATION_LEDGER_FILE = os.path.join(
+        os.path.abspath(_OUTPUT_DIR_ABSOLUTE),
+        "operation_ledger.sqlite3",
+    )
+    # PATH is retained as a descriptive alias for callers that deal in DB
+    # paths rather than files.  Both names deliberately identify one DB.
+    OPERATION_LEDGER_PATH = OPERATION_LEDGER_FILE
+    del _OUTPUT_DIR_ABSOLUTE
     CHROMA_DB_PATH = os.path.join(OUTPUT_DIR, "chroma_db")
     MAX_STORAGE_SIZE = int(os.getenv("AURA_MAX_STORAGE_MB", "1024")) * 1024 * 1024
     CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "127.0.0.1")
@@ -42,13 +125,101 @@ class Config:
     ANXIETY_THRESHOLD: int = int(os.getenv("AURA_ANXIETY_THRESHOLD", "600"))
     # SO ENTRY TOI DA TRONG SHORT-TERM BUFFER
     STM_MAX_ENTRIES: int = int(os.getenv("AURA_STM_MAX", "15"))
+    # Nhịp sinh học chạy độc lập với vòng poll sự kiện (giây).
+    COGNITIVE_TICK_INTERVAL_SECONDS: float = float(
+        os.getenv("AURA_COGNITIVE_TICK_INTERVAL_SECONDS", "30")
+    )
+
+    # M0 RUNTIME: every user-facing request is serialized through one actor.
+    # Queue capacity is pending work only; the active request is separate.
+    INTERACTION_QUEUE_MAX: int = max(
+        1, int(os.getenv("AURA_INTERACTION_QUEUE_MAX", "16"))
+    )
+    INTERACTION_STATE_WAIT_SECONDS: float = max(
+        0.1, float(os.getenv("AURA_INTERACTION_STATE_WAIT_SECONDS", "30"))
+    )
+    INTERACTION_SHUTDOWN_TIMEOUT_SECONDS: float = max(
+        0.1, float(os.getenv("AURA_INTERACTION_SHUTDOWN_TIMEOUT_SECONDS", "5"))
+    )
+    AUTONOMOUS_SHUTDOWN_TIMEOUT_SECONDS: float = max(
+        0.1, float(os.getenv("AURA_AUTONOMOUS_SHUTDOWN_TIMEOUT_SECONDS", "5"))
+    )
+
+    # Durable dashboard <-> brain hand-off. This path is absolute so the two
+    # processes agree even when launched with different working directories.
+    _CHAT_SPOOL_OVERRIDE = os.getenv("AURA_CHAT_SPOOL_DIR", "").strip()
+    CHAT_SPOOL_DIR: str = os.path.abspath(
+        _CHAT_SPOOL_OVERRIDE
+        or os.path.join(BASE_DIR, OUTPUT_DIR, "chat_spool")
+    )
+    CHAT_REQUEST_MAX_BYTES: int = max(
+        256, int(os.getenv("AURA_CHAT_REQUEST_MAX_BYTES", str(16 * 1024)))
+    )
+    CHAT_RESPONSE_MAX_BYTES: int = max(
+        256, int(os.getenv("AURA_CHAT_RESPONSE_MAX_BYTES", str(64 * 1024)))
+    )
+    CHAT_SPOOL_MAX_MESSAGES: int = max(
+        1, int(os.getenv("AURA_CHAT_SPOOL_MAX_MESSAGES", "1000"))
+    )
+    CHAT_SPOOL_LEASE_SECONDS: float = max(
+        1.0, float(os.getenv("AURA_CHAT_SPOOL_LEASE_SECONDS", "300"))
+    )
+    CHAT_RESPONSE_RETENTION_SECONDS: float = max(
+        60.0,
+        float(os.getenv("AURA_CHAT_RESPONSE_RETENTION_SECONDS", "86400")),
+    )
+    CHAT_DELIVERY_BATCH_SIZE: int = min(
+        100, max(1, int(os.getenv("AURA_CHAT_DELIVERY_BATCH_SIZE", "50")))
+    )
+
+    # M1 EVENT JOURNAL: immutable, privacy-aware runtime traces. Keep the
+    # directory absolute so replay and the brain agree across working dirs.
+    EVENT_JOURNAL_ENABLED: bool = (
+        os.getenv("AURA_EVENT_JOURNAL_ENABLED", "true").lower() == "true"
+    )
+    _EVENT_JOURNAL_OVERRIDE = os.getenv("AURA_EVENT_JOURNAL_DIR", "").strip()
+    EVENT_JOURNAL_DIR: str = os.path.abspath(
+        _EVENT_JOURNAL_OVERRIDE
+        or os.path.join(BASE_DIR, OUTPUT_DIR, "event_journal")
+    )
+    EVENT_JOURNAL_MAX_EVENTS: int = _bounded_env_int(
+        "AURA_EVENT_JOURNAL_MAX_EVENTS", 100_000, 1
+    )
+    EVENT_JOURNAL_MAX_EVENT_BYTES: int = _bounded_env_int(
+        "AURA_EVENT_JOURNAL_MAX_EVENT_BYTES", 64 * 1024, 1024
+    )
+    EVENT_JOURNAL_LOCK_TIMEOUT_SECONDS: float = _bounded_env_float(
+        "AURA_EVENT_JOURNAL_LOCK_TIMEOUT_SECONDS", 1.0, 0.05
+    )
+    _EVENT_JOURNAL_HMAC_TEXT = os.getenv("AURA_EVENT_JOURNAL_HMAC_KEY", "")
+    EVENT_JOURNAL_HMAC_KEY: bytes | None = (
+        _EVENT_JOURNAL_HMAC_TEXT.encode("utf-8")
+        if _EVENT_JOURNAL_HMAC_TEXT
+        else None
+    )
+    # Compatibility names used by transport-side journal hooks.
+    EVENT_JOURNAL_MAX_EVENTS_PER_RUN = EVENT_JOURNAL_MAX_EVENTS
+    EVENT_JOURNAL_AUTH_KEY = EVENT_JOURNAL_HMAC_KEY
+    del _EVENT_JOURNAL_HMAC_TEXT
 
     # LOCAL LLM (GEMMA 4 E4B — Unsloth, 4-bit, offline)
+    LOCAL_LLM_ENABLED = os.getenv("AURA_LOCAL_LLM_ENABLED", "true").lower() == "true"
     GEMMA_MODEL_PATH = os.getenv("GEMMA_MODEL_PATH", r"d:\python\PythonProject19\Gemma4_E4B")
     
     # CUSTOM SLM (Aura-Flash Core)
-    SLM_DIR = os.path.join(os.path.dirname(__file__), "core", "engine", "nanogpt")
-    SLM_ENABLED = False
+    SLM_DIR = os.getenv(
+        "SLM_CODE_DIR",
+        os.path.join(os.path.dirname(__file__), "core", "engine", "nanogpt"),
+    )
+    # Tách mã NanoGPT (nằm trong image) khỏi model assets (có thể mount bằng PVC).
+    SLM_MODEL_DIR = os.getenv("SLM_MODEL_DIR", SLM_DIR)
+    SLM_MODEL_PATH = os.getenv(
+        "SLM_MODEL_PATH", os.path.join(SLM_MODEL_DIR, "aura_flash_v5.pth")
+    )
+    SLM_ENABLED = os.getenv("AURA_SLM_ENABLED", "false").lower() == "true"
+    SLM_TRAINING_ENABLED = (
+        os.getenv("AURA_SLM_TRAINING_ENABLED", "false").lower() == "true"
+    )
     
     # AURA-FLASH LITE CONFIG (~425M Parameters - Sweet Spot for 6GB VRAM)
     SLM_D_MODEL = 1024
@@ -59,8 +230,9 @@ class Config:
     SLM_TOP_K = 0
 
     # ── SECURITY: Dynamic Skills Self-Evolution ──────────────────────────────
-    # False = tắt hoàn toàn hot-reload code từ LLM (an toàn nhất)
-    # True  = bật, nhưng code LLM viết chạy trong subprocess sandbox có AST scan
+    # False = tắt hoàn toàn workshop và loader kỹ năng động.
+    # True  = loader chỉ chạy file đã được operator duyệt trong core/dynamic_skills;
+    #         code do LLM sinh chỉ được ghi vào quarantine, không tự kích hoạt.
     ALLOW_DYNAMIC_SKILLS: bool = os.getenv("AURA_ALLOW_DYNAMIC_SKILLS", "false").lower() == "true"
 
     # ── STABILITY: ChromaDB mode (chỉ 1 trong 2, không được dùng đồng thời) ──

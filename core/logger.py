@@ -4,6 +4,17 @@ import sys
 from colorama import Fore, Style
 from logging.handlers import RotatingFileHandler
 
+
+def _unicode_safe_stdout():
+    """Keep Windows consoles from turning Unicode log records into logging errors."""
+    stream = sys.stdout
+    if os.name == "nt" and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            pass
+    return stream
+
 def get_logger(name="aura"):
     """
     Tạo hoặc lấy logger thống nhất cho toàn bộ hệ thống Aura.
@@ -19,7 +30,7 @@ def get_logger(name="aura"):
         logger.setLevel(logging.DEBUG) # Root luôn nhận DEBUG
         
         # 1. Console Handler (Màu sắc)
-        ch = logging.StreamHandler(sys.stdout)
+        ch = logging.StreamHandler(_unicode_safe_stdout())
         ch.setLevel(level)
         
         class AuraFormatter(logging.Formatter):

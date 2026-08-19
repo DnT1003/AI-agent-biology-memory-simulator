@@ -1,135 +1,211 @@
-"""
-Aura GPU Microservice - Python 3.12 / Torch
-============================================
-Chạy trong: .venv_aura (Python 3.12)
-Port: 8001
+"""Aura GPU microservice for native sentiment and SLM inference."""
 
-Cung cấp 2 endpoints:
-- POST /analyze  → LocalPerception (RoBERTa sentiment)
-- POST /generate → SLMCore (NanoGPT thought generation)
-- GET  /health   → Kiểm tra trạng thái service
-"""
 import asyncio
-import sys
+import logging
 import os
+import sys
 
-# Note: If PostgreSQL overrides SSL, consider localized fixes or environment-specific cert stores.
-# Avoid global environ.pop which weakens TLS for the entire process.
+# Add project root to path when this module is executed as a script.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-# Add project root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
+from colorama import Fore, Style, init
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from colorama import init, Fore, Style
+from pydantic import BaseModel, Field
+
+from config import Config
+
 
 init(autoreset=True)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Aura GPU Service",
-    description="Python 3.12 microservice cho Torch/GPU — bridge tới Python 3.14 main engine",
-    version="1.0.0"
+    description="Native Torch/GPU inference service for the Aura brain process",
+    version="1.1.0",
 )
 
-# ─── Request Models ───────────────────────────────────────────
+
 class AnalyzeRequest(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=20_000)
+
 
 class GenerateRequest(BaseModel):
-    prompt: str
-    max_new_tokens: int = 50
+    prompt: str = Field(min_length=1, max_length=16_000)
+    max_new_tokens: int = Field(default=50, ge=1, le=512)
 
-# ─── Global model instances ────────────────────────────────────
+
 _local_perception = None
 _slm_core = None
+_perception_semaphore = asyncio.Semaphore(1)
+_slm_semaphore = asyncio.Semaphore(1)
 
-# ─── Startup: load models ─────────────────────────────────────
+
+def _capability_status() -> dict:
+    perception_ready = bool(
+        _local_perception is not None
+        and getattr(_local_perception, "is_ready", False)
+    )
+    slm_enabled = bool(Config.SLM_ENABLED)
+    slm_ready = bool(
+        slm_enabled
+        and _slm_core is not None
+        and getattr(_slm_core, "is_ready", False)
+    )
+    ready = perception_ready and (not slm_enabled or slm_ready)
+    return {
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
+        "capabilities": {
+            "local_perception": {
+                "enabled": True,
+                "ready": perception_ready,
+            },
+            "slm": {
+                "enabled": slm_enabled,
+                "ready": slm_ready,
+            },
+        },
+    }
+
+
 @app.on_event("startup")
-async def startup_event():
+async def startup_event() -> None:
     global _local_perception, _slm_core
 
-    print(f"\n{Fore.LIGHTCYAN_EX}{'='*50}")
-    print(f"  Aura GPU Microservice - Khởi động")
-    print(f"{'='*50}{Style.RESET_ALL}")
+    print(f"\n{Fore.LIGHTCYAN_EX}{'=' * 50}")
+    print("  Aura GPU Microservice - Khởi động")
+    print(f"{'=' * 50}{Style.RESET_ALL}")
 
     try:
-        print(f"{Fore.YELLOW}[1/2] Đang tải LocalPerception (RoBERTa)...{Style.RESET_ALL}")
+        print(
+            f"{Fore.YELLOW}[1/2] Đang tải LocalPerception "
+            f"(RoBERTa)...{Style.RESET_ALL}"
+        )
         from core.local_perception import LocalPerception
-        _local_perception = LocalPerception()
-    except Exception as e:
-        print(f"{Fore.RED}[1/2] LocalPerception FAILED: {e}{Style.RESET_ALL}")
 
-    try:
-        print(f"{Fore.YELLOW}[2/2] Đang khởi tạo SLMCore (NanoGPT)...{Style.RESET_ALL}")
-        from core.engine.slm_core import SLMCore
-        _slm_core = SLMCore()
-    except Exception as e:
-        print(f"{Fore.RED}[2/2] SLMCore FAILED: {e}{Style.RESET_ALL}")
+        # Native mode is a hard boundary: failed model initialization can never
+        # fall back to this service's own /analyze endpoint.
+        _local_perception = LocalPerception(mode="native")
+    except Exception:
+        _local_perception = None
+        logger.exception("LocalPerception failed during GPU service startup")
 
-    lp_ok = _local_perception is not None and getattr(_local_perception, 'sentiment_analyzer', None) is not None
-    slm_ok = _slm_core is not None
+    _slm_core = None
+    if Config.SLM_ENABLED:
+        try:
+            print(
+                f"{Fore.YELLOW}[2/2] Đang khởi tạo SLMCore "
+                f"(NanoGPT)...{Style.RESET_ALL}"
+            )
+            from core.engine.slm_core import SLMCore
 
-    print(f"\n{Fore.GREEN}✅ GPU Service sẵn sàng!{Style.RESET_ALL}")
-    print(f"   LocalPerception: {'✅ GPU' if lp_ok else '⚠️ Fallback (không có model)'}")
-    print(f"   SLMCore:         {'✅ CUDA ready' if slm_ok else '⚠️ Không tải được'}")
-    print(f"   Đang lắng nghe tại: http://127.0.0.1:8001\n")
+            # Native mode contains no HTTP route, preventing /generate recursion.
+            _slm_core = SLMCore(mode="native")
+        except Exception:
+            _slm_core = None
+            logger.exception("SLMCore failed during GPU service startup")
+    else:
+        print(f"{Fore.YELLOW}[2/2] SLMCore đã tắt qua cấu hình.{Style.RESET_ALL}")
+
+    status = _capability_status()
+    color = Fore.GREEN if status["ready"] else Fore.RED
+    print(f"\n{color}GPU Service status: {status['status']}{Style.RESET_ALL}")
+    print("   Đang lắng nghe tại: http://127.0.0.1:8001\n")
 
 
-# ─── Endpoints ────────────────────────────────────────────────
+@app.get("/live")
+async def live() -> dict:
+    """Liveness only: the process and event loop can answer requests."""
+    return {"status": "alive"}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness for all capabilities currently enabled by configuration."""
+    status = _capability_status()
+    if not status["ready"]:
+        return JSONResponse(status_code=503, content=status)
+    return status
+
 
 @app.get("/health")
-async def health():
-    """Kiểm tra trạng thái service."""
-    import torch
-    return {
-        "status": "ok",
-        "torch_version": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
-        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "vram_free_mb": round((torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)) / 1024**2, 1) if torch.cuda.is_available() else None,
-        "local_perception_ready": _local_perception is not None and getattr(_local_perception, 'sentiment_analyzer', None) is not None,
-        "slm_core_ready": _slm_core is not None and getattr(_slm_core, 'is_ready', False),
+async def health() -> dict:
+    """Detailed diagnostic status; use /live and /ready for orchestration."""
+    status = _capability_status()
+    torch_details = {
+        "torch_version": None,
+        "cuda_available": False,
+        "gpu_name": None,
+        "vram_free_mb": None,
     }
+    try:
+        import torch  # type: ignore
+
+        cuda_available = bool(torch.cuda.is_available())
+        torch_details = {
+            "torch_version": torch.__version__,
+            "cuda_available": cuda_available,
+            "gpu_name": torch.cuda.get_device_name(0) if cuda_available else None,
+            "vram_free_mb": round(
+                (
+                    torch.cuda.get_device_properties(0).total_memory
+                    - torch.cuda.memory_reserved(0)
+                )
+                / 1024**2,
+                1,
+            )
+            if cuda_available
+            else None,
+        }
+    except Exception:
+        logger.debug("Torch diagnostics unavailable", exc_info=True)
+
+    return {**status, **torch_details}
 
 
 @app.post("/analyze")
 async def analyze_sentiment(req: AnalyzeRequest):
-    """
-    Phân tích cảm xúc văn bản bằng RoBERTa.
-    Trả về: {valence, arousal, importance, raw_label, confidence}
-    """
-    if _local_perception is None:
-        raise HTTPException(status_code=503, detail="LocalPerception chưa được tải")
+    if _local_perception is None or not getattr(
+        _local_perception, "is_ready", False
+    ):
+        raise HTTPException(status_code=503, detail="Sentiment capability is not ready")
+
     try:
-        # Chạy blocking I/O trong thread riêng để không block event loop
-        result = await asyncio.to_thread(_local_perception.analyze, req.text)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi phân tích: {str(e)}")
+        async with _perception_semaphore:
+            return await asyncio.to_thread(_local_perception.analyze, req.text)
+    except Exception as exc:
+        logger.exception("Native sentiment inference failed")
+        raise HTTPException(
+            status_code=500, detail="Sentiment inference failed"
+        ) from exc
 
 
 @app.post("/generate")
 async def generate_thought(req: GenerateRequest):
-    """
-    Sinh ra 'luồng suy nghĩ' bằng SLMCore (NanoGPT).
-    Trả về: {thought: str}
-    """
-    if _slm_core is None:
-        raise HTTPException(status_code=503, detail="SLMCore chưa được tải")
+    if not Config.SLM_ENABLED:
+        raise HTTPException(status_code=503, detail="SLM capability is disabled")
+    if _slm_core is None or not getattr(_slm_core, "is_ready", False):
+        raise HTTPException(status_code=503, detail="SLM capability is not ready")
+
     try:
-        # generate_thought() là blocking — chạy trong thread pool
-        thought = await asyncio.to_thread(
-            _slm_core.generate_thought,  # ← Đúng tên method
-            req.prompt,
-            req.max_new_tokens
-        )
+        async with _slm_semaphore:
+            thought = await asyncio.to_thread(
+                _slm_core.generate_thought,
+                req.prompt,
+                req.max_new_tokens,
+            )
         return {"thought": thought}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi sinh thought: {str(e)}")
+    except Exception as exc:
+        logger.exception("Native SLM inference failed")
+        raise HTTPException(status_code=500, detail="SLM inference failed") from exc
 
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"{Fore.YELLOW}Khởi động Aura GPU Microservice tại port 8001...{Style.RESET_ALL}")
+
+    print(
+        f"{Fore.YELLOW}Khởi động Aura GPU Microservice tại port 8001..."
+        f"{Style.RESET_ALL}"
+    )
     uvicorn.run(app, host="127.0.0.1", port=8001, log_level="warning")
