@@ -2,14 +2,21 @@ import asyncio
 import json
 import time
 import unittest
+import warnings
 from unittest.mock import Mock, patch
 
+warnings.filterwarnings(
+    "ignore",
+    message=r"Using `httpx` with `starlette\.testclient` is deprecated.*",
+)
+
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from config import Config
 from core.engine.slm_core import SLMCore, SLMServiceError
-from core.local_perception import LocalPerception
+from core.local_perception import LocalPerception, NEUTRAL_RESULT
 from core.server import gpu_service
 
 
@@ -19,10 +26,12 @@ class SLMRoutingTests(unittest.TestCase):
         response.json.return_value = {"thought": "remote thought"}
         client = Mock()
         client.post.return_value = response
+        valid_token = "s" * 32
 
         core = SLMCore(
             mode="remote",
             service_url="http://gpu.internal/",
+            service_auth_token=valid_token,
             http_client=client,
         )
 
@@ -30,6 +39,7 @@ class SLMRoutingTests(unittest.TestCase):
         client.post.assert_called_once_with(
             "http://gpu.internal/generate",
             json={"prompt": "hello", "max_new_tokens": 12},
+            headers={"X-Aura-Internal-Token": valid_token},
             timeout=20,
         )
         response.raise_for_status.assert_called_once_with()
@@ -39,10 +49,38 @@ class SLMRoutingTests(unittest.TestCase):
         response.json.return_value = {"unexpected": "value"}
         client = Mock()
         client.post.return_value = response
-        core = SLMCore(mode="remote", http_client=client)
+        valid_token = "s" * 32
+        core = SLMCore(
+            mode="remote",
+            service_auth_token=valid_token,
+            http_client=client,
+        )
 
         with self.assertRaises(SLMServiceError):
             core.generate_thought("hello")
+
+    def test_remote_mode_missing_token_never_calls_http(self):
+        client = Mock()
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", None):
+            core = SLMCore(mode="remote", http_client=client)
+
+            with self.assertRaises(SLMServiceError):
+                core.generate_thought("hello")
+
+        client.post.assert_not_called()
+
+    def test_remote_mode_invalid_token_never_calls_http(self):
+        client = Mock()
+        core = SLMCore(
+            mode="remote",
+            service_auth_token="short_invalid_token",
+            http_client=client,
+        )
+
+        with self.assertRaises(SLMServiceError):
+            core.generate_thought("hello")
+
+        client.post.assert_not_called()
 
     def test_native_mode_dispatch_never_uses_http_client(self):
         core = SLMCore.__new__(SLMCore)
@@ -98,9 +136,11 @@ class PerceptionRoutingTests(unittest.TestCase):
         }
         client = Mock()
         client.post.return_value = response
+        valid_token = "p" * 32
         perception = LocalPerception(
             mode="remote",
             service_url="http://gpu.internal/",
+            service_auth_token=valid_token,
             http_client=client,
         )
 
@@ -110,6 +150,7 @@ class PerceptionRoutingTests(unittest.TestCase):
         client.post.assert_called_once_with(
             "http://gpu.internal/analyze",
             json={"text": "hello"},
+            headers={"X-Aura-Internal-Token": valid_token},
             timeout=10,
         )
 
@@ -160,12 +201,44 @@ class PerceptionRoutingTests(unittest.TestCase):
         }
         client = Mock()
         client.post.return_value = response
-        perception = LocalPerception(mode="remote", http_client=client)
+        valid_token = "p" * 32
+        perception = LocalPerception(
+            mode="remote",
+            service_auth_token=valid_token,
+            http_client=client,
+        )
 
         self.assertEqual(
             perception.analyze("hello"),
             {"valence": 0.0, "arousal": 0.5, "importance": 0.5},
         )
+
+    def test_remote_mode_missing_token_never_calls_http(self):
+        client = Mock()
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", None):
+            perception = LocalPerception(mode="remote", http_client=client)
+
+            self.assertEqual(
+                perception.analyze("hello"),
+                dict(NEUTRAL_RESULT),
+            )
+
+        client.post.assert_not_called()
+
+    def test_remote_mode_invalid_token_never_calls_http(self):
+        client = Mock()
+        perception = LocalPerception(
+            mode="remote",
+            service_auth_token="short_invalid_token",
+            http_client=client,
+        )
+
+        self.assertEqual(
+            perception.analyze("hello"),
+            dict(NEUTRAL_RESULT),
+        )
+
+        client.post.assert_not_called()
 
 
 class _FakePerception:
@@ -227,26 +300,47 @@ class GPUServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_ready_is_503_when_required_perception_is_unavailable(self):
         gpu_service._local_perception = _FakePerception(ready=False)
         gpu_service._slm_core = None
-        with patch.object(Config, "SLM_ENABLED", False):
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", "t" * 32), patch.object(
+            Config, "SLM_ENABLED", False
+        ):
             response = await gpu_service.ready()
 
         self.assertEqual(response.status_code, 503)
         payload = json.loads(response.body)
         self.assertFalse(payload["ready"])
+        self.assertTrue(payload["capabilities"]["auth"]["configured"])
         self.assertFalse(payload["capabilities"]["slm"]["enabled"])
+
+    async def test_ready_is_503_when_auth_is_unconfigured(self):
+        gpu_service._local_perception = _FakePerception(ready=True)
+        gpu_service._slm_core = None
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", None), patch.object(
+            Config, "SLM_ENABLED", False
+        ):
+            response = await gpu_service.ready()
+
+        self.assertEqual(response.status_code, 503)
+        payload = json.loads(response.body)
+        self.assertFalse(payload["ready"])
+        self.assertFalse(payload["capabilities"]["auth"]["configured"])
 
     async def test_ready_ignores_slm_when_capability_is_disabled(self):
         gpu_service._local_perception = _FakePerception()
         gpu_service._slm_core = None
-        with patch.object(Config, "SLM_ENABLED", False):
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", "t" * 32), patch.object(
+            Config, "SLM_ENABLED", False
+        ):
             response = await gpu_service.ready()
 
         self.assertTrue(response["ready"])
+        self.assertTrue(response["capabilities"]["auth"]["configured"])
 
     async def test_ready_requires_slm_when_capability_is_enabled(self):
         gpu_service._local_perception = _FakePerception()
         gpu_service._slm_core = _FakeSLM(ready=False)
-        with patch.object(Config, "SLM_ENABLED", True):
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", "t" * 32), patch.object(
+            Config, "SLM_ENABLED", True
+        ):
             response = await gpu_service.ready()
 
         self.assertEqual(response.status_code, 503)
@@ -335,6 +429,213 @@ class GPUServiceTests(unittest.IsolatedAsyncioTestCase):
             gpu_service.GenerateRequest(prompt="ok", max_new_tokens=513)
         with self.assertRaises(ValidationError):
             gpu_service.AnalyzeRequest(text="x" * 20_001)
+
+
+class GPUServiceMiddlewareTests(unittest.TestCase):
+    def setUp(self):
+        self.original_perception = gpu_service._local_perception
+        self.original_slm = gpu_service._slm_core
+        gpu_service._perception_semaphore = asyncio.Semaphore(1)
+        gpu_service._slm_semaphore = asyncio.Semaphore(1)
+
+    def tearDown(self):
+        gpu_service._local_perception = self.original_perception
+        gpu_service._slm_core = self.original_slm
+
+    def test_public_probes_do_not_require_auth(self):
+        for token_config in [None, "t" * 32]:
+            with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", token_config):
+                client = TestClient(gpu_service.app)
+                res = client.get("/live")
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.json(), {"status": "alive"})
+
+        gpu_service._local_perception = _FakePerception(ready=True)
+        gpu_service._slm_core = None
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", "t" * 32), patch.object(
+            Config, "SLM_ENABLED", False
+        ):
+            client = TestClient(gpu_service.app)
+            res = client.get("/ready")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["status"], "ready")
+            self.assertTrue(res.json()["ready"])
+
+    def test_ready_endpoint_returns_503_when_auth_unconfigured(self):
+        gpu_service._local_perception = _FakePerception(ready=True)
+        gpu_service._slm_core = None
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", None), patch.object(
+            Config, "SLM_ENABLED", False
+        ):
+            client = TestClient(gpu_service.app)
+            res = client.get("/ready")
+            self.assertEqual(res.status_code, 503)
+            payload = res.json()
+            self.assertEqual(payload["status"], "not_ready")
+            self.assertFalse(payload["ready"])
+            self.assertFalse(payload["capabilities"]["auth"]["configured"])
+
+    def test_missing_server_token_config_returns_503_generic(self):
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", None):
+            client = TestClient(gpu_service.app)
+
+            r_analyze = client.post("/analyze", json={"text": "hello"})
+            self.assertEqual(r_analyze.status_code, 503)
+            self.assertEqual(
+                r_analyze.json(),
+                {"detail": "GPU service authentication unavailable"},
+            )
+
+            r_generate = client.post("/generate", json={"prompt": "hello", "max_new_tokens": 10})
+            self.assertEqual(r_generate.status_code, 503)
+            self.assertEqual(
+                r_generate.json(),
+                {"detail": "GPU service authentication unavailable"},
+            )
+
+            r_health = client.get("/health")
+            self.assertEqual(r_health.status_code, 503)
+            self.assertEqual(
+                r_health.json(),
+                {"detail": "GPU service authentication unavailable"},
+            )
+
+    def test_missing_wrong_or_oversized_header_returns_403_generic(self):
+        server_token = "s" * 32
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", server_token):
+            client = TestClient(gpu_service.app)
+
+            # Missing header
+            r_missing = client.post("/analyze", json={"text": "hello"})
+            self.assertEqual(r_missing.status_code, 403)
+            self.assertEqual(r_missing.json(), {"detail": "Forbidden"})
+
+            # Wrong token
+            r_wrong = client.post(
+                "/analyze",
+                json={"text": "hello"},
+                headers={"X-Aura-Internal-Token": "w" * 32},
+            )
+            self.assertEqual(r_wrong.status_code, 403)
+            self.assertEqual(r_wrong.json(), {"detail": "Forbidden"})
+
+            # Oversized token (> 512 bytes)
+            r_oversized = client.post(
+                "/analyze",
+                json={"text": "hello"},
+                headers={"X-Aura-Internal-Token": "x" * 600},
+            )
+            self.assertEqual(r_oversized.status_code, 403)
+            self.assertEqual(r_oversized.json(), {"detail": "Forbidden"})
+
+            # Health with missing/wrong token
+            r_health_missing = client.get("/health")
+            self.assertEqual(r_health_missing.status_code, 403)
+
+            r_health_wrong = client.get(
+                "/health",
+                headers={"X-Aura-Internal-Token": "w" * 32},
+            )
+            self.assertEqual(r_health_wrong.status_code, 403)
+
+    def test_valid_auth_token_succeeds_for_protected_endpoints(self):
+        server_token = "s" * 32
+        fake_perception = _FakePerception()
+        fake_slm = _FakeSLM()
+        gpu_service._local_perception = fake_perception
+        gpu_service._slm_core = fake_slm
+
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", server_token), patch.object(
+            Config, "SLM_ENABLED", True
+        ):
+            client = TestClient(
+                gpu_service.app,
+                headers={"X-Aura-Internal-Token": server_token},
+            )
+
+            r_analyze = client.post("/analyze", json={"text": "hello"})
+            self.assertEqual(r_analyze.status_code, 200)
+            self.assertEqual(r_analyze.json()["arousal"], 0.3)
+
+            r_generate = client.post(
+                "/generate", json={"prompt": "hello", "max_new_tokens": 10}
+            )
+            self.assertEqual(r_generate.status_code, 200)
+            self.assertEqual(r_generate.json(), {"thought": "thought:hello:10"})
+
+            r_health = client.get("/health")
+            self.assertEqual(r_health.status_code, 200)
+            self.assertTrue(r_health.json()["ready"])
+
+    def test_trailing_slash_endpoints_are_protected(self):
+        server_token = "s" * 32
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", server_token):
+            client = TestClient(gpu_service.app)
+
+            r_analyze_slash = client.post("/analyze/", json={"text": "hello"})
+            self.assertEqual(r_analyze_slash.status_code, 403)
+
+            r_generate_slash = client.post("/generate/", json={"prompt": "hello"})
+            self.assertEqual(r_generate_slash.status_code, 403)
+
+            r_health_slash = client.get("/health/")
+            self.assertEqual(r_health_slash.status_code, 403)
+
+    def test_unauthorized_requests_never_call_backend_models(self):
+        server_token = "s" * 32
+        fake_perception = _FakePerception()
+        fake_slm = _FakeSLM()
+        gpu_service._local_perception = fake_perception
+        gpu_service._slm_core = fake_slm
+
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", server_token), patch.object(
+            Config, "SLM_ENABLED", True
+        ):
+            client = TestClient(gpu_service.app)
+
+            # Unauthorized analyze
+            r1 = client.post(
+                "/analyze",
+                json={"text": "hello"},
+                headers={"X-Aura-Internal-Token": "w" * 32},
+            )
+            self.assertEqual(r1.status_code, 403)
+
+            # Unauthorized generate
+            r2 = client.post(
+                "/generate",
+                json={"prompt": "hello", "max_new_tokens": 10},
+                headers={"X-Aura-Internal-Token": "w" * 32},
+            )
+            self.assertEqual(r2.status_code, 403)
+
+        self.assertEqual(fake_perception.calls, 0)
+        self.assertEqual(fake_slm.calls, 0)
+
+    def test_auth_responses_never_leak_tokens(self):
+        server_token = "server-secret-sentinel-" + "s" * 32
+        client_sentinel = "client-submitted-sentinel-" + "c" * 32
+
+        with patch.object(Config, "GPU_SERVICE_AUTH_TOKEN", server_token):
+            client = TestClient(gpu_service.app)
+
+            # Unauthenticated request
+            r_unauth = client.post("/analyze", json={"text": "hello"})
+            self.assertEqual(r_unauth.status_code, 403)
+            self.assertNotIn("server-secret-sentinel", r_unauth.text)
+            self.assertNotIn("server-secret-sentinel", str(r_unauth.headers))
+
+            # Wrong token request
+            r_wrong = client.post(
+                "/analyze",
+                json={"text": "hello"},
+                headers={"X-Aura-Internal-Token": client_sentinel},
+            )
+            self.assertEqual(r_wrong.status_code, 403)
+            self.assertNotIn("server-secret-sentinel", r_wrong.text)
+            self.assertNotIn("client-submitted-sentinel", r_wrong.text)
+            self.assertNotIn("server-secret-sentinel", str(r_wrong.headers))
+            self.assertNotIn("client-submitted-sentinel", str(r_wrong.headers))
 
 
 if __name__ == "__main__":

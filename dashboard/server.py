@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import os
 import uvicorn
 import sys
 import json
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,49 @@ app = FastAPI()
 logger = get_logger("dashboard")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_FILE = PROJECT_ROOT / "dashboard" / "index.html"
+
+
+@app.middleware("http")
+async def dashboard_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") or path == "/api":
+        server_token = getattr(Config, "DASHBOARD_AUTH_TOKEN", None)
+        if not server_token:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Dashboard authentication unavailable"},
+            )
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if len(auth_header) > 512:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        parts = auth_header.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token = parts[1]
+        if not secrets.compare_digest(
+            token.encode("utf-8"),
+            server_token.encode("utf-8"),
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
 
 
 @lru_cache(maxsize=1)
@@ -96,6 +140,24 @@ def _record_delivery_acks(receipts):
 @app.get("/")
 def read_root():
     return FileResponse(DASHBOARD_FILE)
+
+@app.get("/live")
+def live():
+    return {"status": "alive"}
+
+@app.get("/ready")
+def ready():
+    server_token = getattr(Config, "DASHBOARD_AUTH_TOKEN", None)
+    if not server_token:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "detail": "Dashboard authentication unavailable"},
+        )
+    return {"status": "ready"}
+
+@app.get("/api/auth/check")
+def check_auth():
+    return {"authenticated": True}
 
 @app.get("/api/state")
 def get_state():

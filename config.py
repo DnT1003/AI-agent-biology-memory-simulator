@@ -54,6 +54,32 @@ def _optional_discord_snowflake(value) -> str | None:
         return None
     return str(number)
 
+
+def _optional_service_auth_token(value) -> str | None:
+    """Return a validated service bearer/header token or ``None`` for unsafe input.
+
+    Valid tokens must be ASCII strings of length 32..256 composed of
+    token68 / base64url-safe characters with no whitespace or control characters.
+    """
+    if not isinstance(value, str):
+        return None
+    if len(value) < 32 or len(value) > 256:
+        return None
+    if not value.isascii():
+        return None
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~+/="
+    )
+    if not set(value).issubset(allowed):
+        return None
+    return value
+
+
+def _optional_dashboard_auth_token(value) -> str | None:
+    """Backwards-compatible wrapper for dashboard token validation."""
+    return _optional_service_auth_token(value)
+
+
 class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     API_KEY = os.getenv("API_KEY", "")
@@ -75,6 +101,20 @@ class Config:
         _DISCORD_OWNER_RAW
     )
     del _DISCORD_OWNER_RAW
+
+    # Dashboard Bearer Authentication (M4.1a) — fail-closed service token
+    _DASHBOARD_AUTH_TOKEN_RAW = os.getenv("AURA_DASHBOARD_AUTH_TOKEN")
+    DASHBOARD_AUTH_TOKEN: str | None = _optional_dashboard_auth_token(
+        _DASHBOARD_AUTH_TOKEN_RAW
+    )
+    del _DASHBOARD_AUTH_TOKEN_RAW
+
+    # GPU Microservice Authentication (M4.1b) — fail-closed service token
+    _GPU_SERVICE_AUTH_TOKEN_RAW = os.getenv("AURA_GPU_SERVICE_AUTH_TOKEN")
+    GPU_SERVICE_AUTH_TOKEN: str | None = _optional_service_auth_token(
+        _GPU_SERVICE_AUTH_TOKEN_RAW
+    )
+    del _GPU_SERVICE_AUTH_TOKEN_RAW
 
     # GIOI HAN SINH HOC (BOUNDED MEMORY)
     FORGETTING_RATE = 0.05          # Toc do quen co ban

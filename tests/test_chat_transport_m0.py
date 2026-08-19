@@ -91,9 +91,20 @@ class DashboardChatTransportTests(unittest.TestCase):
             return_value=(self.requests, self.responses),
         )
         self.spool_patch.start()
-        self.client = TestClient(dashboard_server.app)
+        self.token = "a" * 32
+        self.token_patch = patch.object(
+            dashboard_server.Config,
+            "DASHBOARD_AUTH_TOKEN",
+            self.token,
+        )
+        self.token_patch.start()
+        self.client = TestClient(
+            dashboard_server.app,
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
 
     def tearDown(self):
+        self.token_patch.stop()
         self.spool_patch.stop()
         self.temp_dir.cleanup()
 
@@ -251,6 +262,15 @@ class DashboardChatTransportTests(unittest.TestCase):
         self.assertIn("pendingChatIds.add(id);", html)
         self.assertIn("ackedReceipts.has(item.receipt)", html)
         self.assertIn("data.terminal", html)
+
+    def test_chat_transport_accepts_lowercase_bearer_auth(self):
+        client = TestClient(
+            dashboard_server.app,
+            headers={"Authorization": f"bearer {self.token}"},
+        )
+        response = client.post("/api/chat", json={"message": "msg"})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
 
 
 class AutonomousChatTransportTests(unittest.TestCase):

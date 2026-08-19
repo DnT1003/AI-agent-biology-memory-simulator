@@ -418,10 +418,38 @@
             <a class="nav-item" onclick="switchTab('chat', this)">
                 <i class="fa-solid fa-comments"></i> Direct Link
             </a>
+
+            <!-- Auth Control -->
+            <div class="auth-box" id="auth-box" style="margin-top: 10px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                <div id="auth-locked-view">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--warning); font-weight: 600;">
+                        <i class="fa-solid fa-lock"></i> <span>Dashboard Locked</span>
+                    </div>
+                    <form id="auth-form" onsubmit="unlockDashboard(event)" style="display: flex; flex-direction: column; gap: 8px;">
+                        <input type="password" id="auth-token-input" class="form-control" placeholder="Bearer Token" style="padding: 8px 12px; font-size: 13px;" autocomplete="off" required>
+                        <button type="submit" class="btn btn-primary" id="unlock-btn" style="padding: 8px 14px; font-size: 13px; justify-content: center;">
+                            <i class="fa-solid fa-key"></i> Unlock
+                        </button>
+                    </form>
+                    <div id="auth-error" style="display: none; color: var(--danger); font-size: 12px; margin-top: 6px;">
+                        Authentication failed.
+                    </div>
+                </div>
+                <div id="auth-unlocked-view" style="display: none;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                        <span style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--accent-primary); font-weight: 600;">
+                            <i class="fa-solid fa-lock-open"></i> Authenticated
+                        </span>
+                    </div>
+                    <button type="button" class="btn" onclick="lockDashboard()" style="width: 100%; padding: 8px 14px; font-size: 13px; justify-content: center; background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4);">
+                        <i class="fa-solid fa-lock"></i> Lock
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Main Content -->
-        <div class="content-area">
+        <div class="content-area" id="content-area" style="display: none;">
             
             <!-- STATE PANEL -->
             <div id="panel-state" class="panel active">
@@ -585,12 +613,158 @@
             document.getElementById('group_' + provider).style.display = 'block';
         }
 
+        // Authentication Management
+        const AUTH_STORAGE_KEY = 'auraDashboardAuthToken';
+        let authGeneration = 0;
+
+        function getAuthToken() {
+            return sessionStorage.getItem(AUTH_STORAGE_KEY) || '';
+        }
+
+        function setAuthToken(token) {
+            authGeneration++;
+            if (token) {
+                sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+            } else {
+                sessionStorage.removeItem(AUTH_STORAGE_KEY);
+            }
+        }
+
+        function clearAuthToken() {
+            authGeneration++;
+            sessionStorage.removeItem(AUTH_STORAGE_KEY);
+        }
+
+        function updateAuthUI(isAuthenticated) {
+            const lockedView = document.getElementById('auth-locked-view');
+            const unlockedView = document.getElementById('auth-unlocked-view');
+            const authError = document.getElementById('auth-error');
+            const contentArea = document.getElementById('content-area');
+            if (authError) authError.style.display = 'none';
+
+            if (isAuthenticated) {
+                if (lockedView) lockedView.style.display = 'none';
+                if (unlockedView) unlockedView.style.display = 'block';
+                if (contentArea) contentArea.style.display = 'flex';
+            } else {
+                if (lockedView) lockedView.style.display = 'block';
+                if (unlockedView) unlockedView.style.display = 'none';
+                if (contentArea) contentArea.style.display = 'none';
+            }
+        }
+
+        async function apiFetch(url, options = {}) {
+            const token = getAuthToken();
+            if (!token) {
+                return null;
+            }
+            const currentGen = authGeneration;
+            const opts = { ...options };
+            const headers = new Headers(opts.headers || {});
+            headers.set('Authorization', 'Bearer ' + token);
+            opts.headers = headers;
+
+            const response = await fetch(url, opts);
+            if (response.status === 401) {
+                if (currentGen === authGeneration) {
+                    clearAuthToken();
+                    updateAuthUI(false);
+                }
+            }
+            return response;
+        }
+
+        async function unlockDashboard(e) {
+            if (e) e.preventDefault();
+            const input = document.getElementById('auth-token-input');
+            const errorDiv = document.getElementById('auth-error');
+            const btn = document.getElementById('unlock-btn');
+            if (!input) return;
+            const token = input.value.trim();
+            if (!token) return;
+
+            if (btn) btn.disabled = true;
+            if (errorDiv) errorDiv.style.display = 'none';
+
+            setAuthToken(token);
+            const gen = authGeneration;
+            input.value = '';
+
+            try {
+                const res = await apiFetch('/api/auth/check');
+                if (gen !== authGeneration && !(res && res.status === 401 && authGeneration === gen + 1 && !getAuthToken())) return;
+                if (res && res.ok) {
+                    const data = await res.json();
+                    if (data && data.authenticated) {
+                        updateAuthUI(true);
+                        fetchState();
+                        fetchChat();
+                        loadSettings();
+                        return;
+                    }
+                }
+                clearAuthToken();
+                updateAuthUI(false);
+                if (errorDiv) {
+                    errorDiv.textContent = (res && res.status === 503) ? 'Service unavailable.' : 'Authentication failed.';
+                    errorDiv.style.display = 'block';
+                }
+            } catch (err) {
+                if (gen !== authGeneration) return;
+                clearAuthToken();
+                updateAuthUI(false);
+                if (errorDiv) {
+                    errorDiv.textContent = 'Connection error.';
+                    errorDiv.style.display = 'block';
+                }
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function lockDashboard() {
+            clearAuthToken();
+            updateAuthUI(false);
+            window.location.reload();
+        }
+
+        async function checkInitialAuth() {
+            const token = getAuthToken();
+            if (!token) {
+                updateAuthUI(false);
+                return false;
+            }
+            const gen = authGeneration;
+            try {
+                const res = await apiFetch('/api/auth/check');
+                if (gen !== authGeneration) return false;
+                if (res && res.ok) {
+                    const data = await res.json();
+                    if (data && data.authenticated) {
+                        updateAuthUI(true);
+                        return true;
+                    }
+                }
+                clearAuthToken();
+                updateAuthUI(false);
+                return false;
+            } catch (e) {
+                if (gen === authGeneration) {
+                    clearAuthToken();
+                    updateAuthUI(false);
+                }
+                return false;
+            }
+        }
+
         // Fetch State
         async function fetchState() {
+            if (!getAuthToken()) return;
             try {
-                const res = await fetch('/api/state');
+                const res = await apiFetch('/api/state');
+                if (!res || !res.ok) return;
                 const data = await res.json();
-                if (data.error) return;
+                if (!data || data.error) return;
 
                 const moodPct = ((data.mood + 1.0) / 2.0) * 100;
                 document.getElementById('bar_mood').style.width = Math.max(0, Math.min(100, moodPct)) + '%';
@@ -617,9 +791,12 @@
 
         // Load Settings
         async function loadSettings() {
+            if (!getAuthToken()) return;
             try {
-                const res = await fetch('/api/settings');
+                const res = await apiFetch('/api/settings');
+                if (!res || !res.ok) return;
                 const data = await res.json();
+                if (!data) return;
                 
                 if(data.provider) document.getElementById('provider').value = data.provider;
                 if(data.local_model) document.getElementById('local_model').value = data.local_model;
@@ -634,6 +811,7 @@
         // Save Settings
         async function saveSettings(e) {
             e.preventDefault();
+            if (!getAuthToken()) return;
             const btn = document.getElementById('save-btn');
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
             btn.disabled = true;
@@ -647,14 +825,16 @@
             };
 
             try {
-                const res = await fetch('/api/settings', {
+                const res = await apiFetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
                 
-                if(res.ok) {
+                if(res && res.ok) {
                     showToast();
+                } else {
+                    alert("Failed to save settings");
                 }
             } catch(err) {
                 console.error(err);
@@ -702,6 +882,7 @@
         }
 
         async function fetchChat() {
+            if (!getAuthToken()) return;
             try {
                 const requestedIds = Array.from(pendingChatIds).slice(0, 50);
                 if(requestedIds.length === 0) return;
@@ -713,11 +894,11 @@
                 });
                 const params = new URLSearchParams();
                 requestedIds.forEach(id => params.append('id', id));
-                const res = await fetch(`/api/chat?${params.toString()}`);
-                if(!res.ok) return;
+                const res = await apiFetch(`/api/chat?${params.toString()}`);
+                if(!res || !res.ok) return;
                 const data = await res.json();
                 const receipts = [];
-                if(data.messages && data.messages.length > 0) {
+                if(data && data.messages && data.messages.length > 0) {
                     data.messages.forEach(msg => {
                         if(msg.receipt) receipts.push({receipt: msg.receipt, id: msg.id});
                         if(msg.id && !seenChatIds.has(msg.id)) {
@@ -727,7 +908,7 @@
                     });
                 }
                 let pendingChanged = false;
-                if(data.terminal && data.terminal.length > 0) {
+                if(data && data.terminal && data.terminal.length > 0) {
                     data.terminal.forEach(item => {
                         if(!item.id) return;
                         pendingChanged = pendingChatIds.delete(item.id) || pendingChanged;
@@ -741,12 +922,12 @@
                     });
                 }
                 if(receipts.length > 0) {
-                    const ackResponse = await fetch('/api/chat/ack', {
+                    const ackResponse = await apiFetch('/api/chat/ack', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({receipts: receipts.map(item => item.receipt)})
                     });
-                    if(ackResponse.ok) {
+                    if(ackResponse && ackResponse.ok) {
                         const ackData = await ackResponse.json();
                         const ackedReceipts = new Set(ackData.acked || []);
                         receipts.forEach(item => {
@@ -777,6 +958,10 @@
 
         async function sendChatMessage(e) {
             e.preventDefault();
+            if (!getAuthToken()) {
+                appendMessage('aura', 'Dashboard đang bị khóa. Vui lòng mở khóa trước.');
+                return;
+            }
             const input = document.getElementById('chat-input');
             const msg = input.value.trim();
             if(!msg) return;
@@ -785,16 +970,16 @@
             input.value = '';
             
             try {
-                const res = await fetch('/api/chat', {
+                const res = await apiFetch('/api/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({message: msg})
                 });
-                if(!res.ok) {
+                if(!res || !res.ok) {
                     appendMessage('aura', 'Không thể xếp hàng tin nhắn lúc này. Vui lòng thử lại.');
                 } else {
                     const queued = await res.json();
-                    if(queued.id) {
+                    if(queued && queued.id) {
                         pendingChatIds.add(queued.id);
                         persistPendingChatIds();
                     }
@@ -805,11 +990,17 @@
         }
 
         // Init
+        async function initDashboard() {
+            const isAuthenticated = await checkInitialAuth();
+            if (isAuthenticated) {
+                fetchState();
+                fetchChat();
+                loadSettings();
+            }
+        }
+        initDashboard();
         setInterval(fetchState, 1500);
         setInterval(fetchChat, 1000);
-        fetchState();
-        fetchChat();
-        loadSettings();
     </script>
 </body>
 </html>

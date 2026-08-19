@@ -4,7 +4,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from config import Config
+from config import Config, _optional_service_auth_token
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class SLMCore:
         *,
         mode: SLMMode = "remote",
         service_url: str | None = None,
+        service_auth_token: str | None = None,
         http_client: Any | None = None,
     ):
         if mode not in ("remote", "native"):
@@ -43,6 +44,12 @@ class SLMCore:
 
         self.mode: SLMMode = mode
         self.service_url = (service_url or Config.GPU_SERVICE_URL).rstrip("/")
+        raw_token = (
+            service_auth_token
+            if service_auth_token is not None
+            else Config.GPU_SERVICE_AUTH_TOKEN
+        )
+        self.service_auth_token: str | None = _optional_service_auth_token(raw_token)
         self._http_client = http_client
 
         self.device = "cpu"
@@ -155,6 +162,9 @@ class SLMCore:
         return self._generate_native(prompt_text, max_tokens)
 
     def _generate_remote(self, prompt_text: str, max_tokens: int) -> str:
+        if not self.service_auth_token:
+            raise SLMServiceError("GPU service authentication token is missing or invalid")
+
         client = self._http_client
         if client is None:
             import requests
@@ -165,6 +175,7 @@ class SLMCore:
             response = client.post(
                 f"{self.service_url}/generate",
                 json={"prompt": prompt_text, "max_new_tokens": max_tokens},
+                headers={"X-Aura-Internal-Token": self.service_auth_token},
                 timeout=20,
             )
             response.raise_for_status()

@@ -18,6 +18,59 @@ function Invoke-CheckedNative {
     }
 }
 
+function Invoke-CheckedSecretNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $false)][string]$Description = "Secret operation"
+    )
+    & $Executable @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Secret command failed ($LASTEXITCODE): $Description"
+    }
+}
+
+function New-AuraAuthToken {
+    $bytes = New-Object byte[] 32
+    $rng = $null
+    try {
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        if ($null -ne $rng) {
+            $rng.Dispose()
+        }
+    }
+    $base64 = [Convert]::ToBase64String($bytes)
+    return $base64.Replace("+", "-").Replace("/", "_").TrimEnd("=")
+}
+
+function Test-AuraValidAuthToken {
+    param(
+        [Parameter(Mandatory = $false)][string]$Base64Value
+    )
+    if ([string]::IsNullOrWhiteSpace($Base64Value)) {
+        return $false
+    }
+    try {
+        $bytes = [Convert]::FromBase64String($Base64Value.Trim())
+        foreach ($b in $bytes) {
+            if ($b -gt 127) {
+                return $false
+            }
+        }
+        $decoded = [System.Text.Encoding]::ASCII.GetString($bytes)
+        if ($decoded.Length -lt 32 -or $decoded.Length -gt 256) {
+            return $false
+        }
+        return ($decoded -cmatch '^[a-zA-Z0-9_\-\.~+/=]{32,256}$')
+    }
+    catch {
+        return $false
+    }
+}
+
 # ---- BUOC 0: Tat mang host de chay WSL2 path ----
 # ---- BUOC 0: Tao thu muc tren Windows (Docker Desktop WSL2 mount C:\ = /mnt/c/) ----
 # Windows: C:\aura\* ←→ WSL2/K8s node: /mnt/c/aura/*
@@ -51,13 +104,46 @@ kubectl rollout restart daemonset/nvidia-device-plugin-daemonset -n kube-system 
 
 # ---- BUOC 4: Secrets + ConfigMap ----
 Write-Host "`n[4/7] Secrets & ConfigMap..." -ForegroundColor Yellow
-# Nhac user nhap API key neu chua co
-if (-not (kubectl get secret aura-secrets -n aura 2>$null)) {
+$existingSecretRaw = kubectl get secret aura-secrets -n aura -o json --ignore-not-found 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to query secret aura-secrets ($LASTEXITCODE)"
+}
+$existingSecretJson = if ($existingSecretRaw) { ($existingSecretRaw -join "`n").Trim() } else { "" }
+if (-not $existingSecretJson) {
     $API_KEY = Read-Host "Nhap Gemini API Key"
-    Invoke-CheckedNative kubectl @(
+    $dashboardToken = New-AuraAuthToken
+    $gpuToken = New-AuraAuthToken
+    Invoke-CheckedSecretNative kubectl @(
         "create", "secret", "generic", "aura-secrets",
-        "--from-literal=API_KEY=$API_KEY", "--namespace=aura"
-    )
+        "--from-literal=API_KEY=$API_KEY",
+        "--from-literal=AURA_DASHBOARD_AUTH_TOKEN=$dashboardToken",
+        "--from-literal=AURA_GPU_SERVICE_AUTH_TOKEN=$gpuToken",
+        "--namespace=aura"
+    ) "create aura-secrets"
+} else {
+    $secretObj = $existingSecretJson | ConvertFrom-Json
+    $dataObj = if ($secretObj -and $secretObj.data) { $secretObj.data } else { $null }
+    $patchData = @{}
+    $tokenKeys = @("AURA_DASHBOARD_AUTH_TOKEN", "AURA_GPU_SERVICE_AUTH_TOKEN")
+    foreach ($tokenKey in $tokenKeys) {
+        $existingVal = if ($dataObj -and $dataObj.PSObject.Properties[$tokenKey]) {
+            [string]$dataObj.PSObject.Properties[$tokenKey].Value
+        } else {
+            $null
+        }
+        if (-not (Test-AuraValidAuthToken $existingVal)) {
+            $newToken = New-AuraAuthToken
+            $patchData[$tokenKey] = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($newToken))
+        }
+    }
+    if ($patchData.Count -gt 0) {
+        $patchJson = @{ data = $patchData } | ConvertTo-Json -Compress
+        Invoke-CheckedSecretNative kubectl @(
+            "patch", "secret", "aura-secrets",
+            "-n", "aura",
+            "-p", $patchJson
+        ) "patch aura-secrets"
+    }
 }
 Invoke-CheckedNative kubectl @("apply", "-f", "k8s/configmap.yaml")
 
@@ -97,6 +183,8 @@ Write-Host "`n=== DEPLOY XONG ===" -ForegroundColor Green
 Write-Host "Them vao C:\Windows\System32\drivers\etc\hosts:" -ForegroundColor Cyan
 Write-Host "  127.0.0.1  aura.local"
 Write-Host "Chi truy cap http://aura.local neu da explicit bat AURA_ENABLE_UNSAFE_INGRESS=true." -ForegroundColor Cyan
+Write-Host "`nDe lay Dashboard Auth Token truy cap web:" -ForegroundColor Cyan
+Write-Host "  [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((kubectl get secret aura-secrets -n aura -o jsonpath='{.data.AURA_DASHBOARD_AUTH_TOKEN}')))" -ForegroundColor Yellow
 
 # Kiem tra toan bo
 Invoke-CheckedNative kubectl @("get", "pods", "-n", "aura")

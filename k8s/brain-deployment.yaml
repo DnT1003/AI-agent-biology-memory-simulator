@@ -61,6 +61,11 @@ spec:
                   name: aura-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
+            - name: AURA_GPU_SERVICE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_GPU_SERVICE_AUTH_TOKEN
           resources:
             limits:
               memory: "2Gi"

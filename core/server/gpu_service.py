@@ -8,8 +8,10 @@ import sys
 # Add project root to path when this module is executed as a script.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+import secrets
+
 from colorama import Fore, Style, init
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -24,6 +26,38 @@ app = FastAPI(
     description="Native Torch/GPU inference service for the Aura brain process",
     version="1.1.0",
 )
+
+
+@app.middleware("http")
+async def gpu_service_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in ("/live", "/ready"):
+        return await call_next(request)
+
+    server_token = getattr(Config, "GPU_SERVICE_AUTH_TOKEN", None)
+    if not server_token:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "GPU service authentication unavailable"},
+        )
+
+    auth_header = request.headers.get("X-Aura-Internal-Token")
+    if not auth_header or len(auth_header) > 512:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden"},
+        )
+
+    if not secrets.compare_digest(
+        auth_header.encode("utf-8"),
+        server_token.encode("utf-8"),
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden"},
+        )
+
+    return await call_next(request)
 
 
 class AnalyzeRequest(BaseModel):
@@ -42,6 +76,7 @@ _slm_semaphore = asyncio.Semaphore(1)
 
 
 def _capability_status() -> dict:
+    auth_configured = bool(getattr(Config, "GPU_SERVICE_AUTH_TOKEN", None))
     perception_ready = bool(
         _local_perception is not None
         and getattr(_local_perception, "is_ready", False)
@@ -52,11 +87,14 @@ def _capability_status() -> dict:
         and _slm_core is not None
         and getattr(_slm_core, "is_ready", False)
     )
-    ready = perception_ready and (not slm_enabled or slm_ready)
+    ready = auth_configured and perception_ready and (not slm_enabled or slm_ready)
     return {
         "status": "ready" if ready else "not_ready",
         "ready": ready,
         "capabilities": {
+            "auth": {
+                "configured": auth_configured,
+            },
             "local_perception": {
                 "enabled": True,
                 "ready": perception_ready,

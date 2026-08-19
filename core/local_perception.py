@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from colorama import Fore, Style
 
-from config import Config
+from config import Config, _optional_service_auth_token
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ class LocalPerception:
         *,
         mode: PerceptionMode = "remote",
         service_url: str | None = None,
+        service_auth_token: str | None = None,
         http_client: Any | None = None,
     ):
         if mode not in ("remote", "native"):
@@ -43,6 +44,12 @@ class LocalPerception:
         self.mode: PerceptionMode = mode
         self.model_name = model_name
         self.service_url = (service_url or Config.GPU_SERVICE_URL).rstrip("/")
+        raw_token = (
+            service_auth_token
+            if service_auth_token is not None
+            else Config.GPU_SERVICE_AUTH_TOKEN
+        )
+        self.service_auth_token: str | None = _optional_service_auth_token(raw_token)
         self._http_client = http_client
         self.sentiment_analyzer = None
         self.device: str | None = None
@@ -86,6 +93,12 @@ class LocalPerception:
         return self._analyze_native(text)
 
     def _analyze_remote(self, text: str) -> dict:
+        if not self.service_auth_token:
+            logger.warning(
+                "[LocalPerception Remote Error]: Missing or invalid GPU service auth token"
+            )
+            return dict(NEUTRAL_RESULT)
+
         client = self._http_client
         if client is None:
             import requests
@@ -96,6 +109,7 @@ class LocalPerception:
             response = client.post(
                 f"{self.service_url}/analyze",
                 json={"text": text},
+                headers={"X-Aura-Internal-Token": self.service_auth_token},
                 timeout=10,
             )
             response.raise_for_status()

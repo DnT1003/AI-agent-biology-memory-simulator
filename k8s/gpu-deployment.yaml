@@ -22,6 +22,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: aura-config
+          env:
+            - name: AURA_GPU_SERVICE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_GPU_SERVICE_AUTH_TOKEN
           ports:
             - containerPort: 8001
           resources:

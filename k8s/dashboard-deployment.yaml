@@ -29,6 +29,11 @@ spec:
           env:
             - name: AURA_OUTPUT_DIR
               value: /app/outputs
+            - name: AURA_DASHBOARD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_DASHBOARD_AUTH_TOKEN
           resources:
             limits:
               memory: "256Mi"
@@ -38,13 +43,13 @@ spec:
               cpu: "100m"
           livenessProbe:
             httpGet:
-              path: /
+              path: /live
               port: 8050
             initialDelaySeconds: 5
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /
+              path: /ready
               port: 8050
             initialDelaySeconds: 3
             periodSeconds: 5
