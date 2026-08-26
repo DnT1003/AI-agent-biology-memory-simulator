@@ -1,0 +1,26 @@
+{
+  "venvPath": ".",
+  "venv": ".venv_aura",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Windows",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    ".venv",
+    ".venv_aura",
+    "__pycache__",
+    "ollama_source",
+    "temp_backup",
+    "1"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.12",
+      "extraPaths": [".", "core", "components", "core/engine/nanogpt"]
+    }
+  ],
+  "reportMissingModuleSource": "none",
+  "typeCheckingMode": "off"
+}

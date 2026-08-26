@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-brain
+  namespace: aura
+  labels:
+    app: aura-brain
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: aura-brain
+  template:
+    metadata:
+      labels:
+        app: aura-brain
+    spec:
+      terminationGracePeriodSeconds: 60
+      # FIX: Them initContainers de Brain cho Chroma san sang truoc khi khoi dong
+      initContainers:
+        - name: wait-for-chroma
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Cho Chroma khoi dong..."
+              until curl -sf http://aura-chromadb-svc:8000/api/v1/heartbeat; do
+                echo "Chroma chua san sang, thu lai sau 5 giay..."
+                sleep 5
+              done
+              echo "Chroma da san sang!"
+      containers:
+        - name: brain
+          image: aura/brain:latest
+          imagePullPolicy: Never
+          tty: true
+          stdin: true
+          # Nap tat ca bien moi truong chung tu ConfigMap
+          envFrom:
+            - configMapRef:
+                name: aura-config
+          env:
+            # Secret rieng (API keys)
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: AURA_GPU_SERVICE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_GPU_SERVICE_AUTH_TOKEN
+            - name: AURA_EVENT_JOURNAL_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_EVENT_JOURNAL_HMAC_KEY
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: brain-storage
+              mountPath: /app/outputs
+      volumes:
+        - name: brain-storage
+          persistentVolumeClaim:
+            claimName: brain-pvc

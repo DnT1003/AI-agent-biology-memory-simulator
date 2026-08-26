@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-chromadb
+  namespace: aura
+  labels:
+    app: aura-chromadb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: aura-chromadb
+  template:
+    metadata:
+      labels:
+        app: aura-chromadb
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: chromadb
+          image: aura/chromadb:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+          # FIX: Them livenessProbe de K8s biet khi nao Chroma sap/treo
+          livenessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          # FIX: Them readinessProbe de Brain khong goi khi Chroma chua san sang
+          readinessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /chroma_data
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: chroma-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aura-chromadb-svc
+  namespace: aura  # updated
+spec:
+  selector:
+    app: aura-chromadb
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

@@ -1,0 +1,19 @@
+CompileFlags:
+  Add:
+    - -xc++
+    - -std=c++11
+    - -Id:\python\PythonProject15\ollama_source\llama\llama.cpp
+    - -Id:\python\PythonProject15\ollama_source\llama\llama.cpp\include
+    - -Id:\python\PythonProject15\ollama_source\llama\llama.cpp\common
+    - -Id:\python\PythonProject15\ollama_source\llama\llama.cpp\vendor\nlohmann
+    - -Id:\python\PythonProject15\ollama_source\llama\llama.cpp\src
+    - -D_WIN32
+    - -D_WIN64
+    - -D_CRT_SECURE_NO_WARNINGS
+    - -DNOMINMAX
+  Compiler: clang++
+
+Diagnostics:
+  Suppress:
+    - "undeclared_identifier" # Có thể vẫn bị do thiếu include từ C standard lib
+    - "unknown_type_name"

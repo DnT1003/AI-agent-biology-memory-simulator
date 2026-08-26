@@ -1,0 +1,20 @@
+# Dockerfile danh rieng cho ChromaDB
+# Su dung Python 3.11-slim (on dinh nhat cho pydantic v1.x cua Chroma)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Cai dat ChromaDB - phu thuoc C++ build tools
+RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib/apt/lists/*
+# FIX: nang len 0.5.x de ho tro REST API v2 (tenant/database endpoints)
+RUN pip install --no-cache-dir "chromadb==0.5.23"
+
+# Tao thu muc luu tru du lieu Chroma
+RUN mkdir -p /chroma_data
+# FIX: Bo `ENV CHROMA_DB_IMPL` - da bi deprecated tu 0.4.x, --path trong CMD la du
+
+# Mo cong 8000
+EXPOSE 8000
+
+# Khoi chay Chroma server
+CMD ["chroma", "run", "--host", "0.0.0.0", "--port", "8000", "--path", "/chroma_data"]

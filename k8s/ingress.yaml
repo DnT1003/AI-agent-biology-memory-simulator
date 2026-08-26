@@ -1,0 +1,25 @@
+# ================================================================
+# INGRESS - Entry point duy nhat tu ben ngoai
+# Route / -> dashboard, /api/* -> brain (neu expose)
+# ================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aura-ingress
+  namespace: aura
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: aura.local   # Them vao /etc/hosts: 127.0.0.1 aura.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: aura-dashboard-svc
+                port:
+                  number: 80

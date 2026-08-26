@@ -1,0 +1,129 @@
+# ================================================================
+# STORAGE PVCs - SUA DUNG HOSTPATH DE TRANH YEU CAU RWX
+# Thich hop cho 1-node deployment (Docker Desktop / minikube)
+# ================================================================
+
+# --- 1. brain-pvc (RWX via hostPath) ---
+# Chia se giua aura-brain va aura-dashboard
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: brain-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany   # OK voi hostPath tren 1 node
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/outputs   # Docker Desktop (WSL2): C:\aura\outputs → /mnt/c/aura/outputs
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: brain-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  volumeName: brain-pv
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# --- 2. chroma-pvc (RWO) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: chroma-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/chroma_db
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chroma-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  volumeName: chroma-pv
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# --- 3. gemma-pvc (model weights Gemma 4 E4B, ~11GB) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gemma-pv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    # Windows: d:\python\PythonProject19\Gemma4_E4B → /mnt/d/python/PythonProject19/Gemma4_E4B
+    path: /mnt/d/python/PythonProject19/Gemma4_E4B
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gemma-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  volumeName: gemma-pv
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# --- 4. gpu-pvc (SLM weights - chia se Brain va GPU) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gpu-pv
+spec:
+  capacity:
+    storage: 3Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/c/aura/slm
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gpu-pvc
+  namespace: aura
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: manual
+  volumeName: gpu-pv
+  resources:
+    requests:
+      storage: 3Gi

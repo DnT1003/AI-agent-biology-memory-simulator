@@ -1,0 +1,39 @@
+# Bo qua cac thu muc ao va moi truong local
+.venv*
+__pycache__/
+*.pyc
+.git/
+.idea/
+.vscode/
+.agents/
+.codex/
+test/
+tests/
+
+# Keep local source material, archives, backups, and generated reviews out of
+# every image build context. Runtime images do not consume these artifacts.
+*.docx
+*.zip
+temp_backup/
+reports/
+*_REPORT.md
+
+# Bo qua thu muc output dia phuong (khi dua len K8s se dung PVC)
+outputs/
+data/
+novel/
+
+# Bo qua log
+*.log
+error_log.txt
+
+# Bo qua secrets - tranh copy vao Docker image
+.env
+.env.*
+k8s/aura-secrets.yaml
+
+# Bo qua Mieu/MoE checkpoint models (se duoc tai ve tu xa, hoac tu mount, tuy kien truc, 
+# neu muon copy vao container thi comment dong nay lai)
+core/engine/nanogpt/*.pth
+core/engine/nanogpt/*.bin
+core/engine/nanogpt/input.txt

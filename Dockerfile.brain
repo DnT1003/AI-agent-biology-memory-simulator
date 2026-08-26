@@ -1,0 +1,27 @@
+# Dockerfile cho Aura Brain (Dieu phoi nhan thuc)
+FROM python:3.12-slim
+
+# Cai dat dependencies he thong can thiet
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy toan bo du an vao truoc de pip install co the doc pyproject.toml
+COPY . .
+
+# FIX: Khong dung requirements.txt (khong ton tai). Cai tu pyproject.toml
+RUN pip install --no-cache-dir .
+
+# Cai dat spacy models (optional, loi thi bo qua)
+RUN python -m spacy download en_core_web_sm || true
+
+# Tao thu muc dau ra mac dinh phong khi chua mount volume
+RUN mkdir -p /app/outputs
+
+# Aura la interactive console app - can TTY
+# Dung kubectl attach -it hoac exec -it de tuong tac
+CMD ["python", "main.py"]

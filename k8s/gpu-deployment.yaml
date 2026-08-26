@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-gpu-deploy
+  namespace: aura
+  labels:
+    app: aura-gpu-svc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-gpu-svc
+  template:
+    metadata:
+      labels:
+        app: aura-gpu-svc
+    spec:
+      containers:
+        - name: gpu-service
+          image: aura/gpuservice:latest
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: aura-config
+          env:
+            - name: AURA_GPU_SERVICE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aura-secrets
+                  key: AURA_GPU_SERVICE_AUTH_TOKEN
+          ports:
+            - containerPort: 8001
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              memory: "6Gi"
+              cpu: "4000m"
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+          # Allow native model initialization to finish before liveness begins.
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8001
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            # SLM weights: chia se voi brain-pod
+            - name: slm-storage
+              mountPath: /app/slm
+      volumes:
+        - name: slm-storage
+          persistentVolumeClaim:
+            claimName: gpu-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aura-gpu-svc
+  namespace: aura
+spec:
+  selector:
+    app: aura-gpu-svc
+  ports:
+    - protocol: TCP
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP
