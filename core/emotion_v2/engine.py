@@ -10,7 +10,10 @@ from .dynamics import (
     multiply, negate, subtract,
 )
 from .parameters import EmotionParametersV2
-from .types import EmotionStateV2, EmotionTransitionV2, EmotionValidationError, canonical_sha256
+from .types import (
+    _SIGNED_INT64_MAX, EmotionStateV2, EmotionTransitionV2, EmotionValidationError,
+    canonical_sha256,
+)
 
 
 def _validate_state_for_parameters(state: EmotionStateV2, parameters: EmotionParametersV2) -> None:
@@ -64,6 +67,8 @@ def reduce_emotion_v2(
     if not isinstance(transition, EmotionTransitionV2):
         raise EmotionValidationError("transition must be EmotionTransitionV2")
     _validate_state_for_parameters(state, parameters)
+    if transition.is_novel_event and state.event_sequence == _SIGNED_INT64_MAX:
+        raise EmotionValidationError("novel event would exceed the event_sequence signed-int64 maximum")
     if transition.elapsed_seconds == 0.0 and not transition.is_novel_event:
         return state
 

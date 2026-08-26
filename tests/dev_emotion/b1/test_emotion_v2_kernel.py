@@ -6,6 +6,7 @@ import hashlib
 import pytest
 
 import core.emotion_v2 as public_emotion_v2
+import core.emotion_v2.engine as emotion_engine
 from core.emotion_v2.dynamics import dot
 from core.emotion_v2.types import canonical_json_bytes
 
@@ -126,6 +127,33 @@ def test_nonfinite_values_are_rejected(bad: float) -> None:
 def test_public_appraisal_dto_rejects_oversized_integer_conversion() -> None:
     with pytest.raises(EmotionValidationError):
         AppraisalInputV2((10**10000, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0.5, 0.5)
+
+
+def test_persistence_bound_integer_dto_and_sequence_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    maximum = 2**63 - 1
+    maximum_state = state(last_update_ns=maximum, event_sequence=maximum)
+    maximum_transition = transition(wall_clock_ns=maximum)
+    assert len(maximum_state.canonical_hash()) == 64
+    assert len(maximum_transition.canonical_hash()) == 64
+    for factory in (
+        lambda: state(last_update_ns=maximum + 1),
+        lambda: state(event_sequence=maximum + 1),
+        lambda: transition(wall_clock_ns=maximum + 1),
+    ):
+        with pytest.raises(EmotionValidationError):
+            factory()
+    incremented = reduce_emotion_v2(
+        state(event_sequence=maximum - 1), parameters(), transition(elapsed_seconds=0.0),
+    )
+    assert incremented.event_sequence == maximum
+    assert len(incremented.canonical_hash()) == 64
+    monkeypatch.setattr(emotion_engine, "_event_impulse", lambda *_: pytest.fail("impulse must not run"))
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(maximum_state, parameters(), maximum_transition)
+    preserved = reduce_emotion_v2(
+        maximum_state, parameters(), transition(is_novel_event=False, elapsed_seconds=0.0),
+    )
+    assert preserved is maximum_state
 
 
 def test_dimensions_ranges_and_parameter_invariants_are_rejected() -> None:

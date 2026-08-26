@@ -27,6 +27,7 @@ TRAIT_ORDER = (
 MEMORY_SUMMARY_ORDER = (
     "dose_weighted_valence", "dose_weighted_arousal", "dose_confidence", "dose",
 )
+_SIGNED_INT64_MAX = 2**63 - 1
 
 
 class EmotionValidationError(ValueError):
@@ -46,8 +47,9 @@ def _number(value: object, name: str) -> float:
 
 
 def _integer(value: object, name: str, *, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise EmotionValidationError(f"{name} must be an integer >= {minimum}")
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < minimum or value > _SIGNED_INT64_MAX):
+        raise EmotionValidationError(f"{name} must be an integer in [{minimum}, {_SIGNED_INT64_MAX}]")
     return value
 
 
