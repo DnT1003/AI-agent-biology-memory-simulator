@@ -2,11 +2,74 @@ import os
 import subprocess
 import sys
 import shutil
+from pathlib import Path
+from typing import Mapping
 
 import shlex
 
+from core.runtime_paths import (
+    LegacyArtifactKind,
+    LegacyArtifactManifest,
+    RuntimePathError,
+    RuntimePaths,
+    discover_legacy_artifacts,
+)
+
 # Phase 1: Environment Validation
 REQUIRED_PYTHON_VERSION = (3, 12)
+
+
+def prepare_runtime_layout(
+    *,
+    base_dir: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+) -> tuple[RuntimePaths, LegacyArtifactManifest]:
+    """Validate and explicitly create the empty canonical runtime layout.
+
+    This is deliberately the only A1 code path that calls ``mkdir``.  It does
+    not read artifact contents, move, migrate, or delete legacy artifacts.
+    Discovery beforehand performs only bounded non-recursive metadata checks;
+    a same-kind ambiguity must be resolved by a later migration workflow.
+    """
+
+    project_dir = Path(base_dir) if base_dir is not None else Path(__file__).parent
+    environment = os.environ if env is None else env
+    paths = RuntimePaths.from_env(
+        base_dir=project_dir,
+        env=environment,
+        cwd=Path.cwd() if cwd is None else cwd,
+    )
+    manifest = discover_legacy_artifacts(paths, environment)
+    if manifest.has_conflicts:
+        kinds = ", ".join(kind.value for kind in manifest.conflicts)
+        raise RuntimePathError(f"legacy artifact conflicts require migration: {kinds}")
+    for directory in (
+        paths.data_dir,
+        paths.control_db_path.parent,
+        paths.state_generations_dir,
+        paths.memory_chroma_dir,
+        paths.chat_spool_dir,
+        paths.event_journal_dir,
+        paths.recovery_dir,
+        paths.logs_dir,
+        paths.cache_dir,
+        paths.temp_dir,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    return paths, manifest
+
+
+def _report_unpromoted_legacy_sources(manifest: LegacyArtifactManifest) -> None:
+    """Report one-source snapshots deterministically without migrating them."""
+
+    for kind in LegacyArtifactKind:
+        sources = manifest.populated_for(kind)
+        if len(sources) == 1:
+            print(
+                f"Legacy {kind.value} source detected at {sources[0]} "
+                "(not migrated or promoted)."
+            )
 
 def check_git_config():
     """Check for 'dubious ownership' issues on Windows/WSL environments."""
@@ -48,6 +111,14 @@ def is_venv_valid(venv_path):
 
 def main():
     print("=== Aura Bootstrap & Recovery Tool ===")
+
+    try:
+        paths, manifest = prepare_runtime_layout()
+    except RuntimePathError as exc:
+        print(f"Runtime layout validation failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Canonical runtime data directory: {paths.data_dir}")
+    _report_unpromoted_legacy_sources(manifest)
     
     force_recreate = "--force" in sys.argv
     
@@ -92,10 +163,11 @@ def main():
     print("1. Run services: .\\start_services.ps1")
     print("2. Run Aura: .\\.venv\\Scripts\\python.exe main.py")
     print("3. Eval SLM: .\\.venv_aura\\Scripts\\python.exe scripts/eval_slm.py")
+    return 0
 
 if __name__ == "__main__":
     check_python_version()
     check_git_config()
     
     # ─── 1. Setup Master Venv (.venv) ────────────────────────────────
-    main()
+    raise SystemExit(main())

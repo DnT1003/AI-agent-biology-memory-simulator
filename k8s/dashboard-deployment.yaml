@@ -27,6 +27,8 @@ spec:
           ports:
             - containerPort: 8050
           env:
+            - name: AURA_DATA_DIR
+              value: /app/outputs
             - name: AURA_OUTPUT_DIR
               value: /app/outputs
             - name: AURA_DASHBOARD_AUTH_TOKEN

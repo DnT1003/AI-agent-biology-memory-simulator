@@ -20,7 +20,9 @@ data:
   # A future GPU inference endpoint should own this capability.
   AURA_LOCAL_LLM_ENABLED: "false"
 
-  # Output dir
+  # Canonical name, deliberately pointed at the existing legacy physical root.
+  AURA_DATA_DIR: "/app/outputs"
+  # Legacy consumers remain authoritative until explicit promotion.
   AURA_OUTPUT_DIR: "/app/outputs"
   # Release abandoned browser responses after one day so the outbox cannot
   # remain backpressured forever when a tab disappears without ACKing.
