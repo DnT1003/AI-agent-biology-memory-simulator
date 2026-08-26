@@ -9,7 +9,6 @@ load_dotenv()
 _CANONICAL_CONFIG_ATTRIBUTES = frozenset(
     {
         "RUNTIME_PATHS",
-        "LEGACY_ARTIFACT_MANIFEST",
         "DATA_DIR",
         "CONTROL_DB_PATH",
         "WRITER_LEASE_PATH",
@@ -17,10 +16,8 @@ _CANONICAL_CONFIG_ATTRIBUTES = frozenset(
 )
 
 
-def _canonical_runtime_values(
-    base_dir: Path, env: dict[str, str], legacy_cwd: Path
-) -> dict[str, object]:
-    """Load canonical paths only in images that package the runtime module.
+def _canonical_runtime_paths(base_dir: Path, env: dict[str, str], legacy_cwd: Path):
+    """Load pure canonical paths only in images that package the runtime module.
 
     The dashboard image intentionally retains its released, minimal core payload.
     It imports ``Config`` for legacy dashboard settings but never consumes the
@@ -29,7 +26,7 @@ def _canonical_runtime_values(
     """
 
     try:
-        from core.runtime_paths import RuntimePaths, discover_legacy_artifacts
+        from core.runtime_paths import RuntimePaths
     except ModuleNotFoundError as error:
         if error.name != "core.runtime_paths":
             raise
@@ -37,14 +34,37 @@ def _canonical_runtime_values(
             "Canonical runtime paths are unavailable in this minimal image."
         ) from error
 
-    paths = RuntimePaths.from_env(base_dir=base_dir, env=env, cwd=legacy_cwd)
-    return {
-        "RUNTIME_PATHS": paths,
-        "LEGACY_ARTIFACT_MANIFEST": discover_legacy_artifacts(paths, env),
-        "DATA_DIR": os.fspath(paths.data_dir),
-        "CONTROL_DB_PATH": os.fspath(paths.control_db_path),
-        "WRITER_LEASE_PATH": os.fspath(paths.writer_lease_path),
-    }
+    return RuntimePaths.from_env(base_dir=base_dir, env=env, cwd=legacy_cwd)
+
+
+def _canonical_runtime_value(paths, name: str):
+    if name == "RUNTIME_PATHS":
+        return paths
+    return os.fspath(
+        getattr(
+            paths,
+            {
+                "DATA_DIR": "data_dir",
+                "CONTROL_DB_PATH": "control_db_path",
+                "WRITER_LEASE_PATH": "writer_lease_path",
+            }[name],
+        )
+    )
+
+
+def _legacy_artifact_manifest(base_dir: Path, env: dict[str, str], legacy_cwd: Path):
+    """Perform legacy inspection only for the explicit manifest property."""
+
+    paths = _canonical_runtime_paths(base_dir, env, legacy_cwd)
+    try:
+        from core.runtime_paths import discover_legacy_artifacts
+    except ModuleNotFoundError as error:
+        if error.name != "core.runtime_paths":
+            raise
+        raise RuntimeError(
+            "Canonical runtime paths are unavailable in this minimal image."
+        ) from error
+    return discover_legacy_artifacts(paths, env)
 
 
 class _ConfigMeta(type):
@@ -55,7 +75,13 @@ class _ConfigMeta(type):
             base_dir = type.__getattribute__(cls, "_CANONICAL_BASE_DIR")
             env = type.__getattribute__(cls, "_CANONICAL_ENV")
             legacy_cwd = type.__getattribute__(cls, "_CANONICAL_CWD")
-            return _canonical_runtime_values(base_dir, env, legacy_cwd)[name]
+            paths = _canonical_runtime_paths(base_dir, env, legacy_cwd)
+            return _canonical_runtime_value(paths, name)
+        if name == "LEGACY_ARTIFACT_MANIFEST":
+            base_dir = type.__getattribute__(cls, "_CANONICAL_BASE_DIR")
+            env = type.__getattribute__(cls, "_CANONICAL_ENV")
+            legacy_cwd = type.__getattribute__(cls, "_CANONICAL_CWD")
+            return _legacy_artifact_manifest(base_dir, env, legacy_cwd)
         return type.__getattribute__(cls, name)
 
 

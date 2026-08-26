@@ -8,6 +8,7 @@ from typing import Mapping
 import shlex
 
 from core.runtime_paths import (
+    LegacyArtifactKind,
     LegacyArtifactManifest,
     RuntimePathError,
     RuntimePaths,
@@ -27,8 +28,9 @@ def prepare_runtime_layout(
     """Validate and explicitly create the empty canonical runtime layout.
 
     This is deliberately the only A1 code path that calls ``mkdir``.  It does
-    not read, move, or migrate any legacy artifact; a same-kind ambiguity must
-    be resolved by a later migration workflow before bootstrap proceeds.
+    not read artifact contents, move, migrate, or delete legacy artifacts.
+    Discovery beforehand performs only bounded non-recursive metadata checks;
+    a same-kind ambiguity must be resolved by a later migration workflow.
     """
 
     project_dir = Path(base_dir) if base_dir is not None else Path(__file__).parent
@@ -56,6 +58,18 @@ def prepare_runtime_layout(
     ):
         directory.mkdir(parents=True, exist_ok=True)
     return paths, manifest
+
+
+def _report_unpromoted_legacy_sources(manifest: LegacyArtifactManifest) -> None:
+    """Report one-source snapshots deterministically without migrating them."""
+
+    for kind in LegacyArtifactKind:
+        sources = manifest.populated_for(kind)
+        if len(sources) == 1:
+            print(
+                f"Legacy {kind.value} source detected at {sources[0]} "
+                "(not migrated or promoted)."
+            )
 
 def check_git_config():
     """Check for 'dubious ownership' issues on Windows/WSL environments."""
@@ -99,11 +113,12 @@ def main():
     print("=== Aura Bootstrap & Recovery Tool ===")
 
     try:
-        paths, _ = prepare_runtime_layout()
+        paths, manifest = prepare_runtime_layout()
     except RuntimePathError as exc:
-        print(f"Runtime layout validation failed: {exc}")
-        return
+        print(f"Runtime layout validation failed: {exc}", file=sys.stderr)
+        return 2
     print(f"Canonical runtime data directory: {paths.data_dir}")
+    _report_unpromoted_legacy_sources(manifest)
     
     force_recreate = "--force" in sys.argv
     
@@ -148,10 +163,11 @@ def main():
     print("1. Run services: .\\start_services.ps1")
     print("2. Run Aura: .\\.venv\\Scripts\\python.exe main.py")
     print("3. Eval SLM: .\\.venv_aura\\Scripts\\python.exe scripts/eval_slm.py")
+    return 0
 
 if __name__ == "__main__":
     check_python_version()
     check_git_config()
     
     # ─── 1. Setup Master Venv (.venv) ────────────────────────────────
-    main()
+    raise SystemExit(main())

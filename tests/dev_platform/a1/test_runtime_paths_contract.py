@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import errno
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
 from bootstrap import prepare_runtime_layout
+from bootstrap import _report_unpromoted_legacy_sources
 from core.runtime_paths import (
     LegacyArtifactKind,
+    LegacyArtifactManifest,
     RuntimePathError,
     RuntimePaths,
+    _canonical_legacy_candidate,
+    _unresolved_absolute_path,
     _validate_path_text,
     discover_legacy_artifacts,
 )
@@ -137,14 +144,367 @@ def test_legacy_discovery_deduplicates_canonical_identical_paths(tmp_path: Path)
     assert LegacyArtifactKind.JOURNAL not in manifest.conflicts
 
 
-def test_same_kind_legacy_candidates_are_a_conflict(tmp_path: Path) -> None:
+def _write_immediate_entry(directory: Path) -> None:
+    directory.mkdir(parents=True)
+    (directory / "entry").write_text("present", encoding="utf-8")
+
+
+def _make_symlink_or_skip(link: Path, target: Path, *, directory: bool) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except NotImplementedError as exc:
+        pytest.skip(f"host cannot create the required symlink: {exc}")
+    except OSError as exc:
+        unsupported = {errno.ENOSYS, errno.EOPNOTSUPP}
+        if os.name == "nt" and getattr(exc, "winerror", None) in {50, 1314}:
+            pytest.skip(f"host lacks symlink capability: {exc}")
+        if exc.errno in unsupported:
+            pytest.skip(f"host lacks symlink capability: {exc}")
+        raise
+
+
+def test_legacy_candidates_remain_when_all_locations_are_absent(tmp_path: Path) -> None:
     paths = make_paths(tmp_path, cwd=tmp_path / "project")
     manifest = discover_legacy_artifacts(
         paths,
         {"AURA_CHAT_SPOOL_DIR": "elsewhere/chat"},
     )
-    assert manifest.has_conflicts
-    assert LegacyArtifactKind.TRANSPORTS in manifest.conflicts
+    candidates = manifest.candidates_for(LegacyArtifactKind.TRANSPORTS)
+    assert (tmp_path / "project" / "elsewhere" / "chat").resolve() in candidates
+    assert manifest.populated_for(LegacyArtifactKind.TRANSPORTS) == ()
+    assert not manifest.has_conflicts
+
+
+def test_one_populated_same_kind_source_does_not_conflict(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    populated = tmp_path / "one" / "chat"
+    _write_immediate_entry(populated)
+    manifest = discover_legacy_artifacts(
+        paths,
+        {"AURA_CHAT_SPOOL_DIR": os.fspath(populated)},
+    )
+    assert populated.resolve() in manifest.candidates_for(LegacyArtifactKind.TRANSPORTS)
+    assert manifest.populated_for(LegacyArtifactKind.TRANSPORTS) == (populated.resolve(),)
+    assert LegacyArtifactKind.TRANSPORTS not in manifest.conflicts
+
+
+def test_two_populated_same_kind_sources_conflict(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    historical_root = tmp_path / "historical-output"
+    historical = historical_root / "chat_spool"
+    override = tmp_path / "override" / "chat"
+    _write_immediate_entry(historical)
+    _write_immediate_entry(override)
+    manifest = discover_legacy_artifacts(
+        paths,
+        {
+            "AURA_OUTPUT_DIR": os.fspath(historical_root),
+            "AURA_CHAT_SPOOL_DIR": os.fspath(override),
+        },
+    )
+    assert manifest.conflicts[LegacyArtifactKind.TRANSPORTS] == (
+        historical.resolve(),
+        override.resolve(),
+    )
+    assert manifest.populated_for(LegacyArtifactKind.TRANSPORTS) == manifest.conflicts[
+        LegacyArtifactKind.TRANSPORTS
+    ]
+
+
+def test_zero_byte_regular_file_is_a_populated_file_artifact(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    historical_root = tmp_path / "historical-output"
+    historical = historical_root / "ego_state.json"
+    override = tmp_path / "override" / "ego.json"
+    historical.parent.mkdir(parents=True)
+    historical.touch()
+    override.parent.mkdir(parents=True)
+    override.touch()
+    manifest = discover_legacy_artifacts(
+        paths,
+        {
+            "AURA_OUTPUT_DIR": os.fspath(historical_root),
+            "AURA_EGO_PATH": os.fspath(override),
+        },
+    )
+    assert manifest.conflicts[LegacyArtifactKind.EGO] == (
+        historical.resolve(),
+        override.resolve(),
+    )
+
+
+def test_empty_directory_is_not_populated_but_nonempty_directory_is(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    historical_root = tmp_path / "historical-output"
+    _write_immediate_entry(historical_root / "event_journal")
+    empty_override = tmp_path / "empty-journal"
+    empty_override.mkdir()
+    manifest = discover_legacy_artifacts(
+        paths,
+        {
+            "AURA_OUTPUT_DIR": os.fspath(historical_root),
+            "AURA_EVENT_JOURNAL_DIR": os.fspath(empty_override),
+        },
+    )
+    assert LegacyArtifactKind.JOURNAL not in manifest.conflicts
+
+
+def test_legacy_discovery_rejects_wrong_artifact_type(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    wrong_type = tmp_path / "memory-file"
+    wrong_type.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(RuntimePathError, match="must be a directory"):
+        discover_legacy_artifacts(paths, {"AURA_MEMORY_DIR": os.fspath(wrong_type)})
+
+
+def test_legacy_discovery_rejects_inaccessible_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    candidate = tmp_path / "ego.json"
+    candidate.touch()
+    original_stat = Path.stat
+
+    def denied_stat(path: Path, *args, **kwargs):
+        # Python 3.12 implements Path.lstat() through stat(...,
+        # follow_symlinks=False).  Let the symlink-safety probe succeed so
+        # this test exercises the later population-classification stat call.
+        if path == candidate and kwargs.get("follow_symlinks", True):
+            raise PermissionError("metadata denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied_stat)
+    with pytest.raises(RuntimePathError, match="cannot inspect legacy ego artifact"):
+        discover_legacy_artifacts(paths, {"AURA_EGO_PATH": os.fspath(candidate)})
+
+
+def test_legacy_symlink_aliases_deduplicate_to_one_target(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    target_root = tmp_path / "target-output"
+    target = target_root / "chat_spool"
+    _write_immediate_entry(target)
+    alias_root = tmp_path / "alias-output"
+    _make_symlink_or_skip(alias_root, target_root, directory=True)
+    manifest = discover_legacy_artifacts(
+        paths,
+        {
+            "AURA_OUTPUT_DIR": os.fspath(alias_root),
+            "AURA_CHAT_SPOOL_DIR": os.fspath(target),
+        },
+    )
+    candidates = manifest.candidates_for(LegacyArtifactKind.TRANSPORTS)
+    assert candidates.count(target.resolve()) == 1
+    assert LegacyArtifactKind.TRANSPORTS not in manifest.conflicts
+
+
+def test_legacy_discovery_rejects_broken_symlink(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    broken = tmp_path / "broken-memory"
+    _make_symlink_or_skip(broken, tmp_path / "missing-target", directory=True)
+    with pytest.raises(RuntimePathError, match="invalid symlink"):
+        discover_legacy_artifacts(paths, {"AURA_MEMORY_DIR": os.fspath(broken)})
+
+
+def test_legacy_discovery_rejects_cyclic_symlink(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    cycle = tmp_path / "cycle-memory"
+    _make_symlink_or_skip(cycle, cycle, directory=True)
+    with pytest.raises(RuntimePathError, match="invalid symlink"):
+        discover_legacy_artifacts(paths, {"AURA_MEMORY_DIR": os.fspath(cycle)})
+
+
+def test_legacy_discovery_rejects_inaccessible_symlink_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = make_paths(tmp_path, cwd=tmp_path / "project")
+    target = tmp_path / "memory-target"
+    target.mkdir()
+    link = tmp_path / "memory-link"
+    _make_symlink_or_skip(link, target, directory=True)
+    original_lstat = Path.lstat
+
+    def denied_lstat(path: Path):
+        if path == link:
+            raise PermissionError("link metadata denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", denied_lstat)
+    with pytest.raises(RuntimePathError, match="cannot inspect legacy artifact candidate"):
+        discover_legacy_artifacts(paths, {"AURA_MEMORY_DIR": os.fspath(link)})
+
+
+def test_fallback_symlink_alias_deduplicates_one_resolved_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise discovery without requiring Windows symlink privilege."""
+
+    workspace = Path.cwd()
+    paths = make_paths(workspace, cwd=workspace / "project")
+    target = paths._base_dir / "outputs" / "ego_state.json"
+    alias = workspace / "alias-ego"
+
+    def fake_lstat(path: Path):
+        mode = stat.S_IFLNK if path == alias else stat.S_IFDIR
+        return SimpleNamespace(st_mode=mode)
+
+    def fake_resolve(path: Path, strict: bool = False):
+        return target if path == alias else path
+
+    def fake_stat(path: Path, *args, **kwargs):
+        if path == target:
+            return SimpleNamespace(st_mode=stat.S_IFREG)
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    manifest = discover_legacy_artifacts(paths, {"AURA_EGO_PATH": os.fspath(alias)})
+    assert manifest.candidates_for(LegacyArtifactKind.EGO) == (target,)
+    assert manifest.populated_for(LegacyArtifactKind.EGO) == (target,)
+    assert LegacyArtifactKind.EGO not in manifest.conflicts
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (FileNotFoundError("broken"), "invalid symlink"),
+        (RuntimeError("cycle"), "invalid symlink"),
+        (PermissionError("denied"), "cannot inspect legacy artifact candidate"),
+    ],
+)
+def test_fallback_symlink_failures_are_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    message: str,
+) -> None:
+    base_dir = Path.cwd()
+    link = base_dir / "link"
+
+    def fake_lstat(path: Path):
+        if path == link and isinstance(failure, PermissionError):
+            raise failure
+        return SimpleNamespace(st_mode=stat.S_IFLNK if path == link else stat.S_IFDIR)
+
+    def fake_resolve(path: Path, strict: bool = False):
+        if path == link and strict:
+            raise failure
+        return path
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    with pytest.raises(RuntimePathError, match=message):
+        _canonical_legacy_candidate(link, base_dir, label="fallback")
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("broken"), RuntimeError("cycle")])
+def test_intermediate_link_before_parent_component_is_not_normalized_away(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    base = Path.cwd() / "fallback-base"
+    link = base / "intermediate-link"
+    lexical = _unresolved_absolute_path(
+        Path("intermediate-link") / ".." / "artifact", base, label="legacy"
+    )
+    assert "intermediate-link" in lexical.parts
+    assert ".." in lexical.parts
+
+    def fake_lstat(path: Path):
+        return SimpleNamespace(st_mode=stat.S_IFLNK if path == link else stat.S_IFDIR)
+
+    def fake_resolve(path: Path, strict: bool = False):
+        if path == link and strict:
+            raise failure
+        return path
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    with pytest.raises(RuntimePathError, match="invalid symlink"):
+        _canonical_legacy_candidate(
+            Path("intermediate-link") / ".." / "artifact", base, label="legacy"
+        )
+
+
+@pytest.mark.parametrize(
+    ("lexical", "link_name", "failure"),
+    [
+        (Path("missing") / ".." / "broken-link" / "artifact", "broken-link", FileNotFoundError("broken")),
+        (Path("missing") / ".." / "cyclic-link" / "artifact", "cyclic-link", RuntimeError("cycle")),
+        (Path("missing") / "child" / ".." / ".." / "broken-link", "broken-link", FileNotFoundError("broken")),
+    ],
+)
+def test_missing_prefix_parent_escape_still_validates_later_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    lexical: Path,
+    link_name: str,
+    failure: Exception,
+) -> None:
+    base = Path.cwd() / "missing-prefix-base"
+    missing = base / "missing"
+    link = base / link_name
+
+    def fake_lstat(path: Path):
+        if path == missing:
+            raise FileNotFoundError("missing")
+        return SimpleNamespace(st_mode=stat.S_IFLNK if path == link else stat.S_IFDIR)
+
+    def fake_resolve(path: Path, strict: bool = False):
+        if path == link and strict:
+            raise failure
+        return path
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    with pytest.raises(RuntimePathError, match="invalid symlink"):
+        _canonical_legacy_candidate(lexical, base, label="legacy")
+
+
+def test_missing_tail_without_parent_escape_remains_absent_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = Path.cwd() / "missing-tail-base"
+    missing = base / "missing"
+
+    def fake_lstat(path: Path):
+        if path == missing:
+            raise FileNotFoundError("missing")
+        return SimpleNamespace(st_mode=stat.S_IFDIR)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", lambda path, strict=False: path)
+    candidate = _canonical_legacy_candidate(
+        Path("missing") / "child" / "artifact", base, label="legacy"
+    )
+    assert candidate == base / "missing" / "child" / "artifact"
+
+
+def test_valid_link_parent_uses_resolved_target_parent_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = Path.cwd() / "valid-link-base"
+    link = base / "valid-link"
+    target = base / "target-parent" / "target-child"
+    later = target.parent / "later"
+    inspected: list[Path] = []
+
+    def fake_lstat(path: Path):
+        inspected.append(path)
+        if path == link:
+            return SimpleNamespace(st_mode=stat.S_IFLNK)
+        if path == later:
+            return SimpleNamespace(st_mode=stat.S_IFDIR)
+        return SimpleNamespace(st_mode=stat.S_IFDIR)
+
+    def fake_resolve(path: Path, strict: bool = False):
+        return target if path == link else path
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr(
+        Path, "stat", lambda path, *args, **kwargs: SimpleNamespace(st_mode=stat.S_IFDIR)
+    )
+    _canonical_legacy_candidate(Path("valid-link") / ".." / "later", base, label="legacy")
+    assert later in inspected
+    assert base / "later" not in inspected
 
 
 def test_different_artifact_kinds_in_different_roots_are_not_a_conflict(tmp_path: Path) -> None:
@@ -157,6 +517,28 @@ def test_different_artifact_kinds_in_different_roots_are_not_a_conflict(tmp_path
         },
     )
     assert not manifest.has_conflicts
+
+
+def test_bootstrap_reports_single_populated_sources_in_kind_order(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = Path.cwd() / "legacy-report"
+    empty = {kind: () for kind in LegacyArtifactKind}
+    populated = dict(empty)
+    populated[LegacyArtifactKind.IDENTITY] = (root / "identity.json",)
+    populated[LegacyArtifactKind.TRANSPORTS] = (root / "chat-spool",)
+    manifest = LegacyArtifactManifest(
+        candidates=MappingProxyType(empty),
+        populated=MappingProxyType(populated),
+        conflicts=MappingProxyType({}),
+    )
+    _report_unpromoted_legacy_sources(manifest)
+    assert capsys.readouterr().out.splitlines() == [
+        f"Legacy identity source detected at {root / 'identity.json'} "
+        "(not migrated or promoted).",
+        f"Legacy transports source detected at {root / 'chat-spool'} "
+        "(not migrated or promoted).",
+    ]
 
 
 def test_config_import_is_non_creating_and_projects_compatibility_paths(tmp_path: Path) -> None:
@@ -197,6 +579,29 @@ def test_config_import_is_non_creating_and_projects_compatibility_paths(tmp_path
         os.fspath(data_dir.resolve() / "ledger" / "writer.lock"),
     ]
     assert not data_dir.exists()
+
+
+def test_canonical_config_properties_do_not_trigger_legacy_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.runtime_paths as runtime_paths
+    from config import Config
+
+    calls: list[object] = []
+
+    def inspected(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RuntimePathError("inspection was requested")
+
+    monkeypatch.setattr(runtime_paths, "discover_legacy_artifacts", inspected)
+    assert isinstance(Config.RUNTIME_PATHS, RuntimePaths)
+    assert Config.DATA_DIR
+    assert Config.CONTROL_DB_PATH
+    assert Config.WRITER_LEASE_PATH
+    assert calls == []
+    with pytest.raises(RuntimePathError, match="inspection was requested"):
+        _ = Config.LEGACY_ARTIFACT_MANIFEST
+    assert len(calls) == 1
 
 
 def test_full_repository_canonical_config_binding_uses_runtimepaths() -> None:
@@ -355,6 +760,77 @@ def test_launchers_and_k8s_preserve_legacy_compatibility_contract() -> None:
         assert "AURA_DATA_DIR" in source
         assert "AURA_OUTPUT_DIR" in source
         assert "/app/outputs" in source
+
+
+def _tree_snapshot(root: Path) -> tuple[tuple[str, int, int], ...]:
+    return tuple(
+        sorted(
+            (
+                os.fspath(path.relative_to(root)),
+                path.lstat().st_mode,
+                path.lstat().st_size,
+            )
+            for path in root.rglob("*")
+        )
+    )
+
+
+def _bootstrap_environment(**updates: str) -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("AURA_")
+    }
+    environment.update(updates)
+    return environment
+
+
+def _run_bootstrap(project_root: Path, cwd: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-B", os.fspath(project_root / "bootstrap.py")],
+        cwd=cwd,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+
+def test_bootstrap_invalid_root_exits_two_before_any_layout_write(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    before = _tree_snapshot(tmp_path)
+    result = _run_bootstrap(
+        project_root,
+        tmp_path,
+        _bootstrap_environment(AURA_DATA_DIR=os.fspath(Path(tmp_path.anchor))),
+    )
+    assert result.returncode == 2
+    assert "Runtime layout validation failed" in result.stderr
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_bootstrap_real_conflict_exits_two_before_canonical_layout_write(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    canonical = tmp_path / "canonical-data"
+    historical_root = tmp_path / "historical-output"
+    override = tmp_path / "override-chat"
+    _write_immediate_entry(historical_root / "chat_spool")
+    _write_immediate_entry(override)
+    before = _tree_snapshot(tmp_path)
+    result = _run_bootstrap(
+        project_root,
+        tmp_path,
+        _bootstrap_environment(
+            AURA_DATA_DIR=os.fspath(canonical),
+            AURA_OUTPUT_DIR=os.fspath(historical_root),
+            AURA_CHAT_SPOOL_DIR=os.fspath(override),
+        ),
+    )
+    assert result.returncode == 2
+    assert "legacy artifact conflicts require migration" in result.stderr
+    assert not canonical.exists()
+    assert _tree_snapshot(tmp_path) == before
 
 
 def test_explicit_bootstrap_creates_layout_only_after_validation(tmp_path: Path) -> None:

@@ -1,7 +1,8 @@
-"""Pure canonical runtime-path derivation and legacy-location discovery.
+"""Pure canonical runtime paths plus bounded legacy metadata discovery.
 
-This module deliberately does not touch the filesystem.  Creation of the
-canonical layout is an explicit bootstrap concern, not an import side effect.
+``RuntimePaths.from_env`` derives paths without writes or discovery.  Explicit
+legacy discovery performs only non-recursive metadata inspection; it neither
+opens artifact contents nor creates, migrates, deletes, or renames data.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import ntpath
 import os
 from os import fspath
 from pathlib import Path, PureWindowsPath
+import stat
 from types import MappingProxyType
 from typing import Mapping
 
@@ -47,7 +49,11 @@ _WINDOWS_ILLEGAL_CHARACTERS = frozenset('<>:"|?*')
 
 
 def _validate_path_text(
-    raw: str, *, label: str, windows: bool | None = None
+    raw: str,
+    *,
+    label: str,
+    windows: bool | None = None,
+    allow_lexical_parent_components: bool = False,
 ) -> None:
     if not raw.strip() or "\x00" in raw:
         raise RuntimePathError(f"{label} is empty or contains NUL")
@@ -69,12 +75,15 @@ def _validate_path_text(
 
     windows_path = PureWindowsPath(raw)
     for component in windows_path.parts:
-        if component in (
+        structural_components = (
             windows_path.drive,
             windows_path.root,
             f"{windows_path.drive}{windows_path.root}",
             "\\",
             "/",
+        )
+        if component in structural_components or (
+            allow_lexical_parent_components and component in {".", ".."}
         ):
             continue
         if (
@@ -117,6 +126,113 @@ def _canonical_path(
     if reject_filesystem_root and resolved == resolved.parent:
         raise RuntimePathError(f"{label} must not be a filesystem root")
     return resolved
+
+
+def _unresolved_absolute_path(value: str | Path, base_dir: Path, *, label: str) -> Path:
+    """Make an absolute lexical path while preserving ``..`` for link checks."""
+
+    try:
+        raw = fspath(value)
+    except TypeError as exc:
+        raise RuntimePathError(f"{label} must be a path") from exc
+    if not isinstance(raw, str):
+        raise RuntimePathError(f"{label} must be a path")
+    _validate_path_text(raw, label=label, allow_lexical_parent_components=True)
+    try:
+        candidate = Path(raw).expanduser()
+        _validate_path_text(
+            fspath(candidate), label=label, allow_lexical_parent_components=True
+        )
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
+    except (OSError, RuntimeError, ValueError, UnicodeError) as exc:
+        raise RuntimePathError(f"{label} is not a valid path") from exc
+    if not candidate.is_absolute():
+        raise RuntimePathError(f"{label} did not resolve to an absolute path")
+    # Do not normalize here: ``broken-link/../artifact`` must visit the link
+    # during the strict walk before non-strict canonicalization later.
+    return candidate
+
+
+def _validate_legacy_symlink_chain(path: Path, *, label: str) -> None:
+    """Strictly inspect every symlink reachable through lexical components.
+
+    A missing component makes only its lexical descendants unknown.  A later
+    ``..`` can return to the last existing prefix, at which point subsequent
+    links are reachable again and must still be validated before final
+    canonicalization.
+    """
+
+    current = Path(path.anchor)
+    current_is_directory = True
+    missing_depth = 0
+    start = 1 if path.anchor else 0
+    for component in path.parts[start:]:
+        if component == ".":
+            continue
+        if component == "..":
+            if missing_depth:
+                missing_depth -= 1
+                continue
+            if not current_is_directory:
+                raise RuntimePathError(
+                    f"legacy artifact candidate {label} has a non-directory intermediate"
+                )
+            current = current.parent
+            current_is_directory = True
+            continue
+
+        if missing_depth:
+            missing_depth += 1
+            continue
+        if not current_is_directory:
+            raise RuntimePathError(
+                f"legacy artifact candidate {label} has a non-directory intermediate"
+            )
+
+        candidate = current / component
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            # Preserve the known prefix.  Future ``..`` components can escape
+            # this unknown suffix and make later paths reachable again.
+            missing_depth = 1
+            continue
+        except OSError as exc:
+            raise RuntimePathError(
+                f"cannot inspect legacy artifact candidate {label}"
+            ) from exc
+
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                current = candidate.resolve(strict=True)
+                target_metadata = current.stat()
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise RuntimePathError(
+                    f"legacy artifact candidate {label} has an invalid symlink"
+                ) from exc
+            current_is_directory = stat.S_ISDIR(target_metadata.st_mode)
+        else:
+            current = candidate
+            current_is_directory = stat.S_ISDIR(metadata.st_mode)
+
+
+def _canonical_legacy_candidate(
+    value: str | Path, base_dir: Path, *, label: str
+) -> Path:
+    """Canonicalize one candidate while retaining strict symlink safety."""
+
+    unresolved = _unresolved_absolute_path(value, base_dir, label=label)
+    _validate_legacy_symlink_chain(unresolved, label=label)
+    try:
+        canonical = unresolved.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimePathError(f"{label} is not a valid legacy path") from exc
+    if not canonical.is_absolute():
+        raise RuntimePathError(f"{label} did not resolve to an absolute path")
+    if canonical == canonical.parent:
+        raise RuntimePathError(f"{label} must not be a filesystem root")
+    return canonical
 
 
 @dataclass(frozen=True)
@@ -200,13 +316,17 @@ class RuntimePaths:
 
 @dataclass(frozen=True)
 class LegacyArtifactManifest:
-    """A content-free, deterministic record of possible legacy locations."""
+    """Immutable candidates plus bounded metadata-only population results."""
 
     candidates: Mapping[LegacyArtifactKind, tuple[Path, ...]]
+    populated: Mapping[LegacyArtifactKind, tuple[Path, ...]]
     conflicts: Mapping[LegacyArtifactKind, tuple[Path, ...]]
 
     def candidates_for(self, kind: LegacyArtifactKind | str) -> tuple[Path, ...]:
         return self.candidates[LegacyArtifactKind(kind)]
+
+    def populated_for(self, kind: LegacyArtifactKind | str) -> tuple[Path, ...]:
+        return self.populated[LegacyArtifactKind(kind)]
 
     @property
     def artifacts(self) -> Mapping[LegacyArtifactKind, tuple[Path, ...]]:
@@ -233,15 +353,58 @@ _LEGACY_OVERRIDES: dict[LegacyArtifactKind, tuple[str, ...]] = {
     LegacyArtifactKind.TRANSPORTS: ("AURA_CHAT_SPOOL_DIR",),
 }
 
+_FILE_ARTIFACT_KINDS = frozenset(
+    {
+        LegacyArtifactKind.EGO,
+        LegacyArtifactKind.IDENTITY,
+        LegacyArtifactKind.WORLD,
+        LegacyArtifactKind.VALUES,
+        LegacyArtifactKind.LEDGER,
+    }
+)
+
+
+def _is_populated_legacy_candidate(kind: LegacyArtifactKind, path: Path) -> bool:
+    """Classify one candidate with bounded, content-free metadata access."""
+
+    try:
+        metadata = path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise RuntimePathError(
+            f"cannot inspect legacy {kind.value} artifact at {path}"
+        ) from exc
+
+    if kind in _FILE_ARTIFACT_KINDS:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimePathError(
+                f"legacy {kind.value} artifact must be a regular file: {path}"
+            )
+        return True
+
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimePathError(
+            f"legacy {kind.value} artifact must be a directory: {path}"
+        )
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is not None
+    except OSError as exc:
+        raise RuntimePathError(
+            f"cannot inspect legacy {kind.value} artifact at {path}"
+        ) from exc
+
 
 def discover_legacy_artifacts(
     paths: RuntimePaths, env: Mapping[str, str]
 ) -> LegacyArtifactManifest:
-    """Return potential legacy paths without reading or creating artifacts.
+    """Discover legacy locations with bounded, non-recursive metadata reads.
 
     Canonical paths are intentionally absent: this manifest describes only
-    migration inputs.  Each tuple is canonicalized and insertion ordered, so
-    the output is stable and equal spellings collapse to one candidate.
+    migration inputs.  It never reads artifact contents or writes, migrates,
+    deletes, or renames data. Each tuple is canonicalized and insertion
+    ordered, so equal spellings collapse to one candidate.
     """
 
     base_dir = paths._base_dir
@@ -249,7 +412,9 @@ def discover_legacy_artifacts(
     configured_output = _non_empty(env, "AURA_OUTPUT_DIR")
     if configured_output is not None:
         output_roots.append(
-            _canonical_path(configured_output, base_dir, label="AURA_OUTPUT_DIR")
+            _unresolved_absolute_path(
+                configured_output, base_dir, label="AURA_OUTPUT_DIR"
+            )
         )
 
     historical: dict[LegacyArtifactKind, list[Path]] = {
@@ -263,24 +428,32 @@ def discover_legacy_artifacts(
         LegacyArtifactKind.TRANSPORTS: [root / "chat_spool" for root in output_roots],
     }
     candidates: dict[LegacyArtifactKind, tuple[Path, ...]] = {}
+    populated_by_kind: dict[LegacyArtifactKind, tuple[Path, ...]] = {}
     conflicts: dict[LegacyArtifactKind, tuple[Path, ...]] = {}
     for kind in LegacyArtifactKind:
         values = historical[kind]
         for name in _LEGACY_OVERRIDES[kind]:
             value = _non_empty(env, name)
             if value is not None:
-                values.append(_canonical_path(value, base_dir, label=name))
+                values.append(_unresolved_absolute_path(value, base_dir, label=name))
         unique: list[Path] = []
         seen: set[Path] = set()
         for value in values:
-            canonical = _canonical_path(value, base_dir, label=kind.value)
+            canonical = _canonical_legacy_candidate(value, base_dir, label=kind.value)
             if canonical not in seen:
                 seen.add(canonical)
                 unique.append(canonical)
         candidates[kind] = tuple(unique)
-        if len(unique) > 1:
-            conflicts[kind] = tuple(unique)
+        populated = tuple(
+            candidate
+            for candidate in unique
+            if _is_populated_legacy_candidate(kind, candidate)
+        )
+        populated_by_kind[kind] = populated
+        if len(populated) >= 2:
+            conflicts[kind] = populated
     return LegacyArtifactManifest(
         candidates=MappingProxyType(candidates),
+        populated=MappingProxyType(populated_by_kind),
         conflicts=MappingProxyType(conflicts),
     )
