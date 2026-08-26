@@ -1,0 +1,3 @@
+# Reproducible local and CI quality-assurance toolchain.
+pytest==8.4.2
+pyright==1.1.411

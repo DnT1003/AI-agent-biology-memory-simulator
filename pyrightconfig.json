@@ -1,15 +1,39 @@
 {
-  "venvPath": ".",
-  "venv": ".venv_aura",
   "pythonVersion": "3.12",
   "pythonPlatform": "Windows",
+  "typeCheckingMode": "basic",
   "include": [
-    "."
+    "core",
+    "components",
+    "dashboard",
+    "bootstrap.py",
+    "config.py",
+    "inject_persona.py",
+    "main.py",
+    "memory_server_py312.py",
+    "migrate_db.py",
+    "start_web.py"
   ],
   "exclude": [
+    "tests",
+    "test",
+    "scripts",
+    ".git",
+    ".github",
+    ".agents",
+    ".codex",
     ".venv",
     ".venv_aura",
+    ".venv-aura-qa",
+    "venv",
+    "env",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".pyright",
+    "vendor",
+    "reference",
+    "references",
     "ollama_source",
     "temp_backup",
     "1"
@@ -18,9 +42,7 @@
     {
       "root": ".",
       "pythonVersion": "3.12",
-      "extraPaths": [".", "core", "components", "core/engine/nanogpt"]
+      "extraPaths": ["."]
     }
-  ],
-  "reportMissingModuleSource": "none",
-  "typeCheckingMode": "off"
+  ]
 }
