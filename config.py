@@ -1,8 +1,62 @@
 import math
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+_CANONICAL_CONFIG_ATTRIBUTES = frozenset(
+    {
+        "RUNTIME_PATHS",
+        "LEGACY_ARTIFACT_MANIFEST",
+        "DATA_DIR",
+        "CONTROL_DB_PATH",
+        "WRITER_LEASE_PATH",
+    }
+)
+
+
+def _canonical_runtime_values(
+    base_dir: Path, env: dict[str, str], legacy_cwd: Path
+) -> dict[str, object]:
+    """Load canonical paths only in images that package the runtime module.
+
+    The dashboard image intentionally retains its released, minimal core payload.
+    It imports ``Config`` for legacy dashboard settings but never consumes the
+    canonical API.  Do not hide failures from a present runtime module: only
+    its own absence is translated into a clear boundary error.
+    """
+
+    try:
+        from core.runtime_paths import RuntimePaths, discover_legacy_artifacts
+    except ModuleNotFoundError as error:
+        if error.name != "core.runtime_paths":
+            raise
+        raise RuntimeError(
+            "Canonical runtime paths are unavailable in this minimal image."
+        ) from error
+
+    paths = RuntimePaths.from_env(base_dir=base_dir, env=env, cwd=legacy_cwd)
+    return {
+        "RUNTIME_PATHS": paths,
+        "LEGACY_ARTIFACT_MANIFEST": discover_legacy_artifacts(paths, env),
+        "DATA_DIR": os.fspath(paths.data_dir),
+        "CONTROL_DB_PATH": os.fspath(paths.control_db_path),
+        "WRITER_LEASE_PATH": os.fspath(paths.writer_lease_path),
+    }
+
+
+class _ConfigMeta(type):
+    """Lazily bind canonical paths without changing legacy Config projections."""
+
+    def __getattribute__(cls, name: str):
+        if name in _CANONICAL_CONFIG_ATTRIBUTES:
+            base_dir = type.__getattribute__(cls, "_CANONICAL_BASE_DIR")
+            env = type.__getattribute__(cls, "_CANONICAL_ENV")
+            legacy_cwd = type.__getattribute__(cls, "_CANONICAL_CWD")
+            return _canonical_runtime_values(base_dir, env, legacy_cwd)[name]
+        return type.__getattribute__(cls, name)
 
 
 def _bounded_env_int(name: str, default: int, minimum: int) -> int:
@@ -80,8 +134,14 @@ def _optional_dashboard_auth_token(value) -> str | None:
     return _optional_service_auth_token(value)
 
 
-class Config:
+class Config(metaclass=_ConfigMeta):
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _CANONICAL_BASE_DIR = Path(BASE_DIR)
+    # Capture the post-dotenv import environment so a Config load has one
+    # deterministic canonical view, while the legacy compatibility fields
+    # retain their released import-time behaviour below.
+    _CANONICAL_ENV = dict(os.environ)
+    _CANONICAL_CWD = Path.cwd()
     # GEMINI_API_KEY is the documented name. Keep API_KEY as a compatibility
     # fallback for existing local deployments and Kubernetes secrets.
     API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY", "")
@@ -123,22 +183,18 @@ class Config:
     RECONSOLIDATION_RATE = 0.1      # Muc do bien doi ky uc khi nho lai
     SEMANTIC_DRIFT_CHANCE = 0.3     # Ti le bop meo chi tiet phu khi nho lai
 
-    # DUONG DAN ĐAU RA (OUTPUT PATHS) — Phase 15: tap trung, thay vi hardcode khap noi
+    # Compatibility consumers remain on the released layout until an explicit
+    # migration/promotion switches their authority to the canonical paths.
     OUTPUT_DIR = os.getenv("AURA_OUTPUT_DIR", "outputs")
     _OUTPUT_DIR_ABSOLUTE = (
         OUTPUT_DIR
         if os.path.isabs(OUTPUT_DIR)
         else os.path.join(BASE_DIR, OUTPUT_DIR)
     )
-    # Every durable-memory writer contends on the same path even when its
-    # process starts with a different current working directory.
     MEMORY_WRITER_LEASE_FILE = os.path.join(
         os.path.abspath(_OUTPUT_DIR_ABSOLUTE),
         ".aura-memory-writer.lock",
     )
-    # M3 durable operation plans.  Keep this absolute for the same reason as
-    # the writer lease: every runtime process must resolve one shared ledger
-    # even when it starts with a different current working directory.
     OPERATION_LEDGER_FILE = os.path.join(
         os.path.abspath(_OUTPUT_DIR_ABSOLUTE),
         "operation_ledger.sqlite3",

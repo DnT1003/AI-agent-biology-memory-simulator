@@ -2,11 +2,60 @@ import os
 import subprocess
 import sys
 import shutil
+from pathlib import Path
+from typing import Mapping
 
 import shlex
 
+from core.runtime_paths import (
+    LegacyArtifactManifest,
+    RuntimePathError,
+    RuntimePaths,
+    discover_legacy_artifacts,
+)
+
 # Phase 1: Environment Validation
 REQUIRED_PYTHON_VERSION = (3, 12)
+
+
+def prepare_runtime_layout(
+    *,
+    base_dir: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+) -> tuple[RuntimePaths, LegacyArtifactManifest]:
+    """Validate and explicitly create the empty canonical runtime layout.
+
+    This is deliberately the only A1 code path that calls ``mkdir``.  It does
+    not read, move, or migrate any legacy artifact; a same-kind ambiguity must
+    be resolved by a later migration workflow before bootstrap proceeds.
+    """
+
+    project_dir = Path(base_dir) if base_dir is not None else Path(__file__).parent
+    environment = os.environ if env is None else env
+    paths = RuntimePaths.from_env(
+        base_dir=project_dir,
+        env=environment,
+        cwd=Path.cwd() if cwd is None else cwd,
+    )
+    manifest = discover_legacy_artifacts(paths, environment)
+    if manifest.has_conflicts:
+        kinds = ", ".join(kind.value for kind in manifest.conflicts)
+        raise RuntimePathError(f"legacy artifact conflicts require migration: {kinds}")
+    for directory in (
+        paths.data_dir,
+        paths.control_db_path.parent,
+        paths.state_generations_dir,
+        paths.memory_chroma_dir,
+        paths.chat_spool_dir,
+        paths.event_journal_dir,
+        paths.recovery_dir,
+        paths.logs_dir,
+        paths.cache_dir,
+        paths.temp_dir,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    return paths, manifest
 
 def check_git_config():
     """Check for 'dubious ownership' issues on Windows/WSL environments."""
@@ -48,6 +97,13 @@ def is_venv_valid(venv_path):
 
 def main():
     print("=== Aura Bootstrap & Recovery Tool ===")
+
+    try:
+        paths, _ = prepare_runtime_layout()
+    except RuntimePathError as exc:
+        print(f"Runtime layout validation failed: {exc}")
+        return
+    print(f"Canonical runtime data directory: {paths.data_dir}")
     
     force_recreate = "--force" in sys.argv
     

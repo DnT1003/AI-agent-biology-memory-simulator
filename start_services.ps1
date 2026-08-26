@@ -15,6 +15,52 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $VenvPython = Join-Path $ScriptDir ".venv_aura\Scripts\python.exe"
 $VenvChroma = Join-Path $ScriptDir ".venv_aura\Scripts\chroma.exe"
 
+function Resolve-AuraResolverPython {
+    if (Test-Path -LiteralPath $VenvPython -PathType Leaf) {
+        return $VenvPython
+    }
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($null -eq $python) {
+        $python = Get-Command python -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $python) {
+        throw "Python is required to resolve the Aura runtime path."
+    }
+    return $python.Source
+}
+
+function Resolve-AuraChromaPath {
+    $python = Resolve-AuraResolverPython
+    # Keep this mapping in core.runtime_paths.  A second launcher parser would
+    # inevitably drift from its AURA_DATA_DIR -> AURA_OUTPUT_DIR -> outputs
+    # precedence and validation contract.
+    $resolver = @'
+import os
+import sys
+from pathlib import Path
+
+base_dir = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(base_dir))
+from core.runtime_paths import RuntimePaths
+
+paths = RuntimePaths.from_env(base_dir=base_dir, env=os.environ, cwd=base_dir)
+explicit_data = bool(os.environ.get('AURA_DATA_DIR', '').strip())
+print(paths.memory_chroma_dir if explicit_data else paths.data_dir / 'chroma_db')
+'@
+    $result = @(& $python -B -c $resolver $ScriptDir)
+    if ($LASTEXITCODE -ne 0 -or $result.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$result[0])) {
+        throw "Unable to resolve the Aura Chroma path through core.runtime_paths."
+    }
+    return [string]$result[0]
+}
+
+$ChromaDataDir = Resolve-AuraChromaPath
+
+if ($args -contains "--print-chroma-path") {
+    Write-Output $ChromaDataDir
+    exit 0
+}
+
 Write-Host ""
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "  AURA - Khoi dong Services" -ForegroundColor Cyan
@@ -51,7 +97,7 @@ if (-not $chromaRunning) {
     Write-Host "      Dang khoi dong ChromaDB Server..." -ForegroundColor Yellow
     $chromaJob = Start-Process `
         -FilePath $VenvChroma `
-        -ArgumentList "run --host 127.0.0.1 --port 8000 --path outputs/chroma_db" `
+        -ArgumentList "run --host 127.0.0.1 --port 8000 --path `"$ChromaDataDir`"" `
         -WorkingDirectory $ScriptDir `
         -PassThru `
         -WindowStyle Minimized
