@@ -1,34 +1,91 @@
-"""Equation helpers for Emotion V2.  They are pure and deterministic."""
+"""Checked equation helpers for the pure, deterministic Emotion V2 reducer."""
 
 from __future__ import annotations
 
 import math
 from typing import Sequence
 
+from .types import EmotionValidationError
 
-def dot(left: Sequence[float], right: Sequence[float]) -> float:
-    return sum(a * b for a, b in zip(left, right, strict=True))
+
+def finite(value: float, label: str) -> float:
+    if not math.isfinite(value):
+        raise EmotionValidationError(f"{label} must remain finite")
+    return value
+
+
+def add(left: float, right: float, label: str) -> float:
+    return finite(left + right, label)
+
+
+def subtract(left: float, right: float, label: str) -> float:
+    return finite(left - right, label)
+
+
+def multiply(left: float, right: float, label: str) -> float:
+    return finite(left * right, label)
+
+
+def negate(value: float, label: str) -> float:
+    return finite(-value, label)
+
+
+def divide(left: float, right: float, label: str) -> float:
+    try:
+        return finite(left / right, label)
+    except (OverflowError, ValueError, ZeroDivisionError) as exc:
+        raise EmotionValidationError(f"{label} is invalid") from exc
+
+
+def exp(value: float, label: str) -> float:
+    try:
+        return finite(math.exp(value), label)
+    except (OverflowError, ValueError) as exc:
+        raise EmotionValidationError(f"{label} is invalid") from exc
+
+
+def log(value: float, label: str) -> float:
+    try:
+        return finite(math.log(value), label)
+    except (OverflowError, ValueError) as exc:
+        raise EmotionValidationError(f"{label} is invalid") from exc
+
+
+def dot(left: Sequence[float], right: Sequence[float], label: str = "dot") -> float:
+    """Sequential binary64 dot product with every product and sum checked."""
+    total = 0.0
+    for index, (first, second) in enumerate(zip(left, right, strict=True)):
+        product = multiply(first, second, f"{label}[{index}] product")
+        total = add(total, product, f"{label}[{index}] sum")
+    return total
 
 
 def sigmoid(value: float) -> float:
-    # The two branches avoid unnecessary overflow while preserving IEEE doubles.
+    finite(value, "sigmoid input")
     if value >= 0.0:
-        return 1.0 / (1.0 + math.exp(-value))
-    exponent = math.exp(value)
-    return exponent / (1.0 + exponent)
+        denominator = add(1.0, exp(-value, "sigmoid exponent"), "sigmoid denominator")
+        return divide(1.0, denominator, "sigmoid result")
+    exponent = exp(value, "sigmoid exponent")
+    denominator = add(1.0, exponent, "sigmoid denominator")
+    return divide(exponent, denominator, "sigmoid result")
 
 
 def activation_to_latent(activation: float, epsilon: float) -> float:
-    """The specified bounded-logit transform (with finite endpoint handling)."""
+    """The bounded-logit transform with finite exact-endpoint handling."""
+    finite(activation, "activation")
+    finite(epsilon, "epsilon")
     if activation <= epsilon:
         activation = math.nextafter(epsilon, math.inf)
     elif activation >= 1.0 - epsilon:
         activation = math.nextafter(1.0 - epsilon, -math.inf)
-    return math.log((activation - epsilon) / (1.0 - epsilon - activation))
+    numerator = subtract(activation, epsilon, "latent numerator")
+    denominator = subtract(subtract(1.0, epsilon, "latent upper"), activation, "latent denominator")
+    return log(divide(numerator, denominator, "latent ratio"), "latent result")
 
 
 def latent_to_activation(latent: float, epsilon: float) -> float:
-    return epsilon + (1.0 - 2.0 * epsilon) * sigmoid(latent)
+    span = subtract(1.0, multiply(2.0, epsilon, "activation epsilon span"), "activation span")
+    return add(epsilon, multiply(span, sigmoid(latent), "activation scaled sigmoid"), "activation result")
 
 
 def bounded_target(raw_target: float, epsilon: float) -> tuple[float, float]:

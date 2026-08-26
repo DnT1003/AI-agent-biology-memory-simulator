@@ -27,6 +27,7 @@ class EmotionParametersV2:
     epsilon: object
     omega: Sequence[object]
     max_substep_seconds: object
+    max_substeps_per_transition: object
     baseline_bias: Sequence[object]
     w_drive: Sequence[Sequence[object]]
     w_trait: Sequence[Sequence[object]]
@@ -54,6 +55,10 @@ class EmotionParametersV2:
         max_substep = _number(self.max_substep_seconds, "max_substep_seconds")
         if max_substep <= 0.0:
             raise EmotionValidationError("max_substep_seconds must be positive")
+        if (isinstance(self.max_substeps_per_transition, bool)
+                or not isinstance(self.max_substeps_per_transition, int)
+                or not 1 <= self.max_substeps_per_transition <= 10_000):
+            raise EmotionValidationError("max_substeps_per_transition must be an integer in [1, 10000]")
         baseline = _vector(self.baseline_bias, "baseline_bias", 6)
         w_drive = _matrix(self.w_drive, "w_drive", 6, 4)
         w_trait = _matrix(self.w_trait, "w_trait", 6, 5)
@@ -84,6 +89,7 @@ class EmotionParametersV2:
             raise EmotionValidationError("configured emotion-memory loop gain exceeds 0.25")
         for name, value in (
             ("epsilon", epsilon), ("omega", omega), ("max_substep_seconds", max_substep),
+            ("max_substeps_per_transition", self.max_substeps_per_transition),
             ("baseline_bias", baseline), ("w_drive", w_drive), ("w_trait", w_trait),
             ("k", k), ("w_appraisal", w_appraisal), ("w_memory", w_memory),
             ("trait_mood", trait_mood), ("w_mood_emotion", w_mood_emotion),

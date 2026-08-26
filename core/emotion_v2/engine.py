@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 
-from .dynamics import activation_to_latent, dot, latent_to_activation
+from .dynamics import (
+    activation_to_latent, add, divide, dot, exp, finite, latent_to_activation,
+    multiply, negate, subtract,
+)
 from .parameters import EmotionParametersV2
 from .types import EmotionStateV2, EmotionTransitionV2, EmotionValidationError, canonical_sha256
 
@@ -18,13 +21,38 @@ def _validate_state_for_parameters(state: EmotionStateV2, parameters: EmotionPar
         raise EmotionValidationError("state activations are outside parameter epsilon bounds")
 
 
+def _clip_impulse(raw: float, cap: float) -> float:
+    finite(raw, "event impulse before clip")
+    return max(-cap, min(cap, raw))
+
+
 def _event_impulse(parameters: EmotionParametersV2, transition: EmotionTransitionV2) -> tuple[float, ...]:
-    q = transition.appraisal.confidence * (1.0 - transition.appraisal.uncertainty)
+    q = multiply(
+        transition.appraisal.confidence,
+        subtract(1.0, transition.appraisal.uncertainty, "event uncertainty complement"),
+        "event confidence q",
+    )
     result = []
-    for appraisal_row, memory_row in zip(parameters.w_appraisal, parameters.w_memory, strict=True):
-        raw = q * dot(appraisal_row, transition.appraisal.values) + dot(memory_row, transition.memory_summary_vector)
-        result.append(max(-parameters.event_impulse_cap, min(parameters.event_impulse_cap, raw)))
+    for index, (appraisal_row, memory_row) in enumerate(zip(
+        parameters.w_appraisal, parameters.w_memory, strict=True,
+    )):
+        appraisal_dot = dot(appraisal_row, transition.appraisal.values, f"appraisal dot[{index}]")
+        scaled_appraisal = multiply(q, appraisal_dot, f"scaled appraisal[{index}]")
+        memory_dot = dot(memory_row, transition.memory_summary_vector, f"memory dot[{index}]")
+        raw = add(scaled_appraisal, memory_dot, f"event impulse[{index}]")
+        result.append(_clip_impulse(raw, parameters.event_impulse_cap))
     return tuple(result)
+
+
+def _substeps(elapsed: float, parameters: EmotionParametersV2) -> tuple[int, float]:
+    ratio = divide(elapsed, parameters.max_substep_seconds, "substep ratio")
+    try:
+        steps = max(1, math.ceil(ratio))
+    except (OverflowError, ValueError) as exc:
+        raise EmotionValidationError("substep count is invalid") from exc
+    if steps > parameters.max_substeps_per_transition:
+        raise EmotionValidationError("substep count exceeds max_substeps_per_transition")
+    return steps, divide(elapsed, float(steps), "substep duration")
 
 
 def reduce_emotion_v2(
@@ -41,32 +69,34 @@ def reduce_emotion_v2(
 
     y = tuple(activation_to_latent(value, parameters.epsilon) for value in state.activations)
     velocity = state.velocity
+    impulse: tuple[float, ...] = ()
     if transition.is_novel_event:
         impulse = _event_impulse(parameters, transition)
-        y = tuple(value + delta for value, delta in zip(y, impulse, strict=True))
+        y = tuple(add(value, delta, f"event latent[{index}]") for index, (value, delta) in enumerate(zip(y, impulse, strict=True)))
         event_sequence = state.event_sequence + 1
     else:
         event_sequence = state.event_sequence
 
     # Avoid a gratuitous logit/sigmoid round-trip for a valid zero impulse.
-    # This keeps a zero-time, zero-confidence novel event exact apart from its
-    # explicitly incremented event sequence.
     activations = (state.activations if transition.is_novel_event and not any(impulse)
                    else tuple(latent_to_activation(value, parameters.epsilon) for value in y))
     mood = state.mood
     uncertainty = state.uncertainty
     elapsed = transition.elapsed_seconds
     if elapsed:
-        steps = max(1, math.ceil(elapsed / parameters.max_substep_seconds))
-        dt = elapsed / steps
+        steps, dt = _substeps(elapsed, parameters)
         for _ in range(steps):
-            raw_target = tuple(
-                parameters.baseline_bias[index]
-                + dot(parameters.w_drive[index], transition.drives)
-                + dot(parameters.w_trait[index], transition.traits)
-                - dot(parameters.k[index], activations)
-                for index in range(6)
-            )
+            raw_target = []
+            for index in range(6):
+                with_bias = add(parameters.baseline_bias[index], dot(
+                    parameters.w_drive[index], transition.drives, f"drive dot[{index}]"
+                ), f"target drive[{index}]")
+                with_trait = add(with_bias, dot(
+                    parameters.w_trait[index], transition.traits, f"trait dot[{index}]"
+                ), f"target trait[{index}]")
+                raw_target.append(subtract(with_trait, dot(
+                    parameters.k[index], activations, f"K dot[{index}]"
+                ), f"target raw[{index}]"))
             y_target = tuple(activation_to_latent(
                 latent_to_activation(value, parameters.epsilon), parameters.epsilon
             ) for value in raw_target)
@@ -74,19 +104,37 @@ def reduce_emotion_v2(
             next_velocity = []
             for index in range(6):
                 omega = parameters.omega[index]
-                d = y[index] - y_target[index]
-                decay = math.exp(-omega * dt)
-                next_y.append(y_target[index] + (d + (velocity[index] + omega * d) * dt) * decay)
-                next_velocity.append((velocity[index] - omega * (velocity[index] + omega * d) * dt) * decay)
+                d = subtract(y[index], y_target[index], f"critical d[{index}]")
+                omega_d = multiply(omega, d, f"critical omega*d[{index}]")
+                velocity_term = add(velocity[index], omega_d, f"critical velocity term[{index}]")
+                omega_dt = multiply(omega, dt, f"critical omega*dt[{index}]")
+                decay = exp(negate(omega_dt, f"critical decay argument[{index}]"), f"critical decay[{index}]")
+                y_inner = add(d, multiply(velocity_term, dt, f"critical y*dt[{index}]"), f"critical y inner[{index}]")
+                next_y.append(add(y_target[index], multiply(y_inner, decay, f"critical y decay[{index}]"), f"critical y[{index}]"))
+                v_inner = subtract(velocity[index], multiply(
+                    multiply(omega, velocity_term, f"critical omega*velocity[{index}]"),
+                    dt,
+                    f"critical velocity*dt[{index}]",
+                ), f"critical v inner[{index}]")
+                next_velocity.append(multiply(v_inner, decay, f"critical v[{index}]"))
             y = tuple(next_y)
             velocity = tuple(next_velocity)
             activations = tuple(latent_to_activation(value, parameters.epsilon) for value in y)
-            mood_target = max(-1.0, min(1.0, parameters.trait_mood
-                + dot(parameters.w_mood_emotion, activations)
-                + dot(parameters.w_mood_drive, transition.drives)))
-            mood = mood_target + (mood - mood_target) * math.exp(-dt / parameters.tau_mood)
+            raw_mood = add(add(
+                parameters.trait_mood,
+                dot(parameters.w_mood_emotion, activations, "mood emotion dot"),
+                "mood emotion",
+            ), dot(parameters.w_mood_drive, transition.drives, "mood drive dot"), "mood raw")
+            mood_target = max(-1.0, min(1.0, raw_mood))
+            mood_decay = exp(negate(divide(dt, parameters.tau_mood, "mood dt/tau"), "mood decay argument"), "mood decay")
+            mood = add(mood_target, multiply(subtract(mood, mood_target, "mood difference"), mood_decay, "mood decay term"), "mood update")
             uncertainty_target = transition.appraisal.uncertainty if transition.has_event else parameters.uncertainty_baseline
-            uncertainty = uncertainty_target + (uncertainty - uncertainty_target) * math.exp(-dt / parameters.tau_uncertainty)
+            uncertainty_decay = exp(negate(divide(dt, parameters.tau_uncertainty, "uncertainty dt/tau"), "uncertainty decay argument"), "uncertainty decay")
+            uncertainty = add(uncertainty_target, multiply(
+                subtract(uncertainty, uncertainty_target, "uncertainty difference"),
+                uncertainty_decay,
+                "uncertainty decay term",
+            ), "uncertainty update")
 
     if (not all(math.isfinite(value) for value in (*activations, *velocity, mood, uncertainty))
             or any(value < parameters.epsilon or value > 1.0 - parameters.epsilon for value in activations)

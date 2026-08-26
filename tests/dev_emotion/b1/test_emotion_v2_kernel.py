@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import math
+import hashlib
 
 import pytest
+
+import core.emotion_v2 as public_emotion_v2
+from core.emotion_v2.dynamics import dot
+from core.emotion_v2.types import canonical_json_bytes
 
 from core.emotion_v2 import (
     APPRAISAL_ORDER,
@@ -26,6 +31,7 @@ def parameters(**changes: object) -> EmotionParametersV2:
         "epsilon": 0.001,
         "omega": (1.2, 1.1, 0.9, 1.3, 0.8, 1.0),
         "max_substep_seconds": 1.0,
+        "max_substeps_per_transition": 1_000,
         "baseline_bias": (0.1, -0.2, 0.3, -0.1, 0.2, 0.0),
         "w_drive": ((0.1, 0.0, 0.0, 0.0),) * 6,
         "w_trait": ((0.0, 0.0, 0.0, 0.0, 0.0),) * 6,
@@ -117,6 +123,11 @@ def test_nonfinite_values_are_rejected(bad: float) -> None:
         EmotionStateV2((0.5,) * 6, (bad,) * 6, 0.0, 0.0, 0, 0, "x")
 
 
+def test_public_appraisal_dto_rejects_oversized_integer_conversion() -> None:
+    with pytest.raises(EmotionValidationError):
+        AppraisalInputV2((10**10000, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0.5, 0.5)
+
+
 def test_dimensions_ranges_and_parameter_invariants_are_rejected() -> None:
     with pytest.raises(EmotionValidationError):
         transition(drives=(0.0,) * 3)
@@ -130,12 +141,58 @@ def test_dimensions_ranges_and_parameter_invariants_are_rejected() -> None:
         parameters(omega=(0.0,) * 6)
     with pytest.raises(EmotionValidationError):
         parameters(max_substep_seconds=0.0)
+    for invalid_limit in (False, 0, 10_001):
+        with pytest.raises(EmotionValidationError):
+            parameters(max_substeps_per_transition=invalid_limit)
     with pytest.raises(EmotionValidationError):
         parameters(k=((4.0, 0.0, 0.0, 0.0, 0.0, 0.0),) * 6)
     with pytest.raises(EmotionValidationError):
         parameters(w_memory=((16.0, 0.0, 0.0, 0.0),) * 6)
     with pytest.raises(EmotionValidationError):
         reduce_emotion_v2(state(activations=(0.0005,) * 6), parameters(), transition())
+
+
+def test_substep_limit_is_explicit_bounded_and_fails_closed_before_loop() -> None:
+    p = parameters(max_substep_seconds=0.1, max_substeps_per_transition=10)
+    exact = reduce_emotion_v2(state(), p, transition(
+        has_event=False, is_novel_event=False, elapsed_seconds=1.0,
+    ))
+    assert exact.event_sequence == state().event_sequence
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(), p, transition(
+            has_event=False, is_novel_event=False, elapsed_seconds=1.1,
+        ))
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(), parameters(max_substep_seconds=5e-324), transition(
+            has_event=False, is_novel_event=False, elapsed_seconds=1.0,
+        ))
+
+
+def test_checked_finite_arithmetic_rejects_overflow_before_clipping_or_looping() -> None:
+    with pytest.raises(EmotionValidationError):
+        dot((1e308, 1e308, -1e308), (1.0, 1.0, 1.0), "overflow/cancellation")
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(), parameters(w_appraisal=((0.0, 0.0, 1e308, 0.0, 1e308, 0.0, 1e308, 0.0, 0.0),) * 6), transition(elapsed_seconds=0.0))
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(), parameters(
+            trait_mood=1.7e308, w_mood_emotion=(1e308, 0.0, 0.0, 0.0, 0.0, 0.0),
+        ), transition(has_event=False, is_novel_event=False, elapsed_seconds=1.0))
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(velocity=(1.0,) * 6), parameters(omega=(1e308,) * 6), transition(
+            has_event=False, is_novel_event=False, elapsed_seconds=1.0,
+        ))
+
+
+def test_state_constructor_is_strict_interior_and_reducer_pairs_epsilon_inclusively() -> None:
+    for endpoint in (0.0, 1.0):
+        with pytest.raises(EmotionValidationError):
+            state(activations=(endpoint,) * 6)
+    assert state(activations=(math.nextafter(0.0, math.inf),) * 6).activations[0] > 0.0
+    p = parameters()
+    exact_boundary = state(activations=(p.epsilon, 1.0 - p.epsilon, p.epsilon, 1.0 - p.epsilon, 0.5, 0.5))
+    assert reduce_emotion_v2(exact_boundary, p, transition(is_novel_event=False, elapsed_seconds=0.0)) is exact_boundary
+    with pytest.raises(EmotionValidationError):
+        reduce_emotion_v2(state(activations=(math.nextafter(p.epsilon, 0.0),) * 6), p, transition())
 
 
 def test_memory_summary_vector_enforces_dose_component_relationships() -> None:
@@ -160,33 +217,40 @@ def test_initial_memory_weight_infinity_norm_has_exact_boundary() -> None:
         parameters(w_memory=((math.nextafter(1.0, math.inf), 0.0, 0.0, 0.0),) * 6)
 
 
-def test_event_impulse_and_critical_substep_match_independent_scalar_reference() -> None:
+def test_asymmetric_event_impulse_and_critical_substep_match_independent_oracle() -> None:
     p = parameters(
-        omega=(1.25,) * 6, max_substep_seconds=2.0,
-        baseline_bias=(0.15,) * 6, w_drive=((0.2, -0.1, 0.05, 0.0),) * 6,
-        w_trait=((0.1, 0.0, 0.0, 0.0, 0.0),) * 6,
-        k=((0.3, 0.0, 0.0, 0.0, 0.0, 0.0),) * 6,
-        w_appraisal=((0.4, -0.1, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),) * 6,
-        w_memory=((0.5, 0.0, 0.0, 0.0),) * 6,
+        omega=(0.7, 0.8, 0.9, 1.0, 1.1, 1.2), max_substep_seconds=2.0,
+        baseline_bias=(0.15, -0.20, 0.05, 0.10, -0.12, 0.08),
+        w_drive=((0.2, -0.1, 0.05, 0.0), (0.0, 0.1, -0.2, 0.1), (0.3, 0.0, 0.1, -0.1), (-0.1, 0.2, 0.0, 0.1), (0.05, 0.1, 0.2, 0.0), (0.0, -0.2, 0.1, 0.2)),
+        w_trait=((0.1, 0.0, 0.0, 0.0, 0.0), (0.0, 0.2, 0.0, 0.0, 0.0), (0.0, 0.0, 0.1, 0.0, 0.0), (0.0, 0.0, 0.0, 0.2, 0.0), (0.0, 0.0, 0.0, 0.0, 0.1), (0.1, 0.1, 0.0, 0.0, 0.0)),
+        k=((0.20, 0.05, 0.0, 0.0, 0.0, 0.0), (0.0, 0.25, 0.03, 0.0, 0.0, 0.0), (0.0, 0.0, 0.30, 0.02, 0.0, 0.0), (0.0, 0.0, 0.0, 0.35, 0.01, 0.0), (0.04, 0.0, 0.0, 0.0, 0.15, 0.0), (0.0, 0.02, 0.0, 0.0, 0.0, 0.18)),
+        w_appraisal=((0.20, -0.10, 0.30, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), (-0.10, 0.20, 0.0, 0.10, 0.0, 0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.20, 0.10, -0.10, 0.0, 0.0, 0.0, 0.0), (0.10, 0.0, 0.0, 0.20, 0.0, -0.10, 0.0, 0.0, 0.0), (0.0, 0.10, 0.0, 0.0, 0.20, 0.0, 0.10, 0.0, 0.0), (0.0, 0.0, 0.10, 0.0, 0.0, 0.20, 0.0, 0.10, 0.0)),
+        w_memory=((0.20, 0.10, 0.0, 0.0), (0.0, 0.20, 0.10, 0.0), (0.10, 0.0, 0.20, 0.0), (0.0, 0.10, 0.0, 0.20), (0.15, 0.05, 0.0, 0.0), (0.0, 0.0, 0.05, 0.15)),
     )
-    s = state(activations=(0.3,) * 6, velocity=(0.07,) * 6, mood=-0.2, uncertainty=0.9)
-    t = transition(elapsed_seconds=0.4, wall_clock_ns=500, drives=(0.3, 0.2, 0.1, 0.0), traits=(0.5, 1, 1, 1, 1), memory_summary_vector=(0.04, 0, 0, 0.04))
+    s = state(activations=(0.21, 0.32, 0.43, 0.54, 0.65, 0.46), velocity=(0.07, -0.04, 0.03, -0.02, 0.05, -0.06), mood=-0.2, uncertainty=0.9)
+    t = transition(elapsed_seconds=0.4, wall_clock_ns=500, drives=(0.3, 0.2, 0.1, 0.0), traits=(0.5, 1.1, 0.7, 1.3, 0.9), memory_summary_vector=(0.04, 0.03, 0.02, 0.05))
     result = reduce_emotion_v2(s, p, t)
     q = t.appraisal.confidence * (1.0 - t.appraisal.uncertainty)
-    impulse = max(-p.event_impulse_cap, min(p.event_impulse_cap, q * sum(a * b for a, b in zip(p.w_appraisal[0], t.appraisal.values)) + 0.5 * 0.04))
-    y0 = _latent(0.3, p.epsilon) + impulse
-    raw = 0.15 + 0.2 * 0.3 - 0.1 * 0.2 + 0.05 * 0.1 + 0.1 * 0.5 - 0.3 * _activation(y0, p.epsilon)
-    target = _activation(raw, p.epsilon)
-    y_target = _latent(target, p.epsilon)
-    d = y0 - y_target
-    decay = math.exp(-1.25 * 0.4)
-    y1 = y_target + (d + (0.07 + 1.25 * d) * 0.4) * decay
-    v1 = (0.07 - 1.25 * (0.07 + 1.25 * d) * 0.4) * decay
-    expected_mood_target = max(-1.0, min(1.0, p.trait_mood + sum(a * b for a, b in zip(p.w_mood_emotion, (_activation(y1, p.epsilon),) * 6)) + sum(a * b for a, b in zip(p.w_mood_drive, t.drives))))
-    assert result.activations[0] == pytest.approx(_activation(y1, p.epsilon), abs=1e-15)
-    assert result.velocity[0] == pytest.approx(v1, abs=1e-15)
-    assert result.mood == pytest.approx(expected_mood_target + (s.mood - expected_mood_target) * math.exp(-0.4 / p.tau_mood), abs=1e-15)
-    assert result.uncertainty == pytest.approx(t.appraisal.uncertainty + (s.uncertainty - t.appraisal.uncertainty) * math.exp(-0.4 / p.tau_uncertainty), abs=1e-15)
+    impulses = [max(-p.event_impulse_cap, min(p.event_impulse_cap, q * sum(a * b for a, b in zip(appraisal_row, t.appraisal.values)) + sum(a * b for a, b in zip(memory_row, t.memory_summary_vector)))) for appraisal_row, memory_row in zip(p.w_appraisal, p.w_memory)]
+    y0 = [_latent(value, p.epsilon) + impulse for value, impulse in zip(s.activations, impulses)]
+    pre_activations = [_activation(value, p.epsilon) for value in y0]
+    expected_y: list[float] = []
+    expected_velocity: list[float] = []
+    for index in range(6):
+        raw = p.baseline_bias[index] + sum(a * b for a, b in zip(p.w_drive[index], t.drives)) + sum(a * b for a, b in zip(p.w_trait[index], t.traits)) - sum(a * b for a, b in zip(p.k[index], pre_activations))
+        y_target = _latent(_activation(raw, p.epsilon), p.epsilon)
+        d = y0[index] - y_target
+        decay = math.exp(-p.omega[index] * 0.4)
+        expected_y.append(y_target + (d + (s.velocity[index] + p.omega[index] * d) * 0.4) * decay)
+        expected_velocity.append((s.velocity[index] - p.omega[index] * (s.velocity[index] + p.omega[index] * d) * 0.4) * decay)
+    expected_activations = [_activation(value, p.epsilon) for value in expected_y]
+    mood_target = max(-1.0, min(1.0, p.trait_mood + sum(a * b for a, b in zip(p.w_mood_emotion, expected_activations)) + sum(a * b for a, b in zip(p.w_mood_drive, t.drives))))
+    expected_mood = mood_target + (s.mood - mood_target) * math.exp(-0.4 / p.tau_mood)
+    expected_uncertainty = t.appraisal.uncertainty + (s.uncertainty - t.appraisal.uncertainty) * math.exp(-0.4 / p.tau_uncertainty)
+    assert result.activations == pytest.approx(expected_activations, abs=1e-15)
+    assert result.velocity == pytest.approx(expected_velocity, abs=1e-15)
+    assert result.mood == pytest.approx(expected_mood, abs=1e-15)
+    assert result.uncertainty == pytest.approx(expected_uncertainty, abs=1e-15)
     assert result.event_sequence == 8
 
 
@@ -265,6 +329,54 @@ def test_canonical_hashes_are_stable_for_equivalent_ordered_values() -> None:
     assert transition().canonical_hash() == transition().canonical_hash()
     assert parameters().canonical_hash() == parameters().canonical_hash()
     assert canonical_reduction_hash(first, parameters(), transition()) == canonical_reduction_hash(second, parameters(), transition())
+    assert first.canonical_hash() != state(activations=first.activations, mood=0.2).canonical_hash()
+
+
+def test_asymmetric_state_hash_matches_independently_derived_sha256_digest() -> None:
+    fixture = EmotionStateV2(
+        (0.21, 0.32, 0.43, 0.54, 0.65, 0.46),
+        (0.07, -0.04, 0.03, -0.02, 0.05, -0.06),
+        -0.2, 0.9, 123456789, 17, "asymmetric-v1",
+    )
+    independently_framed = (
+        b'{"activations":[0.21,0.32,0.43,0.54,0.65,0.46],'
+        b'"event_sequence":17,"last_update_ns":123456789,"mood":-0.2,'
+        b'"parameter_set_id":"asymmetric-v1","uncertainty":0.9,'
+        b'"velocity":[0.07,-0.04,0.03,-0.02,0.05,-0.06]}'
+    )
+    expected = "c79a7968ed8ef575346aa73b34a94a3666f4e981d227aafe1bd5183d06b92d3e"
+    assert hashlib.sha256(independently_framed).hexdigest() == expected
+    assert fixture.canonical_hash() == expected
+    assert EmotionStateV2(
+        fixture.activations, fixture.velocity, -0.19, fixture.uncertainty,
+        fixture.last_update_ns, fixture.event_sequence, fixture.parameter_set_id,
+    ).canonical_hash() != expected
+
+
+def test_canonical_mappings_are_string_keyed_and_public_surface_hides_generic_helpers() -> None:
+    left = {"z": [3, {"a": 1}], "a": {"nested": True}}
+    right = {"a": {"nested": True}, "z": [3, {"a": 1}]}
+    assert canonical_json_bytes(left) == canonical_json_bytes(right)
+    with pytest.raises(EmotionValidationError):
+        canonical_json_bytes({"valid": {1: "not canonical"}})
+    assert "canonical_json_bytes" not in public_emotion_v2.__all__
+    assert "canonical_sha256" not in public_emotion_v2.__all__
+    assert not hasattr(public_emotion_v2, "canonical_json_bytes")
+    assert not hasattr(public_emotion_v2, "canonical_sha256")
+
+
+def test_configured_loop_gain_matches_the_frozen_equation() -> None:
+    p = parameters(g_encode_max=0.75, w_memory=(
+        (0.40, -0.30, 0.0, 0.0),
+        (0.10, 0.20, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 0.0),
+    ))
+    expected = 0.75 * 0.08 * (0.20 * 0.70)
+    assert p.memory_infinity_norm == pytest.approx(0.70)
+    assert p.configured_loop_gain == pytest.approx(expected)
 
 
 def test_one_hundred_thousand_generated_transitions_never_escape() -> None:

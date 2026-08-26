@@ -10,7 +10,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 import hashlib
 import json
 import math
-from typing import Any, Iterable, Sequence
+from collections.abc import Mapping
+from typing import Any, Sequence
 
 
 COMPONENT_ORDER = ("joy", "sadness", "fear", "anger", "interest", "calm")
@@ -35,7 +36,10 @@ class EmotionValidationError(ValueError):
 def _number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise EmotionValidationError(f"{name} must be a non-boolean finite number")
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise EmotionValidationError(f"{name} must be a non-boolean finite number") from exc
     if not math.isfinite(result):
         raise EmotionValidationError(f"{name} must be finite")
     return result
@@ -69,8 +73,10 @@ def _vector(
 def _json_value(value: Any) -> Any:
     if is_dataclass(value):
         return _json_value(asdict(value))
-    if isinstance(value, dict):
-        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise EmotionValidationError("canonical mappings require string keys")
+        return {key: _json_value(item) for key, item in value.items()}
     if isinstance(value, tuple):
         return [_json_value(item) for item in value]
     if isinstance(value, list):
@@ -107,6 +113,8 @@ class EmotionStateV2:
         if not isinstance(self.parameter_set_id, str) or not self.parameter_set_id:
             raise EmotionValidationError("parameter_set_id must be non-empty")
         activations = _vector(self.activations, "activations", 6, 0.0, 1.0)
+        if any(value <= 0.0 or value >= 1.0 for value in activations):
+            raise EmotionValidationError("activations must be strict interior values in (0, 1)")
         velocity = _vector(self.velocity, "velocity", 6)
         mood = _number(self.mood, "mood")
         uncertainty = _number(self.uncertainty, "uncertainty")
