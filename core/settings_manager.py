@@ -1,10 +1,7 @@
 import os
-import sys
 import json
 import threading
 
-# Add parent path to sys path to import Config
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import Config
 
 
@@ -38,6 +35,7 @@ class SettingsManager:
             self.settings_file = os.path.join(Config.OUTPUT_DIR, "settings.json")
             self.lock = threading.Lock()
             self._settings_file_signature = None
+            self._loaded = False
             
             # Default settings
             self.settings = {
@@ -52,7 +50,6 @@ class SettingsManager:
                 "system_prompt": "You are Aura, an AI assistant."
             }
             self.initialized = True
-            self.load()
 
     def _file_signature_unsafe(self):
         """Return a cheap cross-process change detector for settings.json."""
@@ -109,9 +106,16 @@ class SettingsManager:
         if current_signature != getattr(self, "_settings_file_signature", None):
             self._load_unsafe()
 
+    def _ensure_loaded_unsafe(self):
+        """Perform the compatibility load only after a public operation."""
+        if not getattr(self, "_loaded", False):
+            self._load_unsafe()
+            self._loaded = True
+
     def load(self):
         with self.lock:
             self._load_unsafe()
+            self._loaded = True
 
     def _public_settings_unsafe(self):
         return {key: self.settings[key] for key in PUBLIC_SETTING_KEYS if key in self.settings}
@@ -148,30 +152,35 @@ class SettingsManager:
     def save(self):
         with self.lock:
             try:
+                self._ensure_loaded_unsafe()
                 self._save_unsafe()
             except Exception as e:
                 print(f"Failed to save settings: {e}")
 
     def get(self, key, default=None):
         with self.lock:
+            self._ensure_loaded_unsafe()
             self._reload_if_changed_unsafe()
             return self.settings.get(key, default)
 
     def update(self, key, value):
         updates = self._validate_public_updates({key: value})
         with self.lock:
+            self._ensure_loaded_unsafe()
             self._reload_if_changed_unsafe()
             self.settings.update(updates)
             self._save_unsafe()
 
     def get_all(self):
         with self.lock:
+            self._ensure_loaded_unsafe()
             self._reload_if_changed_unsafe()
             return self._public_settings_unsafe()
 
     def update_all(self, new_settings):
         updates = self._validate_public_updates(new_settings)
         with self.lock:
+            self._ensure_loaded_unsafe()
             self._reload_if_changed_unsafe()
             self.settings.update(updates)
             self._save_unsafe()
