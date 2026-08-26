@@ -51,8 +51,6 @@ hybrid_test.py
 migrate_db.py
 !migrate_db.py
 check_libs.py
-inject_persona.py
-memory_server_py312.py
 train_aura.py
 train_script.txt
 1/
