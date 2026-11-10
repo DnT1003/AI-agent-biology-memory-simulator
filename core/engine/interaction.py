@@ -124,14 +124,33 @@ class InteractionController:
         if jokes is not None:
             jokes.remember(user_input, float(valence), time.time())
 
-    def _update_boredom(self, recalled, sensory_vector) -> None:
+    @staticmethod
+    def _run_enrichment(*args, **kwargs):
+        # Imported here, inside the guarded post-commit phase: the module
+        # sets up its logger at import time, and an import failure must not
+        # escape and hide a reply that has already committed.
+        from core.engine.enrichment import run_enrichment
+
+        return run_enrichment(*args, **kwargs)
+
+    @staticmethod
+    def _top_recall_time(recalled):
+        """When the top recalled memory was last recalled BEFORE this turn.
+
+        Must be read before the recall_effects phase: reconsolidation sets
+        ``last_recalled`` to now, which would make every topic look repeated.
+        """
+        if not recalled:
+            return None
+        return float(getattr(recalled[0], "last_recalled", 0.0) or 0.0)
+
+    def _update_boredom(self, prior_recall_time, sensory_vector) -> None:
         ego = self.engine.ego
         boredom = float(getattr(ego, "boredom", 0.0) or 0.0)
         now = time.time()
-        top = recalled[0] if recalled else None
         repeated = (
-            top is not None
-            and now - float(getattr(top, "last_recalled", 0.0) or 0.0) < self.BOREDOM_REPEAT_SECONDS
+            prior_recall_time is not None
+            and now - prior_recall_time < self.BOREDOM_REPEAT_SECONDS
             and abs(float((sensory_vector or {}).get("valence", 0.0) or 0.0)) < 0.5
         )
         boredom = min(1.0, boredom + 0.1) if repeated else boredom * 0.5
@@ -312,11 +331,9 @@ class InteractionController:
         self._run_postcommit_phase("brief_short_term_memory", _commit)
         if getattr(self.engine, "prospective", None) is None:
             return
-        from core.engine.enrichment import run_enrichment
-
         self._run_postcommit_phase(
             "brief_enrichment",
-            lambda: run_enrichment(
+            lambda: self._run_enrichment(
                 self.engine, user_input, reply, time.time(),
                 model_override=model_override, force_local=force_local,
             ),
@@ -1065,6 +1082,7 @@ class InteractionController:
             force_local=force_local,
         )
         recalled = [hit.memory for hit in recall_plan.hits]
+        prior_recall_time = self._top_recall_time(recalled)
         self._raise_if_cancelled(
             cancel_event,
             "cancelled after recall planning",
@@ -1329,7 +1347,7 @@ class InteractionController:
             and final_result
         ):
             self._run_postcommit_phase(
-                "boredom", lambda: self._update_boredom(recalled, sensory_vector)
+                "boredom", lambda: self._update_boredom(prior_recall_time, sensory_vector)
             )
             self._run_postcommit_phase(
                 "relationship", lambda: self._update_relationship(user_input, local_res, sensory_vector)
@@ -1344,11 +1362,9 @@ class InteractionController:
                 )
             # One extraction call feeds the world graph, values and
             # prospective memory (core/engine/enrichment.py).
-            from core.engine.enrichment import run_enrichment
-
             self._run_postcommit_phase(
                 "enrichment",
-                lambda: run_enrichment(
+                lambda: self._run_enrichment(
                     self.engine,
                     user_input,
                     flatten_bubbles(final_result.get("response", "")),

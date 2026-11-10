@@ -74,12 +74,16 @@ class DeferralTests(unittest.TestCase):
         bridge.aura_inbox.put({"message_id": "1", "content": "em ngủ chưa"})
         bridge.aura_inbox.put({"message_id": "2", "content": "gấp lắm, dậy ngay!!"})
         with patch.object(Config, "DEFER_REPLIES_WHILE_ASLEEP", True):
-            first = controller._discord_batch(bridge)
-            self.assertEqual([m["message_id"] for m in first], ["2"])
+            controller._drain_discord_inbox(bridge)
+            first = controller._next_discord_message()
+            self.assertEqual(first["message_id"], "2")
+            self.assertIsNone(controller._next_discord_message())
             ego.asleep_until = 0.0
-            later = controller._discord_batch(bridge)
-        self.assertEqual([m["message_id"] for m in later], ["1"])
-        self.assertIn("received_at", later[0])
+            controller._drain_discord_inbox(bridge)
+            later = controller._next_discord_message()
+            self.assertIsNone(controller._next_discord_message())
+        self.assertEqual(later["message_id"], "1")
+        self.assertIn("received_at", later)
 
     def test_web_message_stays_pending_while_asleep(self):
         with TemporaryDirectory() as tmp:
@@ -152,12 +156,13 @@ class BoredomTests(unittest.TestCase):
         controller = InteractionController.__new__(InteractionController)
         controller.engine = SimpleNamespace(ego=ego)
         fresh = SimpleNamespace(last_recalled=0.0)
-        controller._update_boredom([fresh], {"valence": 0.0})
+        # The recall time is snapshotted before recall_effects reconsolidates it.
+        controller._update_boredom(controller._top_recall_time([fresh]), {"valence": 0.0})
         self.assertAlmostEqual(ego.boredom, 0.4)
-        same = SimpleNamespace(last_recalled=time.time())
-        controller._update_boredom([same], {"valence": 0.0})
+        same = controller._top_recall_time([SimpleNamespace(last_recalled=time.time())])
+        controller._update_boredom(same, {"valence": 0.0})
         self.assertAlmostEqual(ego.boredom, 0.5)
-        controller._update_boredom([same], {"valence": -0.8})  # venting is never boring
+        controller._update_boredom(same, {"valence": -0.8})  # venting is never boring
         self.assertAlmostEqual(ego.boredom, 0.25)
 
 

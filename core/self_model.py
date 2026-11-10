@@ -59,6 +59,7 @@ _PERSISTED_STATE_FIELDS = frozenset({
     "reward_expectations",
     "current_intimacy",
     "relational_friction",
+    "boredom",
     "resilience",
     "sleep_debt",
     "calibrated_overrides",
@@ -93,6 +94,7 @@ _PERSISTED_NUMBER_BOUNDS = {
     "dopamine_baseline": (0.0, 1.0),
     "current_intimacy": (0.0, 1.0),
     "relational_friction": (0.0, 1.0),
+    "boredom": (0.0, 1.0),
     "resilience": (0.0, 1.0),
     # This field is currently reserved, but it must still be bounded when a
     # legacy/future writer supplies it.
@@ -1185,6 +1187,7 @@ class SelfModel:
             "reward_expectations": dict(getattr(self, 'reward_expectations', {})),
             "current_intimacy": getattr(self, 'current_intimacy', 0.5),
             "relational_friction": getattr(self, 'relational_friction', 0.0),
+            "boredom": getattr(self, 'boredom', 0.0),
             "resilience": getattr(self, 'resilience', 0.0),
             "sleep_debt": getattr(self, 'sleep_debt', 0.0),
             "calibrated_overrides": self.calibrated_overrides,

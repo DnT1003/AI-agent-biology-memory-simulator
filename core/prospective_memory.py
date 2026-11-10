@@ -58,7 +58,12 @@ def parse_due(value) -> Optional[float]:
         if default_hour is not None:
             moment = moment.replace(hour=default_hour)
         return moment.timestamp()
-    raise ValueError(f"unrecognised due date: {value!r}")
+    try:
+        # LLMs also write ISO-8601 ("2026-11-03T14:00", seconds, or a zone).
+        moment = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"unrecognised due date: {value!r}") from None
+    return moment.timestamp()
 
 
 def _clean_text(value, limit: int, field: str) -> str:

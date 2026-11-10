@@ -86,6 +86,7 @@ _TICK_BIOLOGY_FIELDS = (
     "reward_expectations",
     "current_intimacy",
     "relational_friction",
+    "boredom",
     "resilience",
     "sleep_debt",
     "days_without_sleep",

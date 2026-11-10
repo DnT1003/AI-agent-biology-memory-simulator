@@ -88,9 +88,11 @@ class LiveEndpointTests(unittest.TestCase):
 
         with patch.object(Config, "LOCAL_LLM_ENABLED", False):
             llm = LLM(ego=None)
-        llm.settings = live._Settings({"provider": "openai", "openai_base_url": self.base_url,
-                                       "openai_model": "fake-model", "openai_api_key": ""})
-        payload, _ = llm.generate_json('Trả về JSON có "response"', bio_throttle=False)
+        llm.settings = live._Settings({"provider": "openai", "openai_model": "fake-model",
+                                       "openai_api_key": ""})
+        # The endpoint is deployment config only, never a dashboard setting.
+        with patch.object(Config, "OPENAI_BASE_URL", self.base_url):
+            payload, _ = llm.generate_json('Trả về JSON có "response"', bio_throttle=False)
         self.assertEqual(payload["response"], "Dạ em đây, anh kể tiếp đi")
         auth, request = _FakeOpenAI.requests_seen[-1]
         self.assertEqual(auth, "Bearer local")  # no key needed for a local server
@@ -103,15 +105,18 @@ class LiveEndpointTests(unittest.TestCase):
 
         with patch.object(Config, "LOCAL_LLM_ENABLED", False):
             llm = LLM(ego=None)
-        llm.settings = live._Settings({"provider": "openai", "openai_base_url": "https://example.com/v1"})
-        with self.assertRaises(LLMConfigurationError):
+        llm.settings = live._Settings({"provider": "openai"})
+        with patch.object(Config, "OPENAI_BASE_URL", "https://example.com/v1"), \
+                self.assertRaises(LLMConfigurationError):
             llm.generate_json("x", bio_throttle=False)
 
     def test_simulated_day_runs_on_the_real_llm_path(self):
         factory = live.make_llm_factory(self.base_url, "fake-model", "", rpm=0)
         from config import Config
 
-        with patch.object(Config, "LOCAL_LLM_ENABLED", Config.LOCAL_LLM_ENABLED):
+        # The factory points Config at the endpoint; restore both afterwards.
+        with patch.object(Config, "LOCAL_LLM_ENABLED", Config.LOCAL_LLM_ENABLED), \
+                patch.object(Config, "OPENAI_BASE_URL", Config.OPENAI_BASE_URL):
             report = run_week(seed=7, days=1, llm_factory=factory)
         self.assertGreater(report.llm_calls, 0)
         self.assertEqual(report.llm_failures, 0)

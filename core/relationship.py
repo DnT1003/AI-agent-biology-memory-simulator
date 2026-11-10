@@ -32,22 +32,35 @@ REPAIR_INTIMACY_BONUS = 0.03    # making up brings them closer
 # Passive easing; slower when they are not close (8 h at intimacy 0.5).
 FRICTION_TAU_SECONDS = 8 * 3600
 
+# Only phrases aimed at her. Bare "phiền"/"vô dụng"/"annoying" also cover
+# "xin lỗi làm phiền em", "anh thấy mình vô dụng", "this bug is annoying".
 _HOSTILE_RE = re.compile(
-    r"\b(phiền|im đi|cút|ngu|đồ vô dụng|vô dụng|chán em|ghét em|bực em|đừng nhắn|"
-    r"đừng làm phiền|khó chịu với em|mệt với em|shut up|annoying|stupid)\b"
+    r"\b(im đi|câm mồm|cút|đồ ngu|đồ vô dụng|đồ vô tích sự|chán em|ghét em|bực em|"
+    r"chán mày|ghét mày|bực mày|đừng nhắn nữa|đừng làm phiền|khó chịu với em|mệt với em|"
+    r"(?:em|mày|cậu|aura) làm (?:anh|tôi|mình|tao|tớ) (?:thất vọng|bực|khó chịu)|"
+    r"shut up|you'?re (?:so )?(?:annoying|stupid|useless)|you are (?:so )?(?:annoying|stupid|useless))\b"
 )
-_SECOND_PERSON_RE = re.compile(r"\b(em|mày|cậu|bạn|aura)\b")
+# "em/mày ... ngu" within two words of the same clause, unless negated,
+# caring, or about someone else: "em không vô dụng đâu", "sợ làm em phiền",
+# "em ơi, anh ngu quá", "anh kể em nghe, nó ngu lắm".
+_TARGETED_INSULT_RE = re.compile(
+    r"\b(?:em|mày|cậu|aura)\s+"
+    r"(?:(?!(?:không|chẳng|chả|đâu|đừng|đỡ|khỏi|thấy|sợ|có|anh|mình|tôi|tớ|nó|họ|ai|"
+    r"nghĩ|tưởng|bảo)\b)[^\s,.;:!?]+\s+){0,2}"
+    r"(?:ngu|đần|vô dụng|vô tích sự|dở hơi|phiền (?:quá|thật|vãi|phức))\b"
+)
 _APOLOGY_RE = re.compile(
     r"\b(xin lỗi|sorry|anh sai|em đừng giận|nói nặng lời|tha lỗi|anh không cố ý|làm lành)\b"
 )
 
 
-def is_hostile(text: str, valence: float) -> bool:
+def is_hostile(text: str, valence: float = 0.0) -> bool:
+    """Lexical only. Negative valence alone is not hostility: the owner calls
+    her "em" in every message, including when venting to her."""
     lowered = str(text or "").lower()
-    if _HOSTILE_RE.search(lowered):
-        return True
-    # Strongly negative and aimed at her ("em ...", "mày ...").
-    return valence <= -0.6 and bool(_SECOND_PERSON_RE.search(lowered))
+    if is_apology(lowered):
+        return False
+    return bool(_HOSTILE_RE.search(lowered) or _TARGETED_INSULT_RE.search(lowered))
 
 
 def is_apology(text: str) -> bool:

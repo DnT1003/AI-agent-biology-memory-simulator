@@ -305,6 +305,7 @@ class BackgroundReader:
         self._fresh_book = False
         self.finished_books = []
         self.last_material_new_book = False
+        self._fetch_failures = 0
         self._load_progress()
 
     # ------------------------------------------------------------ lifecycle
@@ -382,8 +383,37 @@ class BackgroundReader:
             self.segments = []
             self._loaded_chapter = None
             self._fresh_book = True
+            self._fetch_failures = 0
         self._save_progress()
         logger.info(f"[BackgroundReader] Đã chọn sách '{book.title}' ({book.source}, {len(chapters)} phần).")
+        return True
+
+    # Consecutive failed fetches of the current book before giving it up. A
+    # short network outage keeps our place; a deleted file or a removed page
+    # must not leave her stuck on the same book forever.
+    MAX_FETCH_FAILURES = 5
+
+    def _fetch_failed(self, book) -> bool:
+        """Count a failed fetch; True when the book was abandoned."""
+        with self.lock:
+            if self.current_book != book:
+                return False
+            self._fetch_failures += 1
+            if self._fetch_failures < self.MAX_FETCH_FAILURES:
+                return False
+            # Listed as finished so _pick_new_book does not choose it again.
+            self.finished_books.append(self._book_key(book))
+            self.finished_books = self.finished_books[-self._MAX_FINISHED:]
+            self.current_book = None
+            self.chapters = []
+            self.segments = []
+            self._loaded_chapter = None
+            self._fetch_failures = 0
+        logger.warning(
+            "[BackgroundReader] giving up on unreadable book source=%s after %d failures",
+            book.source, self.MAX_FETCH_FAILURES,
+        )
+        self._save_progress()
         return True
 
     def _pick_new_book(self) -> bool:
@@ -489,6 +519,8 @@ class BackgroundReader:
             if need_chapters:
                 chapters = source.chapters(book)
                 if not chapters:
+                    if self._fetch_failed(book):
+                        continue  # gave up on it: pick another book
                     return None, None  # source unreachable: try again later
                 with self.lock:
                     if self.current_book == book:
@@ -497,11 +529,14 @@ class BackgroundReader:
 
             text = source.fetch_chapter(book, chapter)
             if text is None:
+                if self._fetch_failed(book):
+                    continue
                 # Network failure: keep our place instead of skipping the chapter.
                 return None, None
             segments = self._split_segments(text)
             with self.lock:
                 if self.current_book == book:
+                    self._fetch_failures = 0
                     self.segments = segments
                     self._loaded_chapter = self.chapter_index
                     # A restored position past the end just finishes the chapter.

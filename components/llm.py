@@ -233,9 +233,9 @@ class LLM:
         )
 
     def _openai_base_url(self) -> str:
-        base = self.settings.get("openai_base_url", "") or getattr(
-            Config, "OPENAI_BASE_URL", "https://api.openai.com/v1"
-        )
+        # Deployment config only: the key is sent to this host, so it must
+        # never come from the dashboard-writable settings.json.
+        base = getattr(Config, "OPENAI_BASE_URL", "") or "https://api.openai.com/v1"
         return str(base).strip().rstrip("/")
 
     def _openai_is_local(self) -> bool:
@@ -571,7 +571,7 @@ class LLM:
             api_key = self._openai_api_key()
             if not api_key:
                 raise LLMConfigurationError("Thiếu OPENAI API key.")
-            model = model_override or self.settings.get("openai_model", Config.OPENAI_MODEL)
+            model = model_override or self.settings.get("openai_model") or Config.OPENAI_MODEL
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": model,
@@ -749,7 +749,7 @@ class LLM:
             api_key = self._openai_api_key()
             if not api_key:
                 raise LLMConfigurationError("Thiếu OpenAI API key.")
-            model = model_override or self.settings.get("openai_model", Config.OPENAI_MODEL)
+            model = model_override or self.settings.get("openai_model") or Config.OPENAI_MODEL
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": model,

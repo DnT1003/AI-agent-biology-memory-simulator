@@ -19,7 +19,10 @@ _HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _BULLET_RE = re.compile(r"^\s*(?:[-*•+]|\d{1,2}[.)])\s+", re.MULTILINE)
 _EMPHASIS_RE = re.compile(r"(\*\*|__)(.+?)\1", re.DOTALL)
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
-_SENTENCE_RE = re.compile(r"[^.!?…\n]+(?:[.!?…]+|$)")
+# A sentence ends at . ! ? … (plus any closing quote/bracket) only when
+# whitespace or the end of a line follows, so "3.5", "TP.HCM" and URLs are
+# never split. MULTILINE: a line without final punctuation is still a sentence.
+_SENTENCE_RE = re.compile(r"[^\n]+?(?:[.!?…]+[\"'”’)\]]*(?=\s|$)|$)", re.MULTILINE)
 
 # Whole sentences that only an assistant would say.
 _CLICHE_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
@@ -40,12 +43,31 @@ _CLICHE_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
 ))
 
 # Internal state leaking into speech: prompt labels read back aloud.
-_JARGON_PAREN_RE = re.compile(r"\s*\((?:[A-Za-z][A-Za-z _-]{1,24})\)")
-_JARGON_SENTENCE_RE = re.compile(
-    r"\b(?:dopamine|cortisol|serotonin|atp|fatigue|arousal|valence|mood|stress level|"
-    r"chỉ số|trạng thái (?:sảng khoái|cân bằng nội môi|nội môi))\b",
+# Only Aura's own state variables count; "(Python)" or "tụt mood" are speech.
+_STATE_TERMS = (
+    r"mood|stress(?: level)?|fatigue|arousal|valence|atp|dopamine|cortisol|"
+    r"serotonin|curiosity|social need|energy|flow(?: state)?"
+)
+_JARGON_PAREN_RE = re.compile(
+    rf"\s*\((?:{_STATE_TERMS})(?:\s*[=:]\s*[-+]?\d+(?:[.,]\d+)?%?)?\)",
     re.IGNORECASE,
 )
+_JARGON_SENTENCE_RE = re.compile(
+    r"\b(?:dopamine|cortisol|serotonin|atp|fatigue|arousal|valence|stress level|"
+    r"chỉ số (?:mood|stress|fatigue|dopamine|cortisol|serotonin|atp|năng lượng|cảm xúc|sinh học)|"
+    r"trạng thái (?:sảng khoái|cân bằng nội môi|nội môi))\b",
+    re.IGNORECASE,
+)
+
+
+_STATE_TOPIC_RE = re.compile(
+    rf"\b(?:{_STATE_TERMS}|nội môi|sảng khoái|chỉ số)\b", re.IGNORECASE
+)
+
+
+def _user_asked_about_state(user_input: str) -> bool:
+    """The owner brought the topic up ("dopamine là gì?"): answer, don't filter."""
+    return bool(_STATE_TOPIC_RE.search(str(user_input or "")))
 
 # Asking for an explanation earns a longer answer.
 _EXPLAIN_RE = re.compile(
@@ -79,12 +101,11 @@ def _sentences(text: str) -> list[str]:
 
 def _join_items(items: list[str]) -> str:
     """'- Nghỉ ngơi nhé' / '- Uống nước' -> 'Nghỉ ngơi nhé, uống nước'."""
-    parts = [item.rstrip(" .;,") for item in items if item.strip()]
-    parts = [parts[0]] + [p[:1].lower() + p[1:] for p in parts[1:]] if parts else []
-    return ", ".join(parts)
+    # Items keep their own case: lowercasing would break "Hà Nội" or "AI".
+    return ", ".join(item.rstrip(" .;,") for item in items if item.strip())
 
 
-def _plain(chunk: str) -> tuple[str, set]:
+def _plain(chunk: str, filter_jargon: bool = True) -> tuple[str, set]:
     changes = set()
     out = chunk
     for pattern, repl in ((_EMPHASIS_RE, r"\2"), (_BACKTICK_RE, r"\1")):
@@ -92,10 +113,11 @@ def _plain(chunk: str) -> tuple[str, set]:
         if new != out:
             changes.add("markdown")
             out = new
-    new = _JARGON_PAREN_RE.sub("", out)
-    if new != out:
-        changes.add("jargon")
-        out = new
+    if filter_jargon:
+        new = _JARGON_PAREN_RE.sub("", out)
+        if new != out:
+            changes.add("jargon")
+            out = new
 
     # Headers are labels, not speech: drop them. Consecutive list items
     # become one spoken sentence.
@@ -122,11 +144,14 @@ def _plain(chunk: str) -> tuple[str, set]:
         good = [s for s in sentences if s and not any(r.search(s) for r in _CLICHE_RES)]
         if sentences != original or len(good) != len(sentences):
             changes.add("cliche")
-        spoken = [s for s in good if not _JARGON_SENTENCE_RE.search(s)]
-        if len(spoken) != len(good):
-            changes.add("jargon")
-        good = spoken
-        if good:
+        if filter_jargon:
+            spoken = [s for s in good if not _JARGON_SENTENCE_RE.search(s)]
+            if len(spoken) != len(good):
+                changes.add("jargon")
+            good = spoken
+        if good == original:
+            kept.append(line)  # untouched: keep the author's exact spacing
+        elif good:
             kept.append(" ".join(good))
     return "\n".join(kept).strip(), changes
 
@@ -147,8 +172,9 @@ def humanize(reply: str, user_input: str = "") -> tuple[str, set]:
         return reply, set()
     changes: set = set()
     bubbles = []
+    filter_jargon = not _user_asked_about_state(user_input)
     for chunk in split_bubbles(reply) or [reply]:
-        cleaned, applied = _plain(chunk)
+        cleaned, applied = _plain(chunk, filter_jargon)
         changes |= applied
         if cleaned:
             bubbles.append(cleaned)

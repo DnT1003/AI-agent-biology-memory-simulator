@@ -17,7 +17,8 @@ class HumanizeTests(unittest.TestCase):
             "Hy vọng những thông tin này hữu ích. Mình có thể giúp gì thêm cho anh không?",
         ])
         text, fixes = humanize(reply, "mệt quá")
-        self.assertEqual(text, "Đi ngủ sớm nhé, uống nước ấm")
+        # Items keep their case: lowercasing would break "Hà Nội" or "AI".
+        self.assertEqual(text, "Đi ngủ sớm nhé, Uống nước ấm")
         self.assertEqual(fixes, {"cliche", "list", "markdown"})
 
     def test_bubbles_survive_and_a_boilerplate_bubble_is_dropped(self):

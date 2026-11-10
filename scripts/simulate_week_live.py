@@ -107,10 +107,11 @@ def make_llm_factory(base_url: str, model: str, api_key: str, rpm: float, retrie
 
         # The offline Unsloth backend would start loading torch in the background.
         Config.LOCAL_LLM_ENABLED = False
+        # The LLM reads its endpoint from deployment config only, not settings.
+        Config.OPENAI_BASE_URL = base_url
         llm = LLM(ego=engine.ego)
         llm.settings = _Settings({
             "provider": "openai",
-            "openai_base_url": base_url,
             "openai_model": model,
             "openai_api_key": api_key,
         })

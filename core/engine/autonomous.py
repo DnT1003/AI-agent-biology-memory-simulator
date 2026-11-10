@@ -551,7 +551,12 @@ class AutonomousController:
             try:
                 discord_bridge = getattr(self.engine, 'discord_bridge', None)
                 if discord_bridge:
-                    for msg_data in self._discord_batch(discord_bridge):
+                    # Take what has arrived so far (messages arriving while she
+                    # answers wait for the next iteration, so web chat and the
+                    # cognitive tick are never starved), then handle one at a
+                    # time: if handling one raises, the rest stay queued.
+                    self._drain_discord_inbox(discord_bridge)
+                    while (msg_data := self._next_discord_message()) is not None:
                         note_message_received(
                             self.engine,
                             str(msg_data.get("message_id") or "").strip() or None,
@@ -813,27 +818,53 @@ class AutonomousController:
         ):
             await self._run_owned(AgentState.THINKING, self._proactive_ping, idle_time)
 
-    def _discord_batch(self, discord_bridge) -> list:
-        """Messages to handle now; non-urgent ones wait while she sleeps."""
-        deferred = getattr(self, "_deferred_discord", None)
-        if deferred is None:
-            deferred = self._deferred_discord = []
+    def _discord_queue(self, name: str) -> list:
+        queue_ = getattr(self, name, None)
+        if queue_ is None:
+            queue_ = []
+            setattr(self, name, queue_)
+        return queue_
+
+    def _drain_discord_inbox(self, discord_bridge) -> None:
+        """Move everything that has arrived into ``self._discord_pending``."""
+        import asyncio
+        import queue
+
+        pending = self._discord_queue("_discord_pending")
         now = time.time()
-        ready = []
         while not discord_bridge.aura_inbox.empty():
-            item = discord_bridge.aura_inbox.get_nowait()
+            try:
+                item = discord_bridge.aura_inbox.get_nowait()
+            except (queue.Empty, asyncio.QueueEmpty):
+                break
             item.setdefault("received_at", now)
+            pending.append(item)
+
+    def _next_discord_message(self):
+        """Next message to handle now, or None; non-urgent ones wait while she sleeps.
+
+        Messages live in ``self._discord_pending`` until the moment they are
+        handled, so a failure while handling one never drops the others, and
+        the sleep check is made per message ("ngủ đi" followed by a second
+        message defers that second one).
+        """
+        pending = self._discord_queue("_discord_pending")
+        deferred = self._discord_queue("_deferred_discord")
+        now = time.time()
+        ego = getattr(self.engine, "ego", None)
+        if deferred and not sleep_cycle.is_asleep(ego, now):
+            # Awake again: what waited goes first, in arrival order.
+            pending[:0] = deferred
+            deferred.clear()
+        while pending:
+            item = pending.pop(0)
             if sleep_cycle.should_defer_message(
-                getattr(self.engine, "ego", None), item.get("content", ""), now,
-                Config.DEFER_REPLIES_WHILE_ASLEEP,
+                ego, item.get("content", ""), now, Config.DEFER_REPLIES_WHILE_ASLEEP,
             ):
                 deferred.append(item)
-            else:
-                ready.append(item)
-        if deferred and not sleep_cycle.is_asleep(getattr(self.engine, "ego", None), now):
-            ready = deferred + ready
-            deferred.clear()
-        return ready
+                continue
+            return item
+        return None
 
     def _owner_busy(self, now: float) -> bool:
         """The owner said they are busy (meeting, driving...) until later."""

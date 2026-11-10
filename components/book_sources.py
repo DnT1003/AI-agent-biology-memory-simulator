@@ -105,8 +105,8 @@ class LocalLibrarySource:
 
     def chapters(self, book: BookRef) -> list[Chapter]:
         path = self._path(book)
-        if path is None:
-            return []
+        if path is None or not os.path.isfile(path):
+            return []  # deleted or renamed since it was listed
         if path.lower().endswith(".epub"):
             return [Chapter(f"{book.title} ({i + 1})", item) for i, item in enumerate(self._epub_items(path))]
         return [Chapter(book.title, "")]
