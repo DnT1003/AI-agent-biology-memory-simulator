@@ -10,6 +10,7 @@ PUBLIC_SETTING_KEYS = frozenset({
     "local_model",
     "gemini_model",
     "openai_model",
+    "openai_base_url",
     "anthropic_model",
     "system_prompt",
 })
@@ -42,7 +43,8 @@ class SettingsManager:
                 "provider": "local", # local, gemini, openai, anthropic
                 "local_model": getattr(Config, "LOCAL_MODEL_NAME", "phi3:mini"),
                 "gemini_model": getattr(Config, "MODEL_NAME", "gemini-3.0-flash"),
-                "openai_model": "gpt-4o-mini",
+                "openai_model": getattr(Config, "OPENAI_MODEL", "gpt-4o-mini"),
+                "openai_base_url": getattr(Config, "OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 "anthropic_model": "claude-3-haiku-20240307",
                 "gemini_api_key": getattr(Config, "API_KEY", ""),
                 "openai_api_key": os.getenv("OPENAI_API_KEY", ""),

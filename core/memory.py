@@ -203,10 +203,17 @@ class MemoryTrace:
             drift_to_center = (0.5 - self.reality_score) * 0.05 * elapsed_days
             self.reality_score += drift_to_center
 
-    def reconsolidate(self, current_mood: float, is_associative: bool = False) -> bool:
-        """Ký ức bị thay đổi cảm xúc khi nhớ lại (Reconsolidation)"""
+    def reconsolidate(self, current_mood: float, is_associative: bool = False,
+                      count_recall: bool = True) -> bool:
+        """Ký ức bị thay đổi cảm xúc khi nhớ lại (Reconsolidation).
+
+        ``count_recall=False`` dành cho suy nghĩ miên man/rumination: nghĩ lại
+        thụ động không được tính là một lần ôn luyện chủ động, nếu không ký ức
+        bị nghiền ngẫm sẽ nhanh chóng "hóa thạch" (Deep Freeze) và bất tử.
+        """
         self.last_recalled = time.time()
-        self.recall_count += 1
+        if count_recall:
+            self.recall_count += 1
         
         recovery_boost = Config.RECONSOLIDATION_RATE / 4.0 if is_associative else Config.RECONSOLIDATION_RATE
         self.strength = min(1.0, self.strength + recovery_boost)

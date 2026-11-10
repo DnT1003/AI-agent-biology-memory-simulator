@@ -28,6 +28,7 @@ class AuraDiscordBot:
         
         self.target_channel = None
         self._loop = None  # Lưu event loop sau khi bot sẵn sàng
+        self._outbound_lock = None  # asyncio.Lock trên loop của Discord
         self._thread = None
         self._thread_lock = threading.Lock()
 
@@ -147,6 +148,49 @@ class AuraDiscordBot:
                 )
         else:
             logger.warning("[DiscordBridge] Kênh chưa sẵn sàng, loop chưa khởi tạo, hoặc kết nối bị đứt.")
+
+    def send_bubbles(self, text: str, fatigue: float = 0.0, arousal: float = 0.0) -> bool:
+        """Gửi phản hồi thành nhiều tin theo [SEND], có "đang nhập..." giữa các tin.
+
+        Không chờ gửi xong: độ trễ gõ phím chạy trên event loop của Discord để
+        vòng lặp của Aura không bị chặn. Trả về True khi đã xếp lịch gửi.
+        """
+        from core.message_bubbles import split_bubbles, typing_delay
+
+        chunks = split_bubbles(text)
+        channel = self.target_channel
+        loop = self._loop
+        if not chunks:
+            return False
+        if channel is None or self.client.is_closed() or loop is None:
+            logger.warning("[DiscordBridge] Kênh chưa sẵn sàng, loop chưa khởi tạo, hoặc kết nối bị đứt.")
+            return False
+
+        async def _deliver():
+            # One reply finishes before the next starts, so bubbles of two
+            # replies never interleave. Created lazily on the Discord loop.
+            if self._outbound_lock is None:
+                self._outbound_lock = asyncio.Lock()
+            async with self._outbound_lock:
+                for index, chunk in enumerate(chunks):
+                    try:
+                        if index > 0:
+                            async with channel.typing():
+                                await asyncio.sleep(typing_delay(chunk, fatigue, arousal))
+                        await channel.send(chunk)
+                    except Exception as e:
+                        logger.error(
+                            "[DiscordBridge] Outbound send failed; error_type=%s",
+                            type(e).__name__,
+                        )
+                        return
+
+        try:
+            asyncio.run_coroutine_threadsafe(_deliver(), loop)
+        except RuntimeError:
+            logger.warning("[DiscordBridge] Event loop đã đóng trước khi gửi.")
+            return False
+        return True
 
     def start_in_thread(self):
         def _run():

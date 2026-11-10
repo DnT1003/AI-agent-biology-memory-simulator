@@ -8,9 +8,10 @@ Hệ thống mô phỏng trí tuệ nhân tạo thế hệ mới, kết hợp gi
 
 ### 1. Cơ chế Bio-Throttling (Dual-System Integration) - [NEW V5.3]
 Hệ thống 1 (Sinh học) giờ đây đã thực sự "bóp nghẹt" và làm biến dạng Hệ thống 2 (LLM):
-- **Panic Response (Stress > 0.7)**: Khi căng thẳng, AI tự động tăng `Temperature` (lên đến 1.2), dẫn đến các phản hồi dài dòng, hỗn loạn và mất kiểm soát logic.
-- **Stereotype Thinking (Fatigue > 0.8)**: Khi kiệt sức, AI giảm `Temperature` và `Top_P`, khiến suy nghĩ trở nên rập khuôn, ngắn ngủn và thiếu sáng tạo.
-- **Homeostatic Throttling**: Tự động giới hạn `max_output_tokens` và chèn cảnh báo nội tại khi các chỉ số sinh học đạt ngưỡng nguy hiểm.
+- **Panic Response (Stress > 0.4)**: Khi căng thẳng, AI tự động tăng `Temperature` (+stress × 0.5, tối đa 1.2), dẫn đến các phản hồi dài dòng, hỗn loạn và mất kiểm soát logic.
+- **Stereotype Thinking (Fatigue > 0.5)**: Khi mệt, AI giảm `Temperature` (−fatigue × 0.4, tối thiểu 0.2); khi Fatigue > 0.6 thì giảm cả `Top_P`, khiến suy nghĩ trở nên rập khuôn, ngắn ngủn và thiếu sáng tạo.
+- **Homeostatic Throttling**: Khi Fatigue/Stress > 0.6, giới hạn `max_output_tokens` ở 400; khi > 0.85, giới hạn ở 150 và chèn cảnh báo nội tại.
+- Điều tiết chỉ áp dụng cho lời nói của Aura; các lệnh gọi trích xuất/phân tích có cấu trúc (JSON, sinh code, giấc mơ) dùng `bio_throttle=False` để không làm hỏng dữ liệu ghi vào bộ nhớ.
 
 ### 2. Hệ thống Ký ức Đa tầng (Multi-layered Memory)
 Không chỉ là RAG thông thường, hệ thống mô phỏng trí nhớ con người:

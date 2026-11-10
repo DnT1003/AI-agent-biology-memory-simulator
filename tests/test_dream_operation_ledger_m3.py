@@ -431,11 +431,15 @@ class DreamOperationLedgerTests(unittest.TestCase):
             first_consolidation,
             ("owner", "standard"),
         )
-        first_record = self.ledger.create_or_get_plan(
-            _dream_operation_id(first_consolidation),
-            _DREAM_OPERATION_TYPE,
-            first_plan,
-        )
+        # Recovery order is (created_at_ns, op_id). Pin distinct creation
+        # times so the bad plan is scanned first even on coarse clocks
+        # (Windows time_ns ticks in milliseconds and would tie both plans).
+        with patch("core.operation_ledger.time.time_ns", return_value=1_000):
+            first_record = self.ledger.create_or_get_plan(
+                _dream_operation_id(first_consolidation),
+                _DREAM_OPERATION_TYPE,
+                first_plan,
+            )
         second_ids = [parent.id for parent in second_parents]
         second_consolidation = _dream_consolidation_id(second_ids)
         second_plan = _build_dream_plan(
@@ -448,11 +452,12 @@ class DreamOperationLedgerTests(unittest.TestCase):
             second_consolidation,
             ("owner", "standard"),
         )
-        second_record = self.ledger.create_or_get_plan(
-            _dream_operation_id(second_consolidation),
-            _DREAM_OPERATION_TYPE,
-            second_plan,
-        )
+        with patch("core.operation_ledger.time.time_ns", return_value=2_000):
+            second_record = self.ledger.create_or_get_plan(
+                _dream_operation_id(second_consolidation),
+                _DREAM_OPERATION_TYPE,
+                second_plan,
+            )
         self.memory.mutate_content(first_parents[0].id, "bad precondition")
         controller, llm = _controller(self.memory, self.ledger)
 

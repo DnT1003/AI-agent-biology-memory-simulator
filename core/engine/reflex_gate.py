@@ -6,6 +6,8 @@ class ReflexGate:
     Hệ thống 1: Cổng phản xạ vô điều kiện/có điều kiện.
     Kích hoạt hành động tự động dựa trên áp lực sinh học mà không cần LLM.
     """
+    SLEEP_REFLEX_MIN_FATIGUE = 0.75
+
     def __init__(self, engine):
         self.engine = engine
 
@@ -20,8 +22,15 @@ class ReflexGate:
         """
         ego = self.engine.ego
         
-        # 1. Phản xạ Đi ngủ (Sleep Reflex)
-        p_sleep = self._sigmoid(ego.fatigue, threshold=0.9)
+        # 1. Phản xạ Đi ngủ (Sleep Reflex): chỉ khi thật sự mệt, không phải
+        # một xác suất nhỏ mỗi tin nhắn ở mọi mức mệt.
+        # Đo theo ngưỡng gục ngã của hôm nay, để phản xạ "chào rồi đi ngủ" luôn
+        # đến TRƯỚC lúc gục hẳn (interaction: fatigue >= fatigue_critical).
+        critical = min(1.0, max(0.1, float(getattr(ego, "fatigue_critical", 1.0))))
+        relative = ego.fatigue / critical
+        if relative < self.SLEEP_REFLEX_MIN_FATIGUE:
+            return {"triggered": False}
+        p_sleep = self._sigmoid(relative, k=15, threshold=0.9)
         if random.random() < p_sleep:
              return {
                  "triggered": True, 
@@ -29,16 +38,9 @@ class ReflexGate:
                  "reason": f"Kiệt sức tột độ (Fatigue: {ego.fatigue:.2f}), cơ thể tự ngắt kết nối."
              }
         
-        # 2. Phản xạ Tò mò (Curiosity / Search Reflex)
-        # Nếu tò mò cực cao và không mệt, có xác suất tự đi tìm thông tin
-        p_search = self._sigmoid(ego.curiosity, threshold=0.85) * (1.0 - ego.fatigue)
-        if random.random() < p_search * 0.1: # Giới hạn tỷ lệ tự kích hoạt
-             return {
-                 "triggered": True,
-                 "action": "search_novel|ngẫu nhiên",
-                 "reason": "Sự tò mò thôi thúc tôi phải tìm kiếm điều gì đó mới mẻ."
-             }
-             
+        # Tò mò được xử lý theo nhịp thời gian bởi AutonomousPacer (đọc sách),
+        # không phải phản xạ mỗi tin nhắn.
+
         # 3. Phản xạ Giao tiếp (Social / Intimacy Reflex)
         # Nếu quá cô đơn, Aura có thể chủ động hỏi thăm sâu hơn (tương lai)
 

@@ -1,6 +1,7 @@
 ﻿import os
 import json
 import tempfile
+import time
 import threading
 from contextlib import nullcontext
 
@@ -75,6 +76,23 @@ def atomic_read_json(file_path):
     with open(read_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
+def _replace_with_retry(source, destination, attempts=6):
+    """os.replace that rides out transient Windows sharing violations.
+
+    Antivirus/indexer services briefly open a file right after it is written;
+    replacing it during that window fails with "Access is denied" although
+    nothing in this process holds it. Back off a few milliseconds and retry.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == attempts - 1:
+                raise
+            time.sleep(0.005 * (2 ** attempt))
+
+
 def atomic_write_json(file_path, data):
     """Ghi file JSON một cách nguyên tử (atomic) để tránh file bị rỗng/lỗi khi crash."""
     # Validate the complete value before creating a directory or touching the
@@ -123,7 +141,7 @@ def atomic_write_json(file_path, data):
                 stream.write(serialized)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, io_target_path)
+            _replace_with_retry(temp_path, io_target_path)
             _fsync_directory(io_dirpath)
         finally:
             try:
@@ -172,7 +190,7 @@ def atomic_write_text(file_path, text):
                 stream.write(serialized)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, io_target_path)
+            _replace_with_retry(temp_path, io_target_path)
             _fsync_directory(io_dirpath)
         finally:
             try:

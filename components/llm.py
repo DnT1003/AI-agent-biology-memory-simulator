@@ -232,6 +232,37 @@ class LLM:
             or self._prompt_forces_local(prompt)
         )
 
+    def _openai_base_url(self) -> str:
+        base = self.settings.get("openai_base_url", "") or getattr(
+            Config, "OPENAI_BASE_URL", "https://api.openai.com/v1"
+        )
+        return str(base).strip().rstrip("/")
+
+    def _openai_is_local(self) -> bool:
+        from urllib.parse import urlparse
+
+        host = (urlparse(self._openai_base_url()).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    def _openai_api_key(self) -> str:
+        key = self.settings.get("openai_api_key", "")
+        # Ollama / LM Studio ignore the key but the header must be present.
+        return key or ("local" if self._openai_is_local() else "")
+
+    def _openai_post(self, headers: dict, payload: dict):
+        import requests
+
+        url = f"{self._openai_base_url()}/chat/completions"
+        if self._openai_is_local():
+            # Never route a localhost model server through a corporate proxy.
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.post(url, headers=headers, json=payload, timeout=300)
+        else:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        return response
+
     def _cloud_backend_is_configured(self) -> bool:
         """Return whether the selected cloud backend can be called safely."""
         provider = self._provider()
@@ -241,7 +272,7 @@ class LLM:
                 or self.settings.get("gemini_api_key", Config.API_KEY)
             )
         if provider == "openai":
-            return bool(self.settings.get("openai_api_key", ""))
+            return bool(self._openai_api_key())
         if provider == "anthropic":
             return bool(self.settings.get("anthropic_api_key", ""))
         return False
@@ -465,15 +496,20 @@ class LLM:
             return True
         return False
 
-    def _apply_cognitive_throttling(self, prompt: str, temperature: float = 0.7, max_output_tokens: Optional[int] = None) -> tuple:
-        """[Phase 24] Điều tiết động các tham số (Temp, Top_P, Tokens) dựa trên sinh lý."""
+    def _apply_cognitive_throttling(self, prompt: str, temperature: float = 0.7, max_output_tokens: Optional[int] = None, enabled: bool = True) -> tuple:
+        """[Phase 24] Điều tiết động các tham số (Temp, Top_P, Tokens) dựa trên sinh lý.
+
+        enabled=False dành cho các lệnh gọi phân tích/trích xuất có cấu trúc
+        (JSON, YES/NO, sinh code): sinh lý chỉ được làm biến dạng giọng nói
+        của Aura, không được làm hỏng dữ liệu mà hệ thống tự ghi vào bộ nhớ.
+        """
         params = {
             "temperature": temperature,
             "top_p": 1.0,
             "max_output_tokens": max_output_tokens
         }
         
-        if not self.ego:
+        if not self.ego or not enabled:
             return prompt, params
             
         fatigue = getattr(self.ego, 'fatigue', 0.0)
@@ -532,28 +568,21 @@ class LLM:
 
         if provider == "openai":
             import requests
-            api_key = self.settings.get("openai_api_key", "")
+            api_key = self._openai_api_key()
             if not api_key:
                 raise LLMConfigurationError("Thiếu OPENAI API key.")
-            model = model_override or self.settings.get("openai_model", "gpt-4o-mini")
+            model = model_override or self.settings.get("openai_model", Config.OPENAI_MODEL)
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": model,
-                "messages": [{"role": "system", "content": "You are a helpful assistant. Please output ONLY valid JSON without any markdown formatting or comments."}, {"role": "user", "content": prompt}],
+                "messages": [{"role": "system", "content": "Follow the user message exactly. Output ONLY one valid JSON object, without markdown or comments."}, {"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "top_p": top_p,
                 "response_format": { "type": "json_object" }
             }
             if max_output_tokens: payload["max_tokens"] = max_output_tokens
             def request_openai_json():
-                response = requests.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                )
-                response.raise_for_status()
-                return response
+                return self._openai_post(headers, payload)
 
             response = self._cloud_transport("OpenAI", request_openai_json)
             try:
@@ -642,9 +671,9 @@ class LLM:
         return self._parse_cloud_json_object(text, "Gemini"), 0.0
 
     @_observe_inference("json", model_index=2, force_local_index=4)
-    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str | None = None, max_output_tokens: int | None = None, force_local: bool = False, image_path: str | None = None, aura_state: dict | None = None) -> tuple:
+    def generate_json(self, prompt: str, temperature: float = 0.1, model_override: str | None = None, max_output_tokens: int | None = None, force_local: bool = False, image_path: str | None = None, aura_state: dict | None = None, bio_throttle: bool = True) -> tuple:
         routing_prompt = prompt
-        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
+        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens, enabled=bio_throttle)
         use_local = self._use_local_for_request(
             routing_prompt, model_override, force_local=force_local
         )
@@ -717,27 +746,20 @@ class LLM:
 
         if provider == "openai":
             import requests
-            api_key = self.settings.get("openai_api_key", "")
+            api_key = self._openai_api_key()
             if not api_key:
                 raise LLMConfigurationError("Thiếu OpenAI API key.")
-            model = model_override or self.settings.get("openai_model", "gpt-4o-mini")
+            model = model_override or self.settings.get("openai_model", Config.OPENAI_MODEL)
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": model,
-                "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": prompt}],
+                "messages": [{"role": "system", "content": "Follow the user message exactly."}, {"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "top_p": top_p,
             }
             if max_output_tokens: payload["max_tokens"] = max_output_tokens
             def request_openai_text():
-                response = requests.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                )
-                response.raise_for_status()
-                return response
+                return self._openai_post(headers, payload)
 
             response = self._cloud_transport("OpenAI", request_openai_text)
             try:
@@ -825,9 +847,9 @@ class LLM:
         return self._require_cloud_text(text, "Gemini"), 0.0
 
     @_observe_inference("text", model_index=2, force_local_index=6)
-    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str | None = None, max_output_tokens: int | None = None, image_path: str | None = None, aura_state: dict | None = None, force_local: bool = False) -> tuple:
+    def generate_text(self, prompt: str, temperature: float = 0.7, model_override: str | None = None, max_output_tokens: int | None = None, image_path: str | None = None, aura_state: dict | None = None, force_local: bool = False, bio_throttle: bool = True) -> tuple:
         routing_prompt = prompt
-        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens)
+        prompt, p = self._apply_cognitive_throttling(prompt, temperature, max_output_tokens, enabled=bio_throttle)
         use_local = self._use_local_for_request(
             routing_prompt, model_override, force_local=force_local
         )

@@ -5,6 +5,9 @@ import time
 from datetime import datetime
 from colorama import Fore, Style
 from core.prompts import get_perceive_prompt
+from core.message_bubbles import flatten_bubbles
+from core.temporal import describe_now, fuzzy_age
+from core.style_filter import humanize
 from core.tools import execute_tool
 
 
@@ -44,6 +47,12 @@ class InteractionController:
 
             raise InteractionCancelled(str(request_id or "direct"), phase)
 
+    # Bounded world-graph context per prompt.
+    MAX_GRAPH_ENTITIES = 5
+    MAX_FACTS_PER_ENTITY = 3
+    MAX_GRAPH_FACTS = 10
+    MAX_SOCIAL_BIAS_LINES = 3
+
     @staticmethod
     def _run_postcommit_phase(phase: str, callback) -> bool:
         """Run best-effort enrichment without invalidating a primary reply."""
@@ -67,6 +76,85 @@ class InteractionController:
                 # rewrite a response that has already committed.
                 pass
             return False
+
+    # Function words that never make a phrase characteristic of the user.
+    _MIMICRY_STOP_WORDS = frozenset({
+        "của", "và", "các", "có", "để", "cho", "với", "không", "một", "những",
+        "thì", "đang", "là", "rằng", "đã", "được", "này", "kia", "đó", "ở",
+        "mà", "nhưng", "nên", "vì", "khi", "lại", "cũng", "rồi", "sẽ", "bị",
+        "tôi", "tớ", "mình", "bạn", "anh", "em", "chị", "nó", "họ", "aura",
+        "the", "and", "you", "for", "that", "this", "with",
+    })
+
+    @classmethod
+    def _mimicry_phrases(cls, text: str) -> list[str]:
+        """Phrases worth echoing back: Vietnamese words are mostly two
+        syllables ("buồn cười", "rảnh rỗi"), so single syllables are noise.
+        Adjacent syllable pairs without function words are kept, plus
+        standalone Latin-script slang/loanwords ("chill", "okela")."""
+        tokens = re.findall(r"[^\W\d_]+", text.lower())
+        phrases = []
+        for first, second in zip(tokens, tokens[1:]):
+            if first in cls._MIMICRY_STOP_WORDS or second in cls._MIMICRY_STOP_WORDS:
+                continue
+            phrases.append(f"{first} {second}")
+        for token in tokens:
+            if len(token) >= 4 and token.isascii() and token not in cls._MIMICRY_STOP_WORDS:
+                phrases.append(token)
+        return phrases
+
+    BOREDOM_PROMPT_LEVEL = 0.6
+    # A new message is stimulation; the same topic again within this many
+    # seconds is not (unless it is emotional - venting is never boring).
+    BOREDOM_REPEAT_SECONDS = 10 * 60
+
+    def _update_relationship(self, user_input, local_result, sensory_vector) -> None:
+        if getattr(self.engine.ego, "is_stranger", False):
+            return
+        from core import relationship
+
+        valence = (local_result or {}).get("valence") if isinstance(local_result, dict) else None
+        if not isinstance(valence, (int, float)) or isinstance(valence, bool):
+            valence = (sensory_vector or {}).get("valence", 0.0) or 0.0
+        event = relationship.update_friction(self.engine.ego, user_input, float(valence))
+        if event:
+            print(f"{Fore.LIGHTMAGENTA_EX}💞 [RELATIONSHIP]: {event} "
+                  f"(friction={self.engine.ego.relational_friction:.2f}){Style.RESET_ALL}")
+        jokes = getattr(self.engine, "inside_jokes", None)
+        if jokes is not None:
+            jokes.remember(user_input, float(valence), time.time())
+
+    def _update_boredom(self, recalled, sensory_vector) -> None:
+        ego = self.engine.ego
+        boredom = float(getattr(ego, "boredom", 0.0) or 0.0)
+        now = time.time()
+        top = recalled[0] if recalled else None
+        repeated = (
+            top is not None
+            and now - float(getattr(top, "last_recalled", 0.0) or 0.0) < self.BOREDOM_REPEAT_SECONDS
+            and abs(float((sensory_vector or {}).get("valence", 0.0) or 0.0)) < 0.5
+        )
+        boredom = min(1.0, boredom + 0.1) if repeated else boredom * 0.5
+        ego.boredom = boredom  # single float store
+
+    @staticmethod
+    def _input_arousal(sensory_vector, local_result) -> float:
+        """Arousal of the current message from signals already computed.
+
+        The sensory preprocessor reads intensity (caps, "!", |valence|); the
+        sentiment model's arousal is trusted only when its valence is clear,
+        since its neutral/default arousal says nothing about this message.
+        """
+        def _number(value):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return 0.0
+            value = float(value)
+            return value if math.isfinite(value) else 0.0
+
+        arousal = _number((sensory_vector or {}).get("arousal", 0.0))
+        if isinstance(local_result, dict) and abs(_number(local_result.get("valence"))) >= 0.4:
+            arousal = max(arousal, _number(local_result.get("arousal")))
+        return max(0.0, min(1.0, arousal))
 
     def _plan_input_ego_updates(
         self,
@@ -108,10 +196,14 @@ class InteractionController:
         integrity = baseline["integrity"]
         identity_crisis = baseline["is_identity_crisis"]
 
-        stress_impact = (
+        # Arousal includes |valence|, so only non-positive input converts it
+        # into stress: an affectionate or excited message must not stress Aura.
+        arousal_stress = (
             sensory_vector.get("arousal", 0.0) * 0.2
-            + sensory_vector.get("urgency", 0.0) * 0.3
+            if sensory_vector.get("valence", 0.0) <= 0.0
+            else 0.0
         )
+        stress_impact = arousal_stress + sensory_vector.get("urgency", 0.0) * 0.3
         stress = min(1.0, stress + stress_impact)
         empathy_applied = False
         if local_result:
@@ -123,16 +215,10 @@ class InteractionController:
             if local_result.get("arousal", 0.0) > 0.7:
                 stress = min(1.0, stress + 0.05)
 
-        words = re.findall(r"\b\w{3,}\b", user_input.lower())
-        stop_words = {
-            "của", "và", "các", "có", "để", "cho", "với", "không",
-            "một", "những", "thì", "đang", "là", "rằng", "đã", "được",
-        }
-        for word in words:
-            if word not in stop_words:
-                vocabulary.append(word)
-                if len(vocabulary) > 100:
-                    vocabulary.pop(0)
+        for phrase in self._mimicry_phrases(user_input):
+            vocabulary.append(phrase)
+            if len(vocabulary) > 100:
+                vocabulary.pop(0)
 
         healing_applied = bool(
             identity_crisis
@@ -210,6 +296,43 @@ class InteractionController:
         for field, value in updates.items():
             setattr(ego_view, field, value)
         return ego_view
+
+    def _remember_brief_exchange(self, user_input, reply, *, model_override, force_local):
+        """Short replies (goodnight, collapse, silent despair) still hear the
+        owner: the exchange enters short-term memory and the extraction that
+        remembers events and promises ("mai anh thi") still runs."""
+        def _commit():
+            with self.engine.stm_lock:
+                self.engine.short_term_buffer.append(f"User: {user_input}")
+                self.engine.short_term_buffer.append(f"Aura: {reply}")
+                if len(self.engine.short_term_buffer) > 16:
+                    self.engine.short_term_buffer = self.engine.short_term_buffer[-16:]
+            self.engine.memory_ops.save_short_term_memory()
+
+        self._run_postcommit_phase("brief_short_term_memory", _commit)
+        if getattr(self.engine, "prospective", None) is None:
+            return
+        from core.engine.enrichment import run_enrichment
+
+        self._run_postcommit_phase(
+            "brief_enrichment",
+            lambda: run_enrichment(
+                self.engine, user_input, reply, time.time(),
+                model_override=model_override, force_local=force_local,
+            ),
+        )
+
+    def _go_to_sleep(self):
+        """Fall asleep from a conversation (goodnight or exhaustion)."""
+        from core.engine import sleep_cycle
+
+        now = time.time()
+        return sleep_cycle.begin_sleep(
+            self.engine.ego,
+            now,
+            nap=not sleep_cycle.is_bedtime(now),
+            run_maintenance=self._run_sleep_maintenance,
+        )
 
     def _run_sleep_maintenance(self):
         """Enter the explicit maintenance capability for an in-band sleep."""
@@ -349,7 +472,8 @@ class InteractionController:
         ego_overrides: dict | None = None,
         request_id: str | None = None,
     ) -> dict:
-        current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
+        now_ts = time.time()
+        current_time = describe_now(now_ts)
         import random
         prompt_ego = self._prompt_ego_view(ego_overrides or {})
         self._raise_if_cancelled(
@@ -421,6 +545,17 @@ class InteractionController:
         # Phase 8 Idea 3.2: Truy xuất Nghịch lý (Conflicting Recall)
         valences = [getattr(m, 'valence', 0.0) for m in recalled_mems]
         has_conflict = any(v < -0.3 for v in valences) and any(v > 0.3 for v in valences)
+        user_valence = (local_perception_result or {}).get("valence", 0.0) if isinstance(
+            local_perception_result, dict
+        ) else 0.0
+        recalled_mean = sum(valences) / len(valences) if valences else 0.0
+        # Bittersweet: a happy message that brings back a sad memory (or the reverse).
+        is_ambivalent = (
+            isinstance(user_valence, (int, float))
+            and abs(user_valence) >= 0.4
+            and abs(recalled_mean) >= 0.4
+            and (user_valence > 0) != (recalled_mean > 0)
+        )
         if has_conflict:
             print(f"{Fore.LIGHTMAGENTA_EX}🎭 [COGNITIVE DISSONANCE]: Ký ức mâu thuẫn cảm xúc được gọi lên cùng lúc.{Style.RESET_ALL}")
         
@@ -431,45 +566,44 @@ class InteractionController:
         if is_foggy and recalled_mems:
             print(f"{Fore.LIGHTBLACK_EX}🌫️ [BRAIN FOG]: Trí nhớ tạm thời bị sương mù che phủ do kiệt sức...{Style.RESET_ALL}")
             
-        # [Phase 21] World Graph Retrieval
-        import re
-        entities = set(re.findall(r'\b[A-ZÀ-Ỹ][a-zà-ỹ]*\b', user_input))
+        # [Phase 21] World Graph Retrieval: chỉ những thực thể ĐÃ BIẾT xuất hiện
+        # nguyên vẹn trong câu (không đoán theo chữ hoa đầu câu hay chuỗi con),
+        # và số fact đưa vào prompt có giới hạn.
+        world_graph = self.engine.world_graph
+        find_mentions = getattr(world_graph, "find_mentions", None)
+        entities = (
+            find_mentions(user_input, limit=self.MAX_GRAPH_ENTITIES)
+            if callable(find_mentions)
+            else []
+        )
         graph_facts = []
         for entity in entities:
-             if entity.lower() not in ["tôi", "em", "anh", "chị", "bạn", "của"]:
-                 facts = self.engine.world_graph.query(entity)
-                 graph_facts.extend(facts)
-        
-        user_facts = self.engine.world_graph.query("User")
+            graph_facts.extend(world_graph.query(entity, limit=self.MAX_FACTS_PER_ENTITY))
+
+        user_facts = world_graph.query("User")
         if user_facts:
             graph_facts.extend(random.sample(list(user_facts), min(3, len(user_facts))))
-            
-        graph_facts = list(set(graph_facts))
 
-        # [Phase 5] AttitudeEngine: Tính toán thái độ xã hội (Social Bias)
+        graph_facts = list(dict.fromkeys(graph_facts))[:self.MAX_GRAPH_FACTS]
+
+        # [Phase 5] AttitudeEngine: một dòng thái độ cho mỗi thực thể được nhắc
+        # tới, theo cảm xúc trung bình của các quan hệ với thực thể đó.
         social_bias_lines = []
-        for fact_str in graph_facts:
-            # Trích xuất valence: "... [valence:+0.5]"
-            v_match = re.search(r'\[valence:([-+]?\d*\.?\d+)\]', fact_str)
-            if v_match:
-                val = float(v_match.group(1))
-                # Lấy thực thể: tất cả văn bản trước từ khóa quan hệ hoặc valence
-                # Một cách đơn giản: split valence ra và tìm thực thể trong đó
-                fact_body = fact_str.split(' [valence:', 1)[0]
-                # Tìm xem entity nào trong entities xuất hiện ở đầu fact_body
-                entity_name = "Đối tượng"
-                for ent in entities:
-                    if fact_body.startswith(ent):
-                        entity_name = ent
-                        break
+        relations_for = getattr(world_graph, "relations_for", None)
+        for entity in entities if callable(relations_for) else []:
+            relations = relations_for(entity, limit=self.MAX_FACTS_PER_ENTITY)
+            if not relations:
+                continue
+            val = sum(r.get("valence", 0.0) for r in relations) / len(relations)
+            if val < -0.4:
+                print(f"{Fore.RED}🛡️ [SOCIAL DANGER]: Aura cảm thấy dè chừng đối tượng: {entity}{Style.RESET_ALL}")
+                social_bias_lines.append(f"CẢNH GIÁC: Đối tượng '{entity}' là người bạn không tin tưởng hoặc có ấn tượng xấu. Hãy dùng giọng điệu đề phòng hoặc lạnh lùng khi nhắc tới họ.")
+            elif val > 0.4:
+                print(f"{Fore.GREEN}💖 [SOCIAL LIKING]: Aura có cảm tình đặc biệt với: {entity}{Style.RESET_ALL}")
+                social_bias_lines.append(f"YÊU THÍCH: Đối tượng '{entity}' là người bạn rất quý mến. Hãy tỏ ra hào hứng hoặc trìu mến khi nhắc tới họ.")
+            if len(social_bias_lines) >= self.MAX_SOCIAL_BIAS_LINES:
+                break
 
-                if val < -0.4:
-                    print(f"{Fore.RED}🛡️ [SOCIAL DANGER]: Aura cảm thấy dè chừng đối tượng: {entity_name}{Style.RESET_ALL}")
-                    social_bias_lines.append(f"CẢNH GIÁC: Đối tượng '{entity_name}' là người bạn không tin tưởng hoặc có ấn tượng xấu. Hãy dùng giọng điệu đề phòng hoặc lạnh lùng khi nhắc tới họ.")
-                elif val > 0.4:
-                    print(f"{Fore.GREEN}💖 [SOCIAL LIKING]: Aura có cảm tình đặc biệt với: {entity_name}{Style.RESET_ALL}")
-                    social_bias_lines.append(f"YÊU THÍCH: Đối tượng '{entity_name}' là người bạn rất quý mến. Hãy tỏ ra hào hứng hoặc trìu mến khi nhắc tới họ.")
-        
         if social_bias_lines:
             mood_modifier = (mood_modifier + "\n" + "\n".join(social_bias_lines)).strip()
 
@@ -493,15 +627,29 @@ class InteractionController:
             overlay_indicator = f" [{len(m.overlays)}♥]" if m.overlays else ""
             
             # Đánh dấu Intrusive Memory cho LLM hiểu
+            # Ký ức mang dấu thời gian mơ hồ như người ("hôm qua", "tuần trước").
+            when = fuzzy_age(getattr(m, "created_at", now_ts), now_ts)
+            is_faint = getattr(self.engine.memory_ops, "is_faint", None)
             if is_intrusive_active and m == recalled_mems[0]:
-                context_lines.append(f"- [KÝ ỨC XÂM NHẬP - ÁM ẢNH TỘT ĐỘ]: {content}")
+                context_lines.append(f"- [KÝ ỨC XÂM NHẬP - ÁM ẢNH TỘT ĐỘ | {when}]: {content}")
+            elif callable(is_faint) and is_faint(m):
+                gist = self.engine.memory_ops.faint_gist(content)
+                context_lines.append(
+                    f"- [NHỚ MANG MÁNG | {when}: chỉ còn nhớ ý chính và cảm giác, "
+                    f"quên tên và chi tiết cụ thể] {gist}"
+                )
             else:
-                context_lines.append(f"- [Strength:{m.strength:.2f}{overlay_indicator}] {content}")
+                context_lines.append(f"- [{when} | Strength:{m.strength:.2f}{overlay_indicator}] {content}")
             
             
         mem_context = "\n".join(context_lines)
         if is_confused:
             mem_context = "[CÁC KÝ ỨC BỊ LẪN LỘN — Aura không chắc chắn sự kiện nào xảy ra trước, sự kiện nào xảy ra sau, đang rất bối rối]\n" + mem_context
+        if is_ambivalent:
+            mem_context = (
+                "[CẢM XÚC LẪN LỘN]: Điều User vừa nói gợi lại những ký ức mang cảm xúc ngược lại. "
+                "Bạn thấy vừa vui vừa buồn (bittersweet); có thể nói ra sự lẫn lộn đó.\n" + mem_context
+            )
         if has_conflict:
             mem_context = "[CHÚ Ý TÂM LÝ: CÁC KÝ ỨC DƯỚI ĐÂY MÂU THUẪN NHAU (Ví dụ: chuyện rất vui và chuyện rất buồn cùng xuất hiện). Hãy thể hiện sự ngập ngừng, bối rối và tự hỏi tại sao cảm xúc của mình lại lộn xộn và mâu thuẫn thế này.]\n" + mem_context
             
@@ -524,13 +672,17 @@ class InteractionController:
         if reflex["triggered"] and not private_ephemeral:
             print(f"{Fore.MAGENTA}⚡ [REFLEX ACTIVATED]: {reflex['reason']}{Style.RESET_ALL}")
             if reflex["action"] == "sleep":
-                self._raise_if_cancelled(
-                    cancel_event,
-                    "cancelled before sleep reflex commit",
-                    request_id=request_id,
-                )
-                self._run_sleep_maintenance()
-                return {"response": "Em... em mệt quá... xin lỗi, em phải chợp mắt một lát...", "valence": -0.2, "arousal": -0.5}
+                # Trả lời người dùng trước (buồn ngủ, xin phép đi ngủ), rồi mới
+                # ngủ khi runtime rảnh — không bỏ lửng tin nhắn của họ.
+                mood_modifier = (
+                    mood_modifier
+                    + "\n[PHẢN XẠ NGỦ]: Bạn buồn ngủ không chịu nổi. Hãy trả lời ngắn "
+                    "câu của User rồi chúc ngủ ngon / xin phép đi ngủ."
+                ).strip()
+                autonomous = getattr(self.engine, "autonomous", None)
+                request_sleep = getattr(autonomous, "request_sleep", None)
+                if callable(request_sleep):
+                    request_sleep()
             # Thêm các reflex khác ở đây
 
         tools_instruction = (
@@ -653,6 +805,13 @@ class InteractionController:
             thought = result_json.get("thought", "")
             action = result_json.get("action")
             response = result_json.get("response", "")
+            # Nói như người nhắn tin, không như trợ lý (chỉ lời của LLM, không
+            # đụng tới kết quả tool bên dưới).
+            if isinstance(response, str) and response.strip():
+                response, style_fixes = humanize(response, user_input)
+                result["response"] = response
+                if style_fixes:
+                    print(f"{Fore.LIGHTBLACK_EX}✂️ [STYLE]: bỏ giọng trợ lý ({', '.join(sorted(style_fixes))}){Style.RESET_ALL}")
             action_committed = False
             
             if thought:
@@ -745,11 +904,14 @@ class InteractionController:
         # =============================================
         # SHORTCUT: PHÁT HIỆN URL DOCLN TRỰC TIẾP
         # =============================================
-        url_match = re.search(r'https?://docln\.net\S+', user_input)
+        url_match = re.search(
+            r'https?://(?:docln\.net|(?:www\.)?gutenberg\.org|[a-z]+\.wikisource\.org)/\S+',
+            user_input,
+        )
         if url_match and not force_local:
             # User paste URL trực tiếp → load ngay
             url = url_match.group(0)
-            print(f"\n{Fore.GREEN}📖 [DIRECT LINK]: Phát hiện URL Docln. Đang nạp sách...{Style.RESET_ALL}")
+            print(f"\n{Fore.GREEN}📖 [DIRECT LINK]: Phát hiện link sách. Đang nạp sách...{Style.RESET_ALL}")
             self._raise_if_cancelled(
                 cancel_event,
                 "cancelled before direct URL commit",
@@ -785,91 +947,17 @@ class InteractionController:
         # NOTE: Mọi yêu cầu tìm truyện ("đọc truyện X"), hay báo bận ("Tớ đi làm") 
         # giờ đây đều được LLM xử lý tự nhiên thông qua perceives_and_respond và Actions.
 
-        # [Phase 21] World Graph Extraction (NLP Engine Version)
-        def _extract_graph(model_ov=None, *, force_local_request=False):
-            # Sử dụng logic spaCy + LLM mới từ WorldGraph
-            self.engine.world_graph.update_from_text(
-                user_input,
-                self.engine.llm,
-                model_override=model_ov,
-                force_local=force_local_request,
-            )
-        # Run enrichment before the actor completes; detached mutation threads
-        # made request ordering nondeterministic.
-
-        # [Phase 5] Value System: phát hiện User đang thể hiện giá trị nào
-        def _extract_values(model_ov=None, *, force_local_request=False):
-            if not hasattr(self.engine, 'value_system'):
-                return
-            prompt = f"""Phân tích câu nói sau của người dùng để xem họ có đang thể hiện THÁI ĐỘ RÕ RÀNG (ủng hộ hoặc phản đối) đối với một giá trị đạo đức/quan điểm sống cụ thể không.
-Câu nói: "{user_input}"
-
-Nếu CÓ, trả về JSON array (tối đa 2 items):
-[
-    {{"value": "Tên giá trị ngắn gọn (vd: Sự Thành Thật, Bạo Lực, Lòng Tốt...)", "sentiment": <float từ -1.0 đến 1.0>}}
-]
-- sentiment 1.0 = User RẤT ĐỒNG TÌNH/ĐỀ CAO giá trị đó.
-- sentiment -1.0 = User RẤT PHẢN ĐỐI/GHÉT giá trị đó.
-Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm thông thường, chỉ thị kỹ thuật,...), trả về mảng rỗng: []"""
-            import json
-
-            res, _ = self.engine.llm.generate_text(
-                prompt,
-                temperature=0.1,
-                model_override=model_ov,
-                force_local=force_local_request,
-            )
-            res = res.strip()
-            if res.startswith("```json"):
-                res = res[7:]
-            if res.startswith("```"):
-                res = res[3:]
-            if res.endswith("```"):
-                res = res[:-3]
-            data = json.loads(res.strip())
-            if not isinstance(data, list) or len(data) > 2:
-                raise ValueError("value extraction must be an array of at most 2 items")
-
-            validated_values = []
-            for item in data:
-                if not isinstance(item, dict):
-                    raise ValueError("value extraction item must be an object")
-                raw_name = item.get("value")
-                sentiment = item.get("sentiment")
-                if not isinstance(raw_name, str):
-                    raise ValueError("value name must be a string")
-                value_name = raw_name.strip()
-                if not 1 <= len(value_name) <= 80:
-                    raise ValueError("value name length is invalid")
-                if (
-                    isinstance(sentiment, bool)
-                    or not isinstance(sentiment, (int, float))
-                    or not math.isfinite(float(sentiment))
-                    or not -1.0 <= float(sentiment) <= 1.0
-                ):
-                    raise ValueError("value sentiment is invalid")
-                validated_values.append((value_name, float(sentiment)))
-
-            # Validate the complete model payload with ValueSystem's
-            # authoritative rules before filtering low-signal observations.
-            # Otherwise a malformed low-signal second item could be dropped
-            # and allow the first item to persist as a partial batch.
-            from core.value_system import ValueSystem
-
-            validated_values = ValueSystem.validate_user_value_updates(
-                validated_values
-            )
-            material_updates = [
-                (value_name, sentiment)
-                for value_name, sentiment in validated_values
-                if abs(sentiment) >= 0.4
-            ]
-            if material_updates:
-                self.engine.value_system.update_user_values_batch(
-                    material_updates
-                )
         # Invocation is deferred until the primary response is complete so
         # enrichment does not delay the first LLM response path unnecessarily.
+
+        woken_by_message = False
+        if not private_ephemeral:
+            from core.engine import sleep_cycle
+
+            if sleep_cycle.is_asleep(self.engine.ego, time.time()):
+                sleep_cycle.wake_up(self.engine.ego, time.time(), forced=True)
+                woken_by_message = True
+                print(f"{Fore.LIGHTYELLOW_EX}😪 [WOKEN UP]: Tin nhắn đánh thức Aura dậy.{Style.RESET_ALL}")
 
         if not private_ephemeral and any(kw in user_input.lower() for kw in ['ngủ đi', 'cho aura ngủ', 'hãy đi ngủ', 'đi ngủ thôi', 'good night', 'ngủ ngon']):
             print(f"\n{Fore.GREEN}🤖 [AURA]: Ừm... *ngáp dài*... tớ gục đây...{Style.RESET_ALL}\n")
@@ -878,7 +966,11 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 "cancelled before requested sleep commit",
                 request_id=request_id,
             )
-            self._run_sleep_maintenance()
+            self._remember_brief_exchange(
+                user_input, "Ừm... *ngáp dài*... tớ gục đây...",
+                model_override=model_override, force_local=force_local,
+            )
+            self._go_to_sleep()
             return {
                 "response": "Ừm... *ngáp dài*... tớ gục đây...",
                 "valence": 0.0,
@@ -892,9 +984,14 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 "cancelled before fatigue sleep commit",
                 request_id=request_id,
             )
-            self._run_sleep_maintenance()
+            self._remember_brief_exchange(
+                user_input, "Em mệt rã rời rồi anh ơi... cho em đi nằm một lát nhé.",
+                model_override=model_override, force_local=force_local,
+            )
+            self._go_to_sleep()
             return {
-                "response": "Aura đã hoàn toàn kiệt sức và phải nghỉ ngơi.",
+                "response": "Em mệt rã rời rồi anh ơi... cho em đi nằm một lát nhé.",
+                "collapsed": True,
                 "valence": -0.2,
                 "arousal": -0.8,
             }
@@ -920,6 +1017,10 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 request_id=request_id,
             )
             print(f"{Fore.GREEN}🤖 [AURA]: ... (Im lặng, mắt nhìn xa xăm){Style.RESET_ALL}\n")
+            self._remember_brief_exchange(
+                user_input, "... (Im lặng, mắt nhìn xa xăm)",
+                model_override=model_override, force_local=force_local,
+            )
             return {
                 "response": "... (Im lặng, mắt nhìn xa xăm)",
                 "valence": -0.8,
@@ -929,13 +1030,8 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         # Recall may reconsolidate memory, so it remains on the single actor
         # thread. The previous executor timeout was misleading: leaving its
         # context manager still waited for every worker to finish.
-        sensory_evaluation = self.sensory_preprocessor.evaluate_input(user_input)
-        self._raise_if_cancelled(
-            cancel_event,
-            "cancelled after sensory evaluation",
-            request_id=request_id,
-        )
-
+        # Local perception runs first: its sentiment model supplies the
+        # valence the sensory preprocessor no longer estimates itself.
         try:
             local_perception = getattr(self.engine, "local_perception", None)
             local_res = (
@@ -951,6 +1047,16 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         self._raise_if_cancelled(
             cancel_event,
             "cancelled after local perception",
+            request_id=request_id,
+        )
+
+        sensory_evaluation = self.sensory_preprocessor.evaluate_input(
+            user_input,
+            {"valence": local_res.get("valence", 0.0)} if isinstance(local_res, dict) else None,
+        )
+        self._raise_if_cancelled(
+            cancel_event,
+            "cancelled after sensory evaluation",
             request_id=request_id,
         )
         recall_plan = self.engine.memory_ops.build_recall_plan(
@@ -1014,29 +1120,76 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         if prompt_ego.fatigue > 0.7:
              mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT MỆT MỎI (Fatigue > 0.7). Chỉ được dùng CÂU CỰC KỲ NGẮN, lười biếng, thiếu mạch lạc. Không được phân tích logic cầu kỳ. Dùng cảm tính để trả lời.")
              
-        # Tính toán Arousal dựa trên input hiện tại thay vì self.engine.ego.arousal (SelfModel ko lưu arousal)
-        self._raise_if_cancelled(
-            cancel_event,
-            "cancelled before arousal analysis",
-            request_id=request_id,
-        )
-        arousal_text, _ = self.engine.llm.generate_text(
-            f"Câu này có tính CHẤN ĐỘNG (arousal) cao không (0.0 đến 1.0)?\nUser: '{user_input}'", 
-            temperature=0.1,
-            model_override=model_override,
-            force_local=force_local,
-        )
-        self._raise_if_cancelled(
-            cancel_event,
-            "cancelled after arousal analysis",
-            request_id=request_id,
-        )
-        user_arousal_score = float(re.findall(r"[-+]?(?:\d*\.*\d+)", arousal_text.strip() + "0")[0])
-        user_arousal_score = max(0.0, min(1.0, user_arousal_score))
+        # Arousal của câu vừa nhận đã có sẵn từ perception (không gọi LLM thêm).
+        user_arousal_score = self._input_arousal(sensory_vector, local_res)
         
         if user_arousal_score > 0.6 or abs(prompt_ego.mood) > 0.6 or prompt_ego.stress > 0.6:
             mood_modifier_lines.append("[PHONG CÁCH] BẠN ĐANG RẤT KÍCH ĐỘNG/HỒI HỘP. Hãy chia nhỏ câu trả lời của bạn ra thành nhiều dòng tin nhắn rời rạc liên tiếp nhau bằng cách CHÈN MÃ `[SEND]` GIỮA CÁC ĐOẠN NGẮN thay vì viết một khối văn bản dài. Đừng viết dài ngữ pháp chuẩn.")
         
+        # Từ lần cuối nói chuyện tới giờ, Aura thật sự đã làm gì.
+        if not private_ephemeral and not getattr(self.engine.ego, "is_stranger", False):
+            from core.engine.life_log import recap_prompt
+
+            recap = recap_prompt(
+                self.engine,
+                getattr(self.engine.ego, "_last_user_contact_at", None),
+                time.time(),
+            )
+            if recap:
+                mood_modifier_lines.append(recap)
+        if not private_ephemeral:
+            from core.engine.life_log import late_reply_prompt
+
+            late = late_reply_prompt(self.engine, request_id, time.time())
+            if late:
+                mood_modifier_lines.append(late)
+        if not private_ephemeral and not getattr(self.engine.ego, "is_stranger", False):
+            from core.engine.life_log import activity_prompt
+
+            activity = activity_prompt(self.engine, time.time())
+            if activity:
+                mood_modifier_lines.append(activity)
+            if getattr(self.engine.ego, "boredom", 0.0) >= self.BOREDOM_PROMPT_LEVEL:
+                mood_modifier_lines.append(
+                    "[HƠI CHÁN]: Lâu rồi không có gì mới nên bạn thấy hơi chán. Nếu hợp, "
+                    "hãy gợi một chuyện mới hoặc trêu nhẹ User; đừng cáu kỉnh với User."
+                )
+        # Quan hệ: khúc mắc, quyền từ chối, ngượng, trò đùa riêng.
+        if not private_ephemeral and not getattr(self.engine.ego, "is_stranger", False):
+            from core import relationship
+
+            now_rel = time.time()
+            for line in (
+                relationship.friction_prompt(self.engine.ego),
+                relationship.refusal_prompt(
+                    self.engine.ego, float(sensory_vector.get("urgency", 0.0) or 0.0)
+                ),
+                relationship.embarrassment_prompt(self.engine.ego, user_input, now_rel),
+            ):
+                if line:
+                    mood_modifier_lines.append(line)
+            jokes = getattr(self.engine, "inside_jokes", None)
+            joke = jokes.pick(self.engine.ego, now_rel) if jokes is not None else None
+            if joke is not None:
+                mood_modifier_lines.append(relationship.joke_prompt(joke, now_rel))
+        # Chuyện còn dang dở: sự kiện của User, lời hứa của chính Aura.
+        prospective = getattr(self.engine, "prospective", None)
+        if (
+            prospective is not None
+            and not private_ephemeral
+            and not getattr(self.engine.ego, "is_stranger", False)
+        ):
+            open_lines = prospective.context_lines(time.time())
+            if open_lines:
+                mood_modifier_lines.append(
+                    "[CHUYỆN CÒN DANG DỞ] (nhắc tới nếu hợp ngữ cảnh, như người quan tâm thật):\n"
+                    + "\n".join(open_lines)
+                )
+        if woken_by_message:
+            mood_modifier_lines.append(
+                "[VỪA BỊ ĐÁNH THỨC]: Bạn đang ngủ say thì tin nhắn này đánh thức bạn dậy. "
+                "Bạn còn ngái ngủ, trả lời ngắn, hơi lơ mơ; có thể nói là mình vừa ngủ dậy."
+            )
         mood_modifier = "\n".join(mood_modifier_lines)
 
         # [Phase 23] Tầng Phân Lớp Mệt mỏi & Trầm cảm đã được Perception/LLM handle qua Throttling và Sensory Summary.
@@ -1068,10 +1221,20 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
         elif prompt_ego.stress >= prompt_ego.stress_severe:
             mood_modifier += "\n[TÂM LÝ]: Lo âu nặng, bồn chồn, rất nhạy cảm, dễ giật mình và sợ hãi dè chừng."
         
-        # --- Kẻ xen ngang / Phân tâm (Rare Intrusive Thoughts - Idea 7) ---
-        if random.random() < 0.05:  # 5% cơ hội bị phân tâm ngẫu nhiên không rõ lý do
-            mood_modifier += "\n[ADHD/INTRUSIVE THOUGHTS]: Đột nhiên bạn bị mất tập trung và có suy nghĩ chen ngang (Intrusive thoughts). Đang nói chuyện bỗng nhiên nhắc đến một thứ hoàn toàn không liên quan đến chủ đề hiện tại (ví dụ: bỗng nhiên thèm ăn món gì đó, nhớ lại một chuyện xấu hổ kỳ quặc, tò mò về một thứ vớ vẩn)."
-            print(f"{Fore.LIGHTMAGENTA_EX}🌀 [INTRUSIVE THOUGHT]: Một suy nghĩ nhảm nhí vừa xẹt qua đầu Aura...{Style.RESET_ALL}")
+        # --- Suy nghĩ còn vương vấn (thay cho xúc xắc "ADHD" 5% mỗi tin) ---
+        # Nội dung luôn là thứ có thật: ký ức vừa miên man nghĩ tới hoặc
+        # chương sách vừa đọc. Xác suất buột miệng giảm dần theo thời gian.
+        if not private_ephemeral and not getattr(self.engine.ego, "is_stranger", False):
+            from core.engine.lingering_thought import lingering_thought_of
+
+            lingering = lingering_thought_of(self.engine).maybe_surface(time.time())
+            if lingering:
+                mood_modifier += (
+                    "\n[SUY NGHĨ CÒN VƯƠNG VẤN]: Trước khi User nhắn, bạn đang miên man nghĩ về: "
+                    f"\"{lingering}\". Nếu thấy tự nhiên, bạn có thể buột miệng nhắc tới nó "
+                    "một chút (kiểu \"à mà nãy em đang nghĩ...\"), nhưng không được bỏ qua lời User."
+                )
+                print(f"{Fore.LIGHTMAGENTA_EX}🌀 [LINGERING THOUGHT]: Aura vẫn còn vương vấn một suy nghĩ...{Style.RESET_ALL}")
 
         # --- Phân tầng Bản Ngã ---
         identity_crisis_at_input = ego_update_metadata.get("baseline", {}).get(
@@ -1096,7 +1259,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             request_id=request_id,
         )
         if final_result and final_result.get("response"):
-            reply_text = final_result['response']
+            reply_text = flatten_bubbles(final_result['response'])
             self._run_postcommit_phase(
                 "response_console",
                 lambda: print(
@@ -1118,6 +1281,20 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 "response_ego",
                 lambda: self.engine.ego.update_state(final_result),
             )
+            register_user_contact = getattr(
+                self.engine.ego, "register_user_contact", None
+            )
+            if callable(register_user_contact):
+                # Dopamine: a warm message (and a return after absence) is a
+                # reward; its effect depends on how much Aura expected it.
+                self._run_postcommit_phase(
+                    "dopamine",
+                    lambda: register_user_contact(
+                        local_res.get("valence", 0.0)
+                        if isinstance(local_res, dict)
+                        else 0.0
+                    ),
+                )
             self._run_postcommit_phase(
                 "recall_effects",
                 lambda: self.engine.memory_ops.apply_recall_effects(recall_plan),
@@ -1133,7 +1310,7 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
                 with self.engine.stm_lock:
                     self.engine.short_term_buffer.append(f"User: {user_input}")
                     self.engine.short_term_buffer.append(
-                        f"Aura: {final_result.get('response', '...')}"
+                        f"Aura: {flatten_bubbles(final_result.get('response', '...'))}"
                     )
                     if len(self.engine.short_term_buffer) > 16:
                         self.engine.short_term_buffer = (
@@ -1152,18 +1329,34 @@ Nếu câu nói KHÔNG chứa thái độ đạo đức rõ ràng (hỏi thăm t
             and final_result
         ):
             self._run_postcommit_phase(
-                "world_graph",
-                lambda: _extract_graph(
-                    model_override, force_local_request=force_local
-                ),
+                "boredom", lambda: self._update_boredom(recalled, sensory_vector)
             )
-            if not self._is_cancelled(cancel_event):
+            self._run_postcommit_phase(
+                "relationship", lambda: self._update_relationship(user_input, local_res, sensory_vector)
+            )
+            if prospective is not None:
+                # What Aura just brought up herself counts as followed up.
                 self._run_postcommit_phase(
-                    "value_extraction",
-                    lambda: _extract_values(
-                        model_override, force_local_request=force_local
+                    "prospective_followed",
+                    lambda: prospective.mark_mentioned(
+                        flatten_bubbles(final_result.get("response", "")), time.time()
                     ),
                 )
+            # One extraction call feeds the world graph, values and
+            # prospective memory (core/engine/enrichment.py).
+            from core.engine.enrichment import run_enrichment
+
+            self._run_postcommit_phase(
+                "enrichment",
+                lambda: run_enrichment(
+                    self.engine,
+                    user_input,
+                    flatten_bubbles(final_result.get("response", "")),
+                    time.time(),
+                    model_override=model_override,
+                    force_local=force_local,
+                ),
+            )
         
         if not private_ephemeral:
             # Phase 7 Idea 1: Áp dụng nhịp sinh học sau mỗi interaction

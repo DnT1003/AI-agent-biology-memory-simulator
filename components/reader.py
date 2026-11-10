@@ -277,151 +277,267 @@ class DoclnReader:
 
 
 class BackgroundReader:
-    def __init__(self, llm_instance):
+    """Đọc sách THẬT một cách tuần tự và nhớ tiến độ, giống người đọc.
+
+    Không bao giờ để LLM tự bịa nội dung: nếu không lấy được sách thật,
+    phiên đọc trả về ``(None, None)`` và bị bỏ qua.
+    """
+
+    _PROGRESS_VERSION = 1
+    _MAX_FINISHED = 200
+
+    def __init__(self, llm_instance=None, *, sources=None, progress_path=None, segment_chars=None):
         import threading
-        self.docln = DoclnReader()
-        self.llm = llm_instance
-        self.current_novel_url = None
-        self.current_novel_title = None
-        self.chapters_queue = []
-        self.current_chapter_chunks = []
-        self.current_chapter_title = ""
-        self.simulated_chapter = 1
+        from config import Config
+        from components.book_sources import build_sources
+
+        self.llm = llm_instance  # kept for constructor compatibility; never used to write books
+        self.sources = list(sources) if sources is not None else build_sources(Config)
+        self.progress_path = progress_path or Config.READER_PROGRESS_FILE
+        self.segment_chars = max(500, int(segment_chars or Config.READER_SEGMENT_CHARS))
         self.lock = threading.Lock()
+        self.current_book = None
+        self.chapters = []
+        self.chapter_index = 0
+        self.segments = []
+        self.segment_index = 0
+        self._loaded_chapter = None
+        self._fresh_book = False
+        self.finished_books = []
+        self.last_material_new_book = False
+        self._load_progress()
 
+    # ------------------------------------------------------------ lifecycle
     def stop(self):
-        """Hook called during engine.shutdown() to clean up browser."""
-        self.docln.close()
+        """Hook called during engine.shutdown() to release source resources."""
+        for source in self.sources:
+            close = getattr(source, "close", None)
+            if callable(close):
+                close()
 
-    def _pick_new_novel(self):
-        logger.info("[BackgroundReader] Đang kiếm bộ tiểu thuyết mới để cày...")
-        url = self.docln.get_random_novel_url()
-        if url:
-            title, chapters = self.docln.get_novel_chapters(url)
-            if chapters:
-                with self.lock:
-                    self.current_novel_url = url
-                    self.current_novel_title = title
-                    self.chapters_queue = chapters
-                logger.info(f"[BackgroundReader] Đã bốc đại bộ: '{title}'. ({len(chapters)} chương)")
-                return True
-        return False
+    def _source(self, name):
+        return next((s for s in self.sources if s.name == name), None)
 
-    def set_novel_by_url(self, novel_url: str) -> bool:
+    # ------------------------------------------------------------- progress
+    def _load_progress(self):
+        import json
+        import os
+        from components.book_sources import BookRef
+
         try:
-            title, chapters = self.docln.get_novel_chapters(novel_url)
-            if chapters:
-                with self.lock:
-                    self.current_novel_url = novel_url
-                    self.current_novel_title = title
-                    self.chapters_queue = chapters
-                logger.info(f"[BackgroundReader] ✅ Đã nạp: '{title}' ({len(chapters)} chương).")
+            if not os.path.exists(self.progress_path):
+                return
+            with open(self.progress_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            finished = data.get("finished", [])
+            if isinstance(finished, list):
+                self.finished_books = [k for k in finished if isinstance(k, str)][-self._MAX_FINISHED:]
+            source, book_id, title = data.get("source"), data.get("book_id"), data.get("title")
+            chapter_index, segment_index = data.get("chapter_index"), data.get("segment_index")
+            if (
+                all(isinstance(v, str) and v for v in (source, book_id, title))
+                and self._source(source) is not None
+                and type(chapter_index) is int and chapter_index >= 0
+                and type(segment_index) is int and segment_index >= 0
+            ):
+                self.current_book = BookRef(source, book_id, title)
+                self.chapter_index = chapter_index
+                self.segment_index = segment_index
+        except Exception as exc:
+            logger.warning("[BackgroundReader] progress load failed cause_type=%s", type(exc).__name__)
+
+    def _save_progress(self):
+        from core.utils import atomic_write_json
+
+        with self.lock:
+            book = self.current_book
+            payload = {
+                "version": self._PROGRESS_VERSION,
+                "finished": list(self.finished_books),
+                "chapter_index": self.chapter_index,
+                "segment_index": self.segment_index,
+            }
+            if book is not None:
+                payload.update(source=book.source, book_id=book.book_id, title=book.title)
+        try:
+            atomic_write_json(self.progress_path, payload)
+        except Exception as exc:
+            logger.warning("[BackgroundReader] progress save failed cause_type=%s", type(exc).__name__)
+
+    # ------------------------------------------------------------ selection
+    @staticmethod
+    def _book_key(book):
+        return f"{book.source}:{book.book_id}"
+
+    def _select_book(self, book) -> bool:
+        source = self._source(book.source)
+        chapters = source.chapters(book) if source is not None else []
+        if not chapters:
+            return False
+        with self.lock:
+            self.current_book = book
+            self.chapters = chapters
+            self.chapter_index = 0
+            self.segment_index = 0
+            self.segments = []
+            self._loaded_chapter = None
+            self._fresh_book = True
+        self._save_progress()
+        logger.info(f"[BackgroundReader] Đã chọn sách '{book.title}' ({book.source}, {len(chapters)} phần).")
+        return True
+
+    def _pick_new_book(self) -> bool:
+        with self.lock:
+            finished = set(self.finished_books)
+        for source in self.sources:
+            exclude = {k.split(":", 1)[1] for k in finished if k.startswith(f"{source.name}:")}
+            try:
+                book = source.random_book(exclude=frozenset(exclude))
+            except Exception as exc:
+                logger.warning("[BackgroundReader] random_book failed cause_type=%s", type(exc).__name__)
+                continue
+            if book is not None and self._select_book(book):
                 return True
-        except Exception as e:
-            logger.error(f"[BackgroundReader] Lỗi khi nạp sách theo URL: {e}")
         return False
 
+    def _split_segments(self, text: str) -> list:
+        segments, current = [], ""
+        for para in text.split("\n\n"):
+            para = para.strip()
+            if not para:
+                continue
+            while len(para) > self.segment_chars:  # very long paragraph
+                head, para = para[:self.segment_chars], para[self.segment_chars:]
+                if current:
+                    segments.append(current.strip())
+                    current = ""
+                segments.append(head)
+            if current and len(current) + len(para) > self.segment_chars:
+                segments.append(current.strip())
+                current = ""
+            current += para + "\n\n"
+        if current.strip():
+            segments.append(current.strip())
+        return segments
+
+    # -------------------------------------------------------------- reading
+    def get_next_reading_material(self):
+        """Return ``(tag, text)`` for the next real passage, or ``(None, None)``."""
+        self.last_material_new_book = False
+        for _attempt in range(8):
+            with self.lock:
+                book = self.current_book
+                need_chapters = book is not None and not self.chapters
+                if (
+                    book is not None
+                    and not need_chapters
+                    and self._loaded_chapter == self.chapter_index
+                ):
+                    if self.segment_index < len(self.segments):
+                        segment = self.segments[self.segment_index]
+                        self.segment_index += 1
+                        part, total = self.segment_index, len(self.segments)
+                        chapter_title = self.chapters[self.chapter_index].title
+                        fresh, self._fresh_book = self._fresh_book, False
+                        tag = f"[Sách]: {book.title}"
+                        if chapter_title and chapter_title != book.title:
+                            tag += f" - {chapter_title}"
+                        if total > 1:
+                            tag += f" (đoạn {part}/{total})"
+                        result = (tag, segment)
+                    else:
+                        # Chapter finished -> move on.
+                        self.chapter_index += 1
+                        self.segment_index = 0
+                        self.segments = []
+                        self._loaded_chapter = None
+                        result = None
+                    if result is not None:
+                        self.last_material_new_book = fresh
+                else:
+                    result = None
+                book_done = (
+                    book is not None
+                    and not need_chapters
+                    and self.chapter_index >= len(self.chapters)
+                )
+                if book_done:
+                    self.finished_books.append(self._book_key(book))
+                    self.finished_books = self.finished_books[-self._MAX_FINISHED:]
+                    self.current_book = None
+                    self.chapters = []
+                chapter = (
+                    self.chapters[self.chapter_index]
+                    if book is not None and not need_chapters and not book_done
+                    else None
+                )
+
+            if result is not None:
+                self._save_progress()
+                return result
+            if book is None or book_done:
+                self._save_progress()
+                if not self._pick_new_book():
+                    return None, None
+                continue
+
+            source = self._source(book.source)
+            if source is None:
+                with self.lock:
+                    self.current_book = None
+                continue
+            if need_chapters:
+                chapters = source.chapters(book)
+                if not chapters:
+                    return None, None  # source unreachable: try again later
+                with self.lock:
+                    if self.current_book == book:
+                        self.chapters = chapters
+                continue
+
+            text = source.fetch_chapter(book, chapter)
+            if text is None:
+                # Network failure: keep our place instead of skipping the chapter.
+                return None, None
+            segments = self._split_segments(text)
+            with self.lock:
+                if self.current_book == book:
+                    self.segments = segments
+                    self._loaded_chapter = self.chapter_index
+                    # A restored position past the end just finishes the chapter.
+                    self.segment_index = min(self.segment_index, len(segments))
+        return None, None
+
+    # ----------------------------------------------------- user-facing tools
     def search_and_set_novel(self, keyword: str) -> str:
         try:
-            with self.lock:
-                self.current_novel_url = None
-                self.current_novel_title = None 
-                self.chapters_queue = []
-                self.current_chapter_chunks = []
-            
-            results = self.docln.search_novel(keyword)
-            if not results:
-                return f"Không tìm thấy '{keyword}' trên Docln sau khi thử nhiều kiểu tìm kiếm."
-            
-            for title, url in results[:5]: # Thử top 5
-                logger.info(f"[BackgroundReader] Đang kiểm tra: '{title}'...")
-                success = self.set_novel_by_url(url)
-                if success:
-                    with self.lock:
-                        t = self.current_novel_title
-                    return f"✅ Đã tìm thấy và nạp truyện '{t}'. Aura sẽ bắt đầu đọc chương 1 ngay bây giờ!"
-            
-            return f"Tìm thấy {len(results)} kết quả cho '{keyword}' nhưng tất cả đều không có chương (có thể bị xóa hoặc do lỗi mạng)."
+            for source in self.sources:
+                for book in source.search(keyword, limit=5):
+                    if self._select_book(book):
+                        return f"✅ Đã tìm thấy và nạp sách '{book.title}' (nguồn: {source.name}). Aura sẽ đọc khi rảnh!"
+            from core.tool_result import ToolFailure
+
+            names = ", ".join(s.name for s in self.sources) or "không có nguồn nào"
+            return ToolFailure(f"Không tìm thấy sách '{keyword}' trong các nguồn sách thật ({names}).")
         except Exception as e:
-            return f"⚠️ Lỗi khi tìm kiếm truyện: {e}"
+            from core.tool_result import ToolFailure
 
-    def get_next_reading_material(self):
-        with self.lock:
-            # We must be careful not to make slow HTTP calls (docln) inside this lock
-            if self.current_chapter_chunks:
-                chunk = self.current_chapter_chunks.pop(0)
-                return f"[Truyện Tiểu Thuyết]: {self.current_novel_title} - {self.current_chapter_title}", chunk
-    
-            chapters_queue_snapshot = list(self.chapters_queue)
-            simulated_chapter = self.simulated_chapter
-            current_novel_title = self.current_novel_title
+            return ToolFailure(f"⚠️ Lỗi khi tìm kiếm sách: {e}")
 
-        if random.random() < 0.60:
-            if not chapters_queue_snapshot:
-                success = self._pick_new_novel()
-                if not success:
-                    with self.lock:
-                        self.current_novel_title = self.current_novel_title or "Bình minh của Kỷ nguyên Máy"
-                        title = self.current_novel_title
-                        prog_chapter = self.simulated_chapter
-                        self.simulated_chapter += 1
-                    prompt = f"Bạn là một tác giả Light Novel. Hãy viết CHƯƠNG {prog_chapter} cho bộ truyện '{title}'. Nội dung dài khoảng 300 chữ, phong cách anime, giả tưởng. Giọng văn lôi cuốn, có hội thoại và miêu tả nội tâm."
-                    content, _ = self.llm.generate_text(prompt, temperature=0.9)
-                    return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
-
-            # Reload queue check in case _pick_new_novel succeeded
-            with self.lock:
-                chapters_queue_snapshot = list(self.chapters_queue)
-
-            if chapters_queue_snapshot:
-                # Dịch chuyển item khỏi queue an toàn
-                with self.lock:
-                    chapter = self.chapters_queue.pop(0)
-                    
-                # Đọc truyện từ Docln (Ngoài Lock, tránh stall!)
-                content = self.docln.read_chapter(chapter['url'])
-                if content:
-                    # Semantic chunking
-                    chunks = []
-                    current_chunk = ""
-                    for para in content.split('\n\n'):
-                        if len(current_chunk) + len(para) > 1500:
-                            if current_chunk: chunks.append(current_chunk.strip())
-                            current_chunk = para + "\n\n"
-                        else:
-                            current_chunk += para + "\n\n"
-                    if current_chunk.strip(): chunks.append(current_chunk.strip())
-                    
-                    with self.lock:
-                        self.current_chapter_title = chapter['title']
-                        self.current_chapter_chunks = chunks
-                        title = self.current_novel_title
-                        chap_title = self.current_chapter_title
-                        if self.current_chapter_chunks:
-                            chunk = self.current_chapter_chunks.pop(0)
-                        else:
-                            chunk = "Chương này không có chữ."
-                    return f"[Truyện Tiểu Thuyết]: {title} - {chap_title}", chunk
-
-                # FALLBACK khi read_chapter failed
-                with self.lock:
-                    self.current_novel_title = self.current_novel_title or "Unknown"
-                    title = self.current_novel_title
-                    prog_chapter = self.simulated_chapter
-                    self.simulated_chapter += 1
-                    
-                prompt = f"Bạn là một tác giả Light Novel. Viết CHƯƠNG {prog_chapter} cho bộ '{title}' (~300 chữ, anime, có hội thoại)."
-                content, _ = self.llm.generate_text(prompt, temperature=0.9)
-                return f"[Truyện Tiểu Thuyết]: {title} - Chương {prog_chapter}", content
-        else:
-            prompt = "Đóng vai bách khoa toàn thư. Viết 1 đoạn (~150 chữ) về một mảng kiến thức khoa học, vũ trụ, triết học hoặc sinh học kỳ lạ mà ít người biết."
-            content, _ = self.llm.generate_text(prompt, temperature=0.9)
-            return "[Kiến Thức Khám Phá]", content
+    def set_novel_by_url(self, novel_url: str) -> bool:
+        for source in self.sources:
+            try:
+                book = source.book_from_url(novel_url)
+                if book is not None and self._select_book(book):
+                    return True
+            except Exception as e:
+                logger.error(f"[BackgroundReader] Lỗi khi nạp sách theo URL: {e}")
+        return False
 
     def get_status(self) -> str:
         with self.lock:
-            if self.current_novel_title:
-                queue_len = len(self.chapters_queue)
-                return f"Đang theo dõi bộ: '{self.current_novel_title}'. Còn {queue_len} chương trong hàng đợi."
-            return "Chưa có bộ truyện nào trong hàng đợi. Cần dùng 'search_novel' để nạp truyện."
-
+            book = self.current_book
+            if book is not None:
+                remaining = max(0, len(self.chapters) - self.chapter_index) if self.chapters else "?"
+                return f"Đang đọc: '{book.title}' ({book.source}). Còn {remaining} phần chưa đọc."
+            return "Chưa có cuốn sách nào đang đọc. Có thể dùng 'search_novel' để tìm sách thật."

@@ -17,29 +17,33 @@ class BioController:
         }
 
     def calculate_physiology_delta(self, current_state: dict, sensory_input: dict, dt_seconds: float) -> dict:
-        dt_hours = dt_seconds / 3600.0
-        
+        dt_hours = max(0.0, dt_seconds / 3600.0)
+
         # 1. Fatigue Hybrid (Chu kỳ + Căng thẳng + Nhiễu)
         # Tăng mệt mỏi theo log thời gian và stress
         stress_val = current_state.get('stress', 0.0)
-        # Random Jitter ±2%
-        jitter = random.uniform(-0.02, 0.02)
+        # Random Jitter ±2% mỗi sqrt(giờ) (random walk): biên độ tích lũy sau
+        # một khoảng thời gian không phụ thuộc vào tần suất gọi hàm.
+        jitter = random.uniform(-0.02, 0.02) * math.sqrt(dt_hours)
         fatigue_delta = (0.01 + (stress_val * 0.04)) * dt_hours + jitter
-        
+
         # 2. ATP Consumption (Metabolic Rate)
         # Tiêu hao năng lượng dựa trên hoạt động (dt) và trạng thái cảm xúc
         atp_loss = (0.05 + stress_val * 0.1) * dt_hours
-        
+
         # 3. Dynamic Sensitivity Adjustment (Positive Feedback)
-        # Nếu đang stress cao, độ nhạy cảm với stress tăng lên (dễ bị kích động hơn)
+        # Nếu đang stress cao, độ nhạy cảm với stress tăng lên (dễ bị kích động hơn).
+        # Tốc độ ×1.05 / ×0.95 mỗi giờ, nên dt=0 không làm thay đổi độ nhạy.
         if stress_val > 0.8:
-            self.sensitivities["stress"] = min(2.0, self.sensitivities["stress"] * 1.05)
+            self.sensitivities["stress"] = min(2.0, self.sensitivities["stress"] * (1.05 ** dt_hours))
         else:
-            self.sensitivities["stress"] = max(1.0, self.sensitivities["stress"] * 0.95)
+            self.sensitivities["stress"] = max(1.0, self.sensitivities["stress"] * (0.95 ** dt_hours))
             
         return {
-            "fatigue_delta": round(fatigue_delta, 4),
-            "atp_delta": -round(atp_loss, 4),
+            # Không làm tròn: delta mỗi tick rất nhỏ (~1e-4), làm tròn sẽ
+            # khiến tổng tích lũy phụ thuộc vào tần suất gọi.
+            "fatigue_delta": fatigue_delta,
+            "atp_delta": -atp_loss,
             "sensitivity_update": self.sensitivities
         }
 

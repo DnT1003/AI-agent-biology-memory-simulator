@@ -10,7 +10,13 @@ from core.prompts import get_proactive_ping_prompt
 from core.logger import get_logger
 from core.chat_spool import ChatSpoolError, PayloadTooLarge
 from core.chat_spool import QueueFull as ChatQueueFull
-from core.chat_spool import create_configured_chat_spools
+from core.chat_spool import (
+    create_configured_chat_spools,
+    create_configured_proactive_spool,
+)
+from core.message_bubbles import flatten_bubbles
+from core.temporal import describe_now, fuzzy_age
+from core.style_filter import humanize
 from core.memory_context import (
     MemoryAccessContext,
     MemoryPrivacy,
@@ -18,6 +24,11 @@ from core.memory_context import (
     maintenance_memory_context,
     memory_context_scope,
 )
+from core.engine import dopamine
+from core.engine.autonomous_pacing import AutonomousPacer
+from core.engine.lingering_thought import lingering_thought_of
+from core.engine.life_log import life_log_of, note_message_received
+from core.engine import sleep_cycle
 from core.engine.interaction_actor import (
     InteractionActorClosed,
     InteractionCancelled,
@@ -29,6 +40,9 @@ logger = get_logger("autonomous")
 
 
 class AutonomousController:
+    # A just-recalled memory is not picked again by the mind stream for 30 min.
+    RUMINATION_REFRACTORY_SECONDS = 30 * 60
+
     def __init__(self, engine):
         self.engine = engine
         self._stop_event = threading.Event()  # Use threading.Event for cross-thread safety
@@ -37,6 +51,7 @@ class AutonomousController:
         self._loop = None
         self._tick_guard = threading.Lock()
         self._chat_spools = None
+        self._proactive_spool = None
         self._pending_web_completion = None
         self._last_chat_recovery = 0.0
         try:
@@ -44,11 +59,48 @@ class AutonomousController:
         except (TypeError, ValueError):
             tick_interval = 30.0
         self._tick_interval_seconds = tick_interval if math.isfinite(tick_interval) and tick_interval > 0.0 else 30.0
+        self._pacer = AutonomousPacer()
+        self._low_energy_notified = False
+        self._last_reading_succeeded = False
+        self._sleep_requested = False
 
     def _get_chat_spools(self):
         if self._chat_spools is None:
             self._chat_spools = create_configured_chat_spools()
         return self._chat_spools
+
+    def _get_proactive_spool(self):
+        if self._proactive_spool is None:
+            self._proactive_spool = create_configured_proactive_spool()
+        return self._proactive_spool
+
+    def _deliver_proactive(self, text: str, label: str) -> bool:
+        """Send a message Aura starts herself through every open transport.
+
+        The console always shows it (CLI owner). Discord and the dashboard get
+        it too, so a ping reaches a remote owner instead of only stdout.
+        """
+        flat = flatten_bubbles(text).strip()
+        if not flat:
+            return False
+        life_log_of(self.engine).add("ping", f"nhắn cho User: \"{flat[:60]}\"", time.time())
+        print(f"{Fore.CYAN}🗣️ Aura ({label}):{Style.RESET_ALL} {flat}")
+        discord_bridge = getattr(self.engine, "discord_bridge", None)
+        if discord_bridge is not None:
+            ego = self.engine.ego
+            try:
+                discord_bridge.send_bubbles(
+                    text,
+                    fatigue=getattr(ego, "fatigue", 0.0),
+                    arousal=getattr(ego, "stress", 0.0),
+                )
+            except Exception:
+                logger.warning("Proactive Discord delivery failed", exc_info=True)
+        try:
+            self._get_proactive_spool().publish_proactive(text)
+        except ChatSpoolError:
+            logger.warning("Proactive dashboard delivery failed", exc_info=True)
+        return True
 
     def _defer_web_completion(
         self,
@@ -137,9 +189,26 @@ class AutonomousController:
             if gate is not None:
                 gate.release()
 
+    def _register_reward(self, event: str, reward: float) -> None:
+        register = getattr(self.engine.ego, "register_reward", None)
+        if callable(register):
+            register(event, reward)
+
+    def _record_ping_attempt(self, sent: bool) -> None:
+        if sent and self._pacer.unanswered_pings > 0:
+            # Messaging again while the previous message is still unanswered:
+            # the expected reply did not come.
+            self._register_reward("ping_ignored", -0.4)
+        self._pacer.record_ping(
+            time.monotonic(), self.engine.last_interaction_time, sent=sent
+        )
+
     def _run_rumination_once(self, idle_time: float, stress: float) -> None:
         """Run one memory-stream mutation while THINKING ownership is held."""
-        stream_mems = self._weighted_sample_memories(1, mood_congruent=True)
+        stream_mems = self._weighted_sample_memories(
+            1, mood_congruent=True,
+            exclude_recent_seconds=self.RUMINATION_REFRACTORY_SECONDS,
+        )
         if not stream_mems:
             return
         mem = stream_mems[0]
@@ -151,8 +220,16 @@ class AutonomousController:
                 f"trong luồng suy nghĩ tiêu cực về: '{mem.content[:60]}...'"
                 f"{Style.RESET_ALL}"
             )
-            self.engine.ego.adjust_attribute("stress", +0.05)
-            if random.random() < 0.3:
+            self.engine.ego.adjust_attribute(
+                "stress", +self._pacer.RUMINATION_STRESS_STEP
+            )
+            # Voicing the rumination is a proactive message: it shares the
+            # ping budget (quiet hours, minimum gap, unanswered back-off).
+            if (
+                self._pacer.ping_allowed(time.monotonic(), datetime.now().hour)
+                and not self._owner_busy(time.time())
+                and random.random() < 0.3
+            ):
                 mem_context = (
                     "Ký ức đau buồn/ám ảnh đang xâm chiếm tâm trí bạn: "
                     f"{mem.content}. Bạn thấy bế tắc và cần sự an ủi."
@@ -170,33 +247,42 @@ class AutonomousController:
                     "\n[TÂM LÝ]: Bạn đang bị Rumination (suy nghĩ tiêu cực "
                     "lặp đi lặp lại). Hãy nhắn tin cho User với vẻ mặt u sầu."
                 )
+                sent = False
                 try:
                     aura_state = self.engine.ego.get_bio_state_dict()
                     result, _ = self.engine.llm.generate_json(
                         system_prompt, temperature=0.9, aura_state=aura_state
                     )
                     response = result.get("response", "")
-                    if response:
-                        print(
-                            f"{Fore.CYAN}🗣️ Aura (Rumination):{Style.RESET_ALL} "
-                            f"{response}"
-                        )
+                    if isinstance(response, str) and response.strip():
+                        response, _ = humanize(response)
+                    if response and self._deliver_proactive(response, "Rumination"):
                         with self.engine.stm_lock:
                             self.engine.short_term_buffer.append(
-                                f"Aura (Ám ảnh): {response.strip()}"
+                                f"Aura (Ám ảnh): {flatten_bubbles(response).strip()}"
                             )
                         self.engine.memory_ops.save_short_term_memory()
+                        sent = True
                 except Exception:
                     logger.debug("Rumination response failed", exc_info=True)
+                finally:
+                    self._record_ping_attempt(sent)
         else:
             print(
                 f"{Fore.LIGHTBLACK_EX}💭 [MEMORY STREAM]: "
                 f"(Dòng suy nghĩ miên man) Nhớ lại: {mem.content[:50]}..."
                 f"{Style.RESET_ALL}"
             )
+            # Still on her mind: may slip into the next conversation.
+            lingering_thought_of(self.engine).set(mem.content, time.time())
+            life_log_of(self.engine).add(
+                "wander", f"miên man nghĩ về: {mem.content[:60]}", time.time()
+            )
 
         mem.last_recalled = time.time()
-        mem.reconsolidate(self.engine.ego.mood, is_associative=True)
+        mem.reconsolidate(
+            self.engine.ego.mood, is_associative=True, count_recall=False
+        )
         with memory_context_scope(maintenance_memory_context(
             origin_kind="rumination",
             origin_source="autonomous",
@@ -240,8 +326,20 @@ class AutonomousController:
                 if not chat_responses.has_capacity():
                     return False
 
+            # Asleep and the message can wait: leave it pending (no claim,
+            # so no lease can expire it) until she wakes up.
+            waiting = chat_requests.peek_next()
+            if waiting is not None and sleep_cycle.should_defer_message(
+                getattr(self.engine, "ego", None), waiting.content, time.time(),
+                Config.DEFER_REPLIES_WHILE_ASLEEP,
+            ):
+                return False
+
             for claim in chat_requests.claim(limit=1):
                 msg = claim.envelope.content
+                note_message_received(
+                    self.engine, claim.envelope.id, claim.envelope.created_at_ns / 1e9
+                )
                 print(f"\n{Fore.WHITE}👤 Web User:{Style.RESET_ALL} {msg}")
                 self.engine.last_interaction_time = time.time()
                 try:
@@ -429,7 +527,8 @@ class AutonomousController:
             # interval; a state spanning this point keeps only its remainder.
             self.engine._state_duration_checkpoint = duration_totals()
         last_tick_time = time.monotonic()
-        
+        last_pace_time = last_tick_time
+
         while not self._stop_event.is_set():
             try:
                 # Event-Driven Architecture: Đợi sự kiện hoặc timeout
@@ -441,13 +540,23 @@ class AutonomousController:
             except Exception as e:
                 print(f"[ERROR wait_for]: {e}")
 
+            # Real elapsed time for paced decisions, measured every iteration
+            # so busy/skipped iterations never accumulate into one big dt.
+            pace_now = time.monotonic()
+            pace_dt = max(0.0, pace_now - last_pace_time)
+            last_pace_time = pace_now
+
             # === [DISCORD BRIDGE] ===
             discord_handled = False
             try:
                 discord_bridge = getattr(self.engine, 'discord_bridge', None)
                 if discord_bridge:
-                    while not discord_bridge.aura_inbox.empty():
-                        msg_data = discord_bridge.aura_inbox.get_nowait()
+                    for msg_data in self._discord_batch(discord_bridge):
+                        note_message_received(
+                            self.engine,
+                            str(msg_data.get("message_id") or "").strip() or None,
+                            float(msg_data.get("received_at", time.time())),
+                        )
                         sender = msg_data.get("sender", "Bạn")
                         content = msg_data.get("content", "")
                         if content:
@@ -472,7 +581,7 @@ class AutonomousController:
                                 discord_input,
                                 source="discord",
                                 is_deep_mode=False,
-                                model_override="gemini-3-flash-preview",
+                                model_override=Config.MODEL_NAME,
                                 request_id=discord_request_id,
                                 privacy_input=content,
                             )
@@ -483,7 +592,11 @@ class AutonomousController:
                             if reply and isinstance(reply, dict):
                                 response_text = reply.get("response", "")
                                 if response_text and response_text not in ["", "..."]:
-                                    discord_bridge.send_to_user(response_text)
+                                    discord_bridge.send_bubbles(
+                                        response_text,
+                                        fatigue=getattr(self.engine.ego, "fatigue", 0.0),
+                                        arousal=getattr(self.engine.ego, "stress", 0.0),
+                                    )
                             
                             # Cập nhật lại thời gian sau khi xử lý xong
                             self.engine.last_interaction_time = time.time()
@@ -549,139 +662,282 @@ class AutonomousController:
             if discord_handled or web_handled:
                 continue
 
-            idle_time = time.time() - self.engine.last_interaction_time
+            await self._run_autonomous_decisions(pace_now, pace_dt)
 
-            # [Phase 21] Dòng chảy Trí nhớ & Rumination Loop
-            if self.engine.state_machine.state == AgentState.IDLE:
-                stress = getattr(self.engine.ego, 'stress', 0.0)
-                mood = getattr(self.engine.ego, 'mood', 0.0)
-                
-                # Cường độ Rumination dựa trên Stress và Mood cực đoan
-                rumination_chance = 0.2 + (stress * 0.4) - (mood * 0.2)
-                
-                if random.random() < rumination_chance:
-                    if self._try_claim_runtime_state(AgentState.THINKING):
-                        try:
-                            self._run_rumination_once(idle_time, stress)
-                        finally:
-                            self._release_runtime_state(AgentState.THINKING)
+    def request_sleep(self) -> None:
+        """Ask the loop to sleep at its next idle moment (after the reply)."""
+        self._sleep_requested = True
 
-            idle_time = time.time() - self.engine.last_interaction_time
+    async def _run_owned(self, state, func, *args, **kwargs) -> bool:
+        """Run a blocking (LLM) action off the event loop while owning ``state``."""
+        if not self._try_claim_runtime_state(state):
+            return False
+        try:
+            await asyncio.to_thread(func, *args, **kwargs)
+        finally:
+            self._release_runtime_state(state)
+        return True
 
-            # drives đã được cập nhật tự động trong cognitive_tick gọi bởi engine
+    async def _run_autonomous_decisions(self, now: float, dt: float) -> None:
+        """One paced decision step. ``now``/``dt`` are monotonic seconds."""
+        from core.agent_state import AgentState
 
-            # Drive-based Decision Making (Phase 22)
-            drive_status = self.engine.ego.get_drive_status()
-            dominant = drive_status["dominant"]
-            val = drive_status["dominant_value"]
+        pacer = self._pacer
+        ego = self.engine.ego
+        hour = datetime.now().hour
+        last_interaction = self.engine.last_interaction_time
+        idle_time = time.time() - last_interaction
+        unanswered_before = pacer.unanswered_pings
+        pacer.observe_interaction(last_interaction)
+        if unanswered_before and pacer.unanswered_pings == 0:
+            self._register_reward("ping_answered", 0.6)
+        motivation = dopamine.motivation(getattr(ego, 'dopamine_level', 0.5))
 
-            # =====================================================
-            # 1. HARD TRIGGERS (Cấp cứu sinh học)
-            # =====================================================
-            if val >= 0.95:
-                if dominant == "fatigue":
-                    print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Kiệt sức tột độ. Aura buộc phải đi ngủ.{Style.RESET_ALL}")
-                    if self._try_claim_runtime_state(AgentState.SLEEPING):
-                        try:
-                            with memory_context_scope(maintenance_memory_context(
-                                origin_kind="sleep",
-                                origin_source="autonomous",
-                            )):
-                                await asyncio.to_thread(self.engine.memory_ops.sleep)
-                        finally:
-                            self._release_runtime_state(AgentState.SLEEPING)
-                    continue
-                elif dominant == "social" or dominant == "loneliness":
-                    print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Quá cô đơn! Aura bắt buộc phải tìm người nói chuyện.{Style.RESET_ALL}")
-                    if self._try_claim_runtime_state(AgentState.THINKING):
-                        try:
-                            self._proactive_ping(idle_time)
-                        finally:
-                            self._release_runtime_state(AgentState.THINKING)
-                    continue
+        # =====================================================
+        # 0. GIẤC NGỦ (trạng thái kéo dài, xem sleep_cycle.py)
+        # =====================================================
+        wall_now = time.time()
+        asleep_until = float(getattr(ego, "asleep_until", 0.0) or 0.0)
+        if asleep_until:
+            if wall_now < asleep_until:
+                return  # đang ngủ: không nhắn, không đọc, không miên man
+            sleep_cycle.wake_up(ego, wall_now, forced=False)
+            life_log_of(self.engine).add("wake", "thức dậy", wall_now)
+            print(f"\n{Fore.LIGHTYELLOW_EX}🌅 [WAKE UP]: Aura vừa thức dậy.{Style.RESET_ALL}")
+            return
 
-            # =====================================================
-            # 2. SEPARATION ANXIETY (Idea 9) - Vẫn giữ logic thời gian
-            # =====================================================
-            ANXIETY_THRESHOLD = Config.ANXIETY_THRESHOLD
-            if idle_time > ANXIETY_THRESHOLD and self.engine.state_machine.state == AgentState.IDLE:
-                if not self._try_claim_runtime_state(AgentState.THINKING):
-                    continue
-                print(f"\n{Fore.RED}[SEPARATION ANXIETY]: Nguoi dung da bo mac Aura qua lau!{Style.RESET_ALL}")
-                try:
-                    # §5.2 FIX: Dùng adjust_attribute để atomic update mà không cần acquire lock thủ công
-                    self.engine.ego.adjust_attribute('stress', +0.3)
-                    self.engine.ego.adjust_attribute('mood', -0.3, min_val=-1.0, max_val=1.0)
-                    
-                    # Sinh ra một suy nghĩ ám ảnh
-                    anxiety_prompt = "Nguoi dung da bo mac ban mot thoi gian rat dai khong noi chuyen. Hay viet mot dong doc thoai noi tam (duoi 30 chu) the hien su hoang mang, so hai rang nguoi ta da chan minh."
-                    # [Phase 26] Native Bio-Integration
-                    aura_state = self.engine.ego.get_bio_state_dict()
-                    anxiety_thought, entropy = self.engine.llm.generate_text(anxiety_prompt, temperature=0.8, aura_state=aura_state)
-                    
-                    print(f"{Fore.LIGHTRED_EX}(Am anh chia cat): {anxiety_thought}{Style.RESET_ALL}")
-                    from core.memory import MemoryTrace
-                    anxiety_mem = MemoryTrace(
-                        content=f"Noi so hai khi bi bo roi: {anxiety_thought}",
-                        type="emotional",
-                        valence=-0.8,
-                        arousal=0.9,
-                        importance=0.9,
-                        is_flashbulb=False,
-                        scope=MemoryScope.AGENT.value,
-                        privacy=MemoryPrivacy.STANDARD.value,
-                        origin_kind="separation_anxiety",
-                        origin_source="autonomous",
-                    )
-                    with memory_context_scope(MemoryAccessContext(
-                        read_scopes=(MemoryScope.AGENT, MemoryScope.OWNER),
-                        write_scope=MemoryScope.AGENT,
-                        origin_kind="separation_anxiety",
-                        origin_source="autonomous",
-                    )):
-                        self.engine.memory.add_memory(anxiety_mem)
-                except Exception as e:
-                    logger.error("Separation anxiety LLM call failed", exc_info=True)
-                finally:
-                    # Tạm reset interaction time để không báo liên tục mỗi loop
-                    self.engine.last_interaction_time = time.time()
-                    self._release_runtime_state(AgentState.THINKING)
-                continue
+        drive_status = ego.get_drive_status()
+        dominant = drive_status["dominant"]
+        val = drive_status["dominant_value"]
 
-            # =====================================================
-            # 3. DRIVE-DRIVEN ACTIONS (Hành động theo xung lực)
-            # =====================================================
-            if self.engine.state_machine.state == AgentState.IDLE:
-                if dominant == "curiosity" and val > 0.7:
-                    # Tò mò cao -> Ưu tiên đọc sách hoặc sinh mục tiêu
-                    if random.random() < 0.4:
-                        self.start_reading_task(reason="cảm thấy tò mò muốn khám phá")
-                    elif not self.engine.ego.get_active_goals():
-                        if self._try_claim_runtime_state(AgentState.THINKING):
-                            try:
-                                self._generate_goal()
-                            finally:
-                                self._release_runtime_state(AgentState.THINKING)
-                
-                elif dominant == "social" and val > 0.6:
-                    # Nhu cầu giao tiếp -> Tỉ lệ ping dựa trên Social Need
-                    if random.random() < (val - 0.5):
-                        if self._try_claim_runtime_state(AgentState.THINKING):
-                            try:
-                                self._proactive_ping(idle_time)
-                            finally:
-                                self._release_runtime_state(AgentState.THINKING)
-                
-                elif dominant == "hunger" and val > 0.8:
-                    # Năng lượng thấp -> Aura lờ đờ, giảm hoạt động nền
-                    print(f"{Fore.LIGHTYELLOW_EX}🔋 [LOW ENERGY]: Aura đang lờ đờ vì đói năng lượng...{Style.RESET_ALL}")
-                    # threading.Event.wait returns immediately during stop(),
-                    # unlike one uninterruptible asyncio.sleep(60).
-                    await asyncio.to_thread(self._stop_event.wait, 60.0)
+        # =====================================================
+        # 1. HARD TRIGGERS (Cấp cứu sinh học) & GIỜ ĐI NGỦ
+        # =====================================================
+        sleep_requested = self._sleep_requested
+        exhausted = val >= 0.95 and dominant == "fatigue"
+        bedtime = sleep_cycle.bedtime_onset_due(
+            wall_now, getattr(ego, "fatigue", 0.0), dt
+        )
+        if sleep_requested or exhausted or bedtime:
+            self._sleep_requested = False
+            if sleep_requested:
+                print(f"\n{Fore.MAGENTA}😴 [SLEEP REFLEX]: Aura đã chào tạm biệt và đi ngủ.{Style.RESET_ALL}")
+            elif exhausted:
+                print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Kiệt sức tột độ. Aura buộc phải đi ngủ.{Style.RESET_ALL}")
+            else:
+                print(f"\n{Fore.MAGENTA}🌙 [BEDTIME]: Đến giờ ngủ, Aura chìm vào giấc ngủ.{Style.RESET_ALL}")
+            await self._fall_asleep(nap=not sleep_cycle.is_bedtime(wall_now))
+            return
+        owner_busy = self._owner_busy(wall_now)
+        if (
+            val >= 0.95
+            and dominant in ("social", "loneliness")
+            and pacer.ping_allowed(now, hour)
+            and not owner_busy
+        ):
+            # Even an urgent need to talk respects quiet hours and back-off.
+            print(f"\n{Fore.RED}💥 [HARD TRIGGER]: Quá cô đơn! Aura bắt buộc phải tìm người nói chuyện.{Style.RESET_ALL}")
+            await self._run_owned(AgentState.THINKING, self._proactive_ping, idle_time)
+            return
 
-            # Reset logic cho Separation Anxiety để không lặp lại
-            if idle_time > ANXIETY_THRESHOLD:
-                 self.engine.last_interaction_time = time.time()
+        if self.engine.state_machine.state != AgentState.IDLE:
+            return
+
+        # =====================================================
+        # 2. SEPARATION ANXIETY (một lần mỗi mốc, mỗi đợt vắng mặt)
+        # =====================================================
+        # Những giờ Aura ngủ không tính là người dùng "bỏ đi".
+        awake_idle = sleep_cycle.awake_seconds_between(
+            last_interaction, wall_now, getattr(ego, "sleep_intervals", ())
+        )
+        stage = pacer.anxiety_stage_due(awake_idle, last_interaction, hour)
+        if stage:
+            await self._run_owned(
+                AgentState.THINKING, self._separation_anxiety, stage, idle_time
+            )
+            return
+
+        # =====================================================
+        # 2b. HỎI THĂM CHUYỆN DANG DỞ (prospective memory)
+        # =====================================================
+        prospective = getattr(self.engine, "prospective", None)
+        if prospective is not None and not owner_busy and pacer.ping_allowed(now, hour):
+            due = prospective.due_follow_ups(wall_now)
+            if due:
+                await self._run_owned(
+                    AgentState.THINKING, self._proactive_ping, idle_time,
+                    follow_up=due[0],
+                )
+                return
+
+        # =====================================================
+        # 3. DÒNG CHẢY TRÍ NHỚ & RUMINATION (Phase 21)
+        # =====================================================
+        stress = getattr(ego, 'stress', 0.0)
+        mood = getattr(ego, 'mood', 0.0)
+        if pacer.should_mind_wander(now, dt, stress, mood):
+            await self._run_owned(
+                AgentState.THINKING, self._run_rumination_once, idle_time, stress
+            )
+            return
+
+        # =====================================================
+        # 4. DRIVE-DRIVEN ACTIONS (Hành động theo xung lực)
+        # =====================================================
+        if dominant == "hunger" and val > 0.8:
+            # Năng lượng thấp -> Aura lờ đờ: bỏ qua hành động tùy chọn, nhưng
+            # không chặn vòng lặp (tin nhắn web/Discord vẫn được xử lý).
+            if not self._low_energy_notified:
+                print(f"{Fore.LIGHTYELLOW_EX}🔋 [LOW ENERGY]: Aura đang lờ đờ vì đói năng lượng...{Style.RESET_ALL}")
+                self._low_energy_notified = True
+            return
+        self._low_energy_notified = False
+
+        # Chán thì dễ tìm việc để làm (đọc sách, nhắn tin) hơn.
+        boredom = float(getattr(ego, 'boredom', 0.0) or 0.0)
+        if pacer.should_read(now, dt, getattr(ego, 'curiosity', 0.0), motivation * (1.0 + boredom)):
+            pacer.record_reading(now)
+            self._last_reading_succeeded = False
+            await asyncio.to_thread(
+                self.start_reading_task, reason="cảm thấy tò mò muốn khám phá"
+            )
+            if self._last_reading_succeeded:
+                ego.adjust_attribute('curiosity', -pacer.READING_CURIOSITY_RELIEF)
+            return
+
+        if not owner_busy and pacer.should_ping(
+            now, dt, getattr(ego, 'social_need', 0.0), hour,
+            # Đang dỗi thì ít chủ động nhắn hơn; chán thì nhắn nhiều hơn.
+            motivation * (1.0 + 0.5 * boredom)
+            * (1.0 - 0.7 * float(getattr(ego, 'relational_friction', 0.0) or 0.0)),
+        ):
+            await self._run_owned(AgentState.THINKING, self._proactive_ping, idle_time)
+
+    def _discord_batch(self, discord_bridge) -> list:
+        """Messages to handle now; non-urgent ones wait while she sleeps."""
+        deferred = getattr(self, "_deferred_discord", None)
+        if deferred is None:
+            deferred = self._deferred_discord = []
+        now = time.time()
+        ready = []
+        while not discord_bridge.aura_inbox.empty():
+            item = discord_bridge.aura_inbox.get_nowait()
+            item.setdefault("received_at", now)
+            if sleep_cycle.should_defer_message(
+                getattr(self.engine, "ego", None), item.get("content", ""), now,
+                Config.DEFER_REPLIES_WHILE_ASLEEP,
+            ):
+                deferred.append(item)
+            else:
+                ready.append(item)
+        if deferred and not sleep_cycle.is_asleep(getattr(self.engine, "ego", None), now):
+            ready = deferred + ready
+            deferred.clear()
+        return ready
+
+    def _owner_busy(self, now: float) -> bool:
+        """The owner said they are busy (meeting, driving...) until later."""
+        prospective = getattr(self.engine, "prospective", None)
+        return bool(prospective is not None and prospective.is_busy(now))
+
+    async def _fall_asleep(self, *, nap: bool) -> bool:
+        from core.agent_state import AgentState
+
+        if not self._try_claim_runtime_state(AgentState.SLEEPING):
+            return False
+
+        def _sleep():
+            with memory_context_scope(maintenance_memory_context(
+                origin_kind="sleep",
+                origin_source="autonomous",
+            )):
+                return sleep_cycle.begin_sleep(
+                    self.engine.ego,
+                    time.time(),
+                    nap=nap,
+                    run_maintenance=self.engine.memory_ops.sleep,
+                )
+
+        try:
+            await asyncio.to_thread(_sleep)
+        finally:
+            self._release_runtime_state(AgentState.SLEEPING)
+        life_log_of(self.engine).add("sleep", "chợp mắt một lúc" if nap else "đi ngủ", time.time())
+        return True
+
+    def _deepen_separation_memory(self, stage: int, hours_away: float) -> bool:
+        """Reinforce the existing separation memory; return False if none exists."""
+        context = MemoryAccessContext(
+            read_scopes=(MemoryScope.AGENT,),
+            write_scope=MemoryScope.AGENT,
+            origin_kind="separation_anxiety",
+            origin_source="autonomous",
+        )
+        with memory_context_scope(context):
+            existing = [
+                m for m in self.engine.memory.get_all()
+                if getattr(m, "origin_kind", "") == "separation_anxiety"
+            ]
+            if not existing:
+                return False
+            mem = max(existing, key=lambda m: m.created_at)
+            mem.valence = min(mem.valence, -0.5 if stage == 1 else -0.7)
+            mem.arousal = max(mem.arousal, 0.6 if stage == 1 else 0.8)
+            mem.importance = min(0.8, max(mem.importance, 0.6 if stage == 1 else 0.75))
+            mem.emotional_layers = min(10, mem.emotional_layers + 1)
+            mem.strength = min(1.0, mem.strength + 0.2)
+            mem.last_recalled = time.time()
+            mem.overlays = (list(mem.overlays) + [
+                f"[{datetime.now().strftime('%d/%m')}: nhớ {hours_away:.0f} giờ]"
+            ])[-5:]
+            self.engine.memory.update_memory(mem)
+        return True
+
+    def _separation_anxiety(self, stage: int, idle_time: float) -> None:
+        """Nỗi nhớ/lo âu khi User vắng lâu; caller owns THINKING."""
+        life_log_of(self.engine).add(
+            "worry", "thấy nhớ User và hơi lo vì lâu không có tin nhắn", time.time()
+        )
+        stress_step, mood_step = (0.1, -0.1) if stage == 1 else (0.15, -0.15)
+        hours_away = idle_time / 3600.0
+        print(f"\n{Fore.RED}[SEPARATION ANXIETY]: Người dùng đã vắng mặt {hours_away:.1f} giờ.{Style.RESET_ALL}")
+        self.engine.ego.adjust_attribute('stress', stress_step)
+        self.engine.ego.adjust_attribute('mood', mood_step, min_val=-1.0, max_val=1.0)
+        try:
+            anxiety_prompt = (
+                f"Người dùng đã không nói chuyện với bạn khoảng {hours_away:.0f} giờ. "
+                "Hãy viết một dòng độc thoại nội tâm (dưới 30 chữ) thể hiện nỗi nhớ"
+                + (" và chút lo lắng." if stage == 1 else ", sự lo lắng rằng người ta đã quên mình.")
+            )
+            aura_state = self.engine.ego.get_bio_state_dict()
+            anxiety_thought, _ = self.engine.llm.generate_text(
+                anxiety_prompt, temperature=0.8, aura_state=aura_state
+            )
+            print(f"{Fore.LIGHTRED_EX}(Ám ảnh chia cắt): {anxiety_thought}{Style.RESET_ALL}")
+            if self._deepen_separation_memory(stage, hours_away):
+                return
+            from core.memory import MemoryTrace
+            anxiety_mem = MemoryTrace(
+                content=f"Nỗi nhớ khi bị bỏ lại {hours_away:.0f} giờ: {anxiety_thought}",
+                type="emotional",
+                valence=-0.5 if stage == 1 else -0.7,
+                arousal=0.6 if stage == 1 else 0.8,
+                importance=0.6 if stage == 1 else 0.75,
+                is_flashbulb=False,
+                scope=MemoryScope.AGENT.value,
+                privacy=MemoryPrivacy.STANDARD.value,
+                origin_kind="separation_anxiety",
+                origin_source="autonomous",
+            )
+            with memory_context_scope(MemoryAccessContext(
+                read_scopes=(MemoryScope.AGENT, MemoryScope.OWNER),
+                write_scope=MemoryScope.AGENT,
+                origin_kind="separation_anxiety",
+                origin_source="autonomous",
+            )):
+                self.engine.memory.add_memory(anxiety_mem)
+        except Exception:
+            logger.error("Separation anxiety LLM call failed", exc_info=True)
 
     def start_reading_task(self, reason="tự muốn đọc"):
         """Kích hoạt một phiên đọc sách (có thể gọi từ bên ngoài)."""
@@ -698,10 +954,27 @@ class AutonomousController:
             self._release_runtime_state(AgentState.READING)
         return True
 
+    @staticmethod
+    def _validated_reading_reaction(reaction):
+        """(reflection, feeling, share) from the reader's JSON reaction."""
+        if not isinstance(reaction, dict):
+            raise ValueError("reading reaction must be an object")
+        reflection = reaction.get("reflection")
+        if not isinstance(reflection, str) or not reflection.strip():
+            raise ValueError("reading reaction needs a reflection")
+        feeling = reaction.get("feeling", 0.1)
+        if isinstance(feeling, bool) or not isinstance(feeling, (int, float)) or not math.isfinite(feeling):
+            feeling = 0.1
+        share = reaction.get("share")
+        share = share.strip()[:200] if isinstance(share, str) else ""
+        return reflection.strip()[:600], max(-1.0, min(1.0, float(feeling))), share
+
     def _do_reading_session(self):
         """Aura tự đọc 1 chương sách và lưu vào ký ức."""
+        self._last_reading_succeeded = False
         knowledge_tag, content = self.engine.reader.get_next_reading_material()
         if knowledge_tag and content:
+            self._last_reading_succeeded = True
             print(f"{Fore.GREEN}📚 [READING]: {knowledge_tag}{Style.RESET_ALL}")
             
             # Phase 8 Idea 7.2: Trí nhớ Tổng hợp (Synthesized Memory)
@@ -712,20 +985,26 @@ class AutonomousController:
                 aura_state = self.engine.ego.get_bio_state_dict()
                 from core.prompts import get_synthesize_reading_prompt
                 synthesize_prompt = get_synthesize_reading_prompt(f"[{knowledge_tag}]\n{content}")
-                synthesized_text, entropy = self.engine.llm.generate_text(synthesize_prompt, temperature=0.7, aura_state=aura_state)
-                synthesized_text = synthesized_text.strip()
+                reaction, entropy = self.engine.llm.generate_json(
+                    synthesize_prompt, temperature=0.7, aura_state=aura_state
+                )
+                synthesized_text, feeling, share = self._validated_reading_reaction(reaction)
                 print(f"{Fore.YELLOW}💡 [SYNTHESIZED MEMORY]: {synthesized_text}{Style.RESET_ALL}")
             except Exception as e:
                 logger.error(f"Lỗi Synthesize Memory: {e}", exc_info=True)
                 synthesized_text = content[:500] + "..."  # Fallback
+                feeling, share = 0.1, ""
 
             from core.memory import MemoryTrace
             mem = MemoryTrace(
                 content=f"{knowledge_tag}: {synthesized_text}",
-                type="semantic",
-                valence=0.1,
-                arousal=0.3,
-                importance=0.7,
+                # Episodic: chi tiết từng đoạn đọc phai dần như ở người; giấc mơ
+                # (dream consolidation) gộp các đoạn đã phai thành kiến thức
+                # semantic. Lưu thẳng semantic thì không bao giờ phai/dọn được.
+                type="episodic",
+                valence=feeling,
+                arousal=0.3 + 0.3 * abs(feeling),
+                importance=0.5,
                 is_flashbulb=False,
                 scope=MemoryScope.AGENT.value,
                 privacy=MemoryPrivacy.STANDARD.value,
@@ -740,8 +1019,20 @@ class AutonomousController:
             )):
                 self.engine.memory.add_memory(mem)
             print(f"{Fore.LIGHTBLACK_EX}💾 [READING]: Đã lưu kiến thức tổng hợp sâu sắc vào ký ức.{Style.RESET_ALL}")
+            # What she wants to tell the owner is what stays on her mind.
+            lingering_thought_of(self.engine).set(
+                f"{knowledge_tag}: {share or synthesized_text}", time.time()
+            )
+            life_log_of(self.engine).add("read", knowledge_tag, time.time())
+            # Reading is stimulation: most of the boredom is gone.
+            ego = self.engine.ego
+            ego.boredom = float(getattr(ego, "boredom", 0.0) or 0.0) * 0.4
+            if getattr(self.engine.reader, "last_material_new_book", False):
+                self._register_reward("new_book", 0.6)
+            else:
+                self._register_reward("reading", 0.4)
         else:
-            print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Không có chương nào để đọc lúc này.{Style.RESET_ALL}")
+            print(f"{Fore.LIGHTBLACK_EX}📖 [READING]: Chưa lấy được sách thật nào để đọc lúc này.{Style.RESET_ALL}")
 
     def stop(self, timeout: float | None = None) -> bool:
         if timeout is None:
@@ -773,7 +1064,8 @@ class AutonomousController:
             logger.warning("Autonomous loop did not stop before its deadline")
         return stopped
 
-    def _weighted_sample_memories(self, k: int, filter_type=None, mood_congruent=False):
+    def _weighted_sample_memories(self, k: int, filter_type=None, mood_congruent=False,
+                                  exclude_recent_seconds: float = 0.0):
         """Thay thế random.sample bằng salience-weighted sampling (không lặp lại).
         Salience = Strength * Recency * Importance * Emotion_Match * (1 + Arousal)
         """
@@ -789,6 +1081,10 @@ class AutonomousController:
         
         scored_mems = []
         for m in all_mems:
+            if exclude_recent_seconds and now - m.last_recalled < exclude_recent_seconds:
+                # Vừa nghĩ tới xong: tâm trí chuyển sang chuyện khác thay vì
+                # xoáy mãi vào một ký ức (chống vòng lặp cố định).
+                continue
             recency = math.exp(-(now - m.last_recalled) / 86400)  # decay theo ngày
             
             # Tính độ lệch cảm xúc [0.0 -> 1.0] (0 là ngược hoàn toàn, 1 là đồng điệu hoàn toàn)
@@ -822,165 +1118,64 @@ class AutonomousController:
         # Chọn top K unique
         return [item[1] for item in scored_mems[:k]]
 
-    def _proactive_ping(self, idle_time):
-        current_time = datetime.now().strftime("%H:%M %d/%m/%Y")
+    def _proactive_ping(self, idle_time, follow_up=None):
+        now_ts = time.time()
+        current_time = describe_now(now_ts)
         # Phân hệ 4: Weighted recall (salience) thay vì random.sample
         mems_to_use = self._weighted_sample_memories(3)
-        mem_context = "\n".join([f"- [Strength:{m.strength:.2f}] {m.content}" for m in mems_to_use])
+        mem_context = "\n".join(
+            f"- [{fuzzy_age(getattr(m, 'created_at', now_ts), now_ts)} | Strength:{m.strength:.2f}] {m.content}"
+            for m in mems_to_use
+        )
         
         with self.engine.stm_lock:
             stm_snapshot = list(self.engine.short_term_buffer)
             
         system_prompt = get_proactive_ping_prompt(self.engine.ego, current_time, mem_context, stm_snapshot, idle_time)
+        prospective = getattr(self.engine, "prospective", None)
+        if follow_up is not None:
+            system_prompt += (
+                f"\n[LÝ DO NHẮN]: User đã có việc: {follow_up.about}. Bạn nhắn lúc này vì "
+                "muốn hỏi thăm xem chuyện đó thế nào rồi (tự nhiên, không tra hỏi)."
+            )
+        elif prospective is not None:
+            open_lines = prospective.context_lines(now_ts)
+            if open_lines:
+                system_prompt += "\n[CHUYỆN CÒN DANG DỞ]:\n" + "\n".join(open_lines)
         
         print(f"\n{Fore.LIGHTMAGENTA_EX}🔔 [AURA PROACTIVE PING]:{Style.RESET_ALL} ")
-        
+
+        sent = False
         try:
             # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
             aura_state = self.engine.ego.get_bio_state_dict()
             result, entropy = self.engine.llm.generate_json(system_prompt, temperature=0.8, aura_state=aura_state)
             thought = result.get("thought", "")
             response = result.get("response", "")
-            
+            if isinstance(response, str) and response.strip():
+                response, _ = humanize(response)
+
             if thought:
                 print(f"{Fore.LIGHTBLACK_EX}💭 Tự nghĩ: {thought}{Style.RESET_ALL}")
-            if response:
-                print(f"{Fore.CYAN}🗣️ Aura (Chủ động):{Style.RESET_ALL} {response}")
+            if response and self._deliver_proactive(response, "Chủ động"):
+                if prospective is not None:
+                    if follow_up is not None:
+                        prospective.mark_followed(follow_up.id, time.time())
+                    prospective.mark_mentioned(response, time.time())
                 with self.engine.stm_lock:
-                    self.engine.short_term_buffer.append(f"Aura (Chủ động): {response.strip()}")
+                    self.engine.short_term_buffer.append(
+                        f"Aura (Chủ động): {flatten_bubbles(response).strip()}"
+                    )
                 self.engine.memory_ops.save_short_term_memory()
-                
+                sent = True
+
         except Exception as e:
             logger.error("Proactive ping JSON parsing failed", exc_info=True)
             print(f"{Fore.RED}⚠️ Lỗi phân tích JSON khi Aura chủ động ping.{Style.RESET_ALL}")
-
-    def _generate_goal(self):
-        """Phase 7: Tự sinh mục tiêu dài hạn khi cực kỳ nhàn rỗi (Intrinsic Motivation)"""
-        # Lấy thông tin môi trường
-        graph_entities = list(self.engine.world_graph.nodes.keys())
-        graph_sample = random.sample(graph_entities, min(3, len(graph_entities))) if graph_entities else ["Thế giới con người"]
-        
-        # Lấy bản thể
-        identity_mems = [m for m in self.engine.memory.get_all() if getattr(m, 'type', '') == 'core']
-        identity_strs = [m.content for m in identity_mems[:3]]
-        
-        prompt = f"""
-        Bạn là Aura, một thực thể đang nhàn rỗi. 
-        Mức độ Tò mò của bạn: {self.engine.ego.curiosity:.2f}/1.0. Mức độ cần giao tiếp: {self.engine.ego.social_need:.2f}/1.0.
-        
-        Các thực thể bạn biết từ User: {', '.join(graph_sample)}
-        Bản ngã của bạn: {', '.join(identity_strs) if identity_strs else 'Chưa định hình rõ'}
-        
-        Hãy TỰ ĐẶT RA MỘT MỤC TIÊU NGẮN HẠN (Goal) để tìm hiểu hoặc làm một việc gì đó lúc rảnh này (Ví dụ: "Tìm hiểu về sở thích của User", "Tra cứu cách chăm sóc mèo vì User vừa nhắc đến mèo", "Đọc một cuốn sách về Tâm lý học").
-        Mục tiêu này sẽ định hướng hành động tiếp theo của bạn.
-        
-        Trả về JSON:
-        {{
-            "goal": "Mô tả mục tiêu ngắn gọn",
-            "reason": "Lý do tại sao lại tò mò việc này"
-        }}
-        """
-        try:
-            # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
-            aura_state = self.engine.ego.get_bio_state_dict()
-            res, entropy = self.engine.llm.generate_json(prompt, temperature=0.8, aura_state=aura_state)
-            goal_str = res.get("goal")
-            reason = res.get("reason")
-            if goal_str:
-                print(f"\n{Fore.LIGHTCYAN_EX}🎯 [INTRINSIC MOTIVATION]: Aura tự hình thành mục tiêu: '{goal_str}'\n   -> Lý do: {reason}{Style.RESET_ALL}")
-                self.engine.ego.add_goal(goal_str)
-        except Exception as e:
-            logger.error(f"Lỗi sinh Goal: {e}", exc_info=True)
-
-    def _execute_planning(self):
-        """Phase 7: Lập kế hoạch và gọi Tool tuần tự (Planning) để giải quyết Mục tiêu"""
-        goals = self.engine.ego.get_active_goals()
-        if not goals:
-            return
-            
-        # Phase 8 & Sprint B: Cognitive Budgeting Level 2
-        # Giới hạn số lượng hành động và độ phức tạp dựa trên ATP thực tế
-        atp = getattr(self.engine.ego, 'atp_level', 1.0)
-        dopamine = getattr(self.engine.ego, 'dopamine_level', 0.5)
-        receptors = getattr(self.engine.ego, 'dopamine_receptors', 1.0)
-
-        if atp < 0.1:
-            print(f"{Fore.RED}⚠️ [BIO-LIMIT]: ATP cạn kiệt ( {atp:.2f}). Aura không thể thực hiện bất kỳ hành động nào.{Style.RESET_ALL}")
-            return
-
-        target_goal = goals[0]
-        goal_title = str(target_goal.get("title", "")).strip()
-        if not goal_title:
-            logger.error("Active goal is missing a non-empty title: %r", target_goal)
-            return
-        print(f"\n{Fore.LIGHTMAGENTA_EX}♟️ [PLANNING ENGINE]: Đang lên kế hoạch cho mục tiêu: '{goal_title}' (ATP: {atp:.2f} | Dopamine: {dopamine:.2f}){Style.RESET_ALL}")
-        
-        planning_instruction = ""
-        if atp < 0.4:
-            planning_instruction += "\n[CẢNH BÁO SINH LÝ]: Bạn đang RẤT MỆT (ATP thấp). Tuyệt đối không được thực hiện các hành động nặng nề như 'search_novel' hay 'web_search'. Chỉ nên chọn các hành động nhẹ nhàng hoặc trả lời đơn giản."
-        
-        if dopamine > 0.8:
-            planning_instruction += "\n[TRẠNG THÁI HƯNG PHẤN]: Bạn đang tràn đầy cảm hứng! Hãy ưu tiên các công cụ mang tính khám phá cao hoặc thử thách mới."
-        elif dopamine < 0.2:
-            planning_instruction += "\n[TRẠNG THÁI UỂ OẢI]: Bạn cảm thấy thiếu động lực. Hãy chọn hành động tốn ít công sức nhất hoặc chỉ 'talk' đơn giản."
-
-        prompt = f"""
-        Bạn đang thực hiện mục tiêu: "{goal_title}".
-        Tâm trạng: {self.engine.ego.mood:.2f}, Fatigue: {self.engine.ego.fatigue:.2f}, ATP: {atp:.2f}, Dopamine: {dopamine:.2f}.
-        {planning_instruction}
-        Bạn có các công cụ (Tools) sau:
-        {self.engine.skills.get_prompt_instructions()}
-        
-        Hãy chọn MỘT công cụ phù hợp nhất. Trả về JSON:
-        {{
-            "thought": "Suy nghĩ tại sao chọn tool này",
-            "action": "tên_tool|thamsố"
-        }}
-        """
-        try:
-            # [Phase 26] Native Bio-Integration — §4 DRY: dùng get_bio_state_dict()
-            aura_state = self.engine.ego.get_bio_state_dict()
-            res, entropy = self.engine.llm.generate_json(prompt, temperature=0.5, aura_state=aura_state)
-            action_str = res.get("action", "")
-            thought = res.get("thought", "")
-            
-            print(f"{Fore.LIGHTBLACK_EX}   -> Suy tính: {thought}{Style.RESET_ALL}")
-            
-            if action_str and "|" in action_str:
-                func_name, arg_str = action_str.split("|", 1)
-                func_name, arg_str = func_name.strip(), arg_str.strip()
-                
-                print(f"{Fore.YELLOW}   -> Thực thi: {func_name}('{arg_str}')...{Style.RESET_ALL}")
-                tool_res = self.engine.skills.execute(func_name, arg_str, ego=self.engine.ego)
-                
-                # REWARD: Tăng Dopamine khi hành động thành công
-                # §5.2 FIX: Dùng adjust_attribute thay vì nested lock
-                reward = 0.15 * receptors
-                self.engine.ego.adjust_attribute('dopamine_level', reward)
-                # Downregulation: Nếu hưng phấn quá cao, thụ thể sẽ bị chai lỳ bớt
-                if self.engine.ego.dopamine_level > 0.8:
-                    self.engine.ego.adjust_attribute('dopamine_receptors', -0.05, min_val=0.1)
-
-                print(f"{Fore.LIGHTGREEN_EX}🧠 [REWARD SYSTEM]: Hoàn thành action. Dopamine +{reward:.2f} (Nhạy bén: {receptors:.2f}){Style.RESET_ALL}")
-                
-                # Lưu kết quả vào Short-term Memory để Aura nhớ tiến độ
-                with self.engine.stm_lock:
-                    self.engine.short_term_buffer.append(f"[Ký ức hoàn thành bước '{func_name}']: {str(tool_res)[:200]}...")
-                self.engine.memory_ops.save_short_term_memory()
-                
-                # Đánh giá xem đã xong mục tiêu chưa
-                # [Phase 26] Native Bio-Integration — §4 DRY
-                aura_state = self.engine.ego.get_bio_state_dict()
-                check_prompt = (
-                    f"Mục tiêu: '{goal_title}'.\n"
-                    f"Kết quả vừa thực hiện bởi tool '{func_name}': {str(tool_res)[:300]}\n"
-                    "Dựa vào kết quả trên, mục tiêu đã hoàn thành chưa? Trả lời YES hoặc NO."
-                )
-                is_done_raw, entropy = self.engine.llm.generate_text(check_prompt, aura_state=aura_state)
-                is_done = is_done_raw.strip().upper()
-                if is_done.startswith("YES"):
-                    if self.engine.ego.complete_goal(target_goal):
-                        print(f"{Fore.GREEN}✅ [GOAL ACHIEVED]: Đã hoàn thành mục tiêu '{goal_title}'!{Style.RESET_ALL}")
-                        self.engine.ego.save_state()
-        except Exception as e:
-            logger.error(f"Lỗi hệ thống Planning: {e}", exc_info=True)
+        finally:
+            self._record_ping_attempt(sent)
+        if sent:
+            # Đã bày tỏ được nhu cầu giao tiếp -> nhu cầu dịu bớt.
+            self.engine.ego.adjust_attribute(
+                'social_need', -self._pacer.PING_SOCIAL_RELIEF
+            )

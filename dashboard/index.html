@@ -885,7 +885,6 @@
             if (!getAuthToken()) return;
             try {
                 const requestedIds = Array.from(pendingChatIds).slice(0, 50);
-                if(requestedIds.length === 0) return;
                 // Rotate the polling window so stale/orphaned ids cannot keep
                 // newer responses permanently outside the first batch.
                 requestedIds.forEach(id => {
@@ -893,6 +892,8 @@
                     pendingChatIds.add(id);
                 });
                 const params = new URLSearchParams();
+                // Also collect messages Aura starts on her own (pings).
+                params.append('proactive', '1');
                 requestedIds.forEach(id => params.append('id', id));
                 const res = await apiFetch(`/api/chat?${params.toString()}`);
                 if(!res || !res.ok) return;
@@ -902,7 +903,7 @@
                     data.messages.forEach(msg => {
                         if(msg.receipt) receipts.push({receipt: msg.receipt, id: msg.id});
                         if(msg.id && !seenChatIds.has(msg.id)) {
-                            appendMessage(msg.role, msg.content);
+                            appendBubbles(msg.role, msg.content);
                             rememberChatId(msg.id);
                         }
                     });
@@ -954,6 +955,22 @@
             setTimeout(() => {
                 container.scrollTop = container.scrollHeight;
             }, 50);
+        }
+
+        // Aura marks message breaks with [SEND]: show them as separate
+        // bubbles, each after a short "typing" pause.
+        function appendBubbles(role, content) {
+            const chunks = String(content || '')
+                .split(/\s*\[\s*send\s*\]\s*/i)
+                .map(chunk => chunk.trim())
+                .filter(chunk => chunk.length > 0);
+            let delay = 0;
+            chunks.forEach((chunk, index) => {
+                if(index > 0) {
+                    delay += Math.min(6000, Math.max(500, chunk.length * 55));
+                }
+                setTimeout(() => appendMessage(role, chunk), delay);
+            });
         }
 
         async function sendChatMessage(e) {

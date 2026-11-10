@@ -82,10 +82,15 @@ _TICK_BIOLOGY_FIELDS = (
     "stress_critical",
     "dopamine_receptors",
     "dopamine_level",
+    "dopamine_baseline",
+    "reward_expectations",
+    "current_intimacy",
+    "relational_friction",
     "resilience",
     "sleep_debt",
     "days_without_sleep",
     "_sleep_warning_cooldown",
+    "_last_circadian_time",
 )
 
 
@@ -304,6 +309,12 @@ class CognitiveEngine:
         # storage so console/dashboard traffic cannot hold the DB lock.
         self.short_term_buffer: List[str] = []
         self.stm_lock = threading.Lock()
+        from core.engine.lingering_thought import LingeringThought
+
+        self.lingering_thought = LingeringThought()
+        from core.engine.life_log import LifeLog
+
+        self.life_log = LifeLog()
         self.stm_file_path = Config.STM_FILE  # Phase 15: dung Config thay hardcode
         self.last_interaction_time = time.time()
         
@@ -349,10 +360,15 @@ class CognitiveEngine:
         self.reader = BackgroundReader(self.llm)
 
         from core.world_graph import WorldGraph
-        self.world_graph = WorldGraph()
+        self.world_graph = WorldGraph(Config.WORLD_GRAPH_FILE)
 
         from core.value_system import ValueSystem
-        self.value_system = ValueSystem()
+        self.value_system = ValueSystem(Config.VALUES_FILE)
+
+        from core.prospective_memory import ProspectiveMemory
+        self.prospective = ProspectiveMemory(Config.PROSPECTIVE_MEMORY_FILE)
+        from core.relationship import InsideJokes
+        self.inside_jokes = InsideJokes(Config.INSIDE_JOKES_FILE)
 
         from core.local_perception import LocalPerception
         self.local_perception = LocalPerception()
@@ -1046,6 +1062,11 @@ class CognitiveEngine:
         scale = normalized_dt / observed
         return ({state: seconds * scale for state, seconds in deltas.items()}, snapshot)
 
+    def _memory_maintenance_due(self) -> bool:
+        last = getattr(self, "_last_memory_maintenance_at", None)
+        interval = float(getattr(Config, "MEMORY_MAINTENANCE_INTERVAL_SECONDS", 0.0))
+        return last is None or time.monotonic() - last >= interval
+
     @staticmethod
     def _snapshot_tick_biology(ego) -> dict[str, Any]:
         """Capture only RAM fields mutated by the tick's biological phase."""
@@ -1198,8 +1219,16 @@ class CognitiveEngine:
                 # Phase 14: Non-linear Metabolism (Exponential Biological Curves)
                 # Fatigue tang nhanh hon khi da met (kieu quadratic resistance)
                 # f_new = f + rate * dt * (1 + f) — cang met cang mat suc nhanh
-                if not biology_cancelled:
-                    fatigue_rate = 0.002 / 60  # baseline per second
+                # Chỉ mệt thêm khi đang thức; lúc ngủ SelfModel tự hồi phục.
+                from core.engine import sleep_cycle
+
+                if not biology_cancelled and not sleep_cycle.is_asleep(
+                    self.ego, time.time()
+                ):
+                    # Cùng với BioController (~0.01/h) và nhịp ngày đêm, một
+                    # ngày thức ~16 giờ đưa fatigue lên ~0.7: buồn ngủ đúng giờ
+                    # đi ngủ thay vì gục giữa buổi sáng (trước đây 0.12/h).
+                    fatigue_rate = 0.025 / 3600  # baseline per second
                     self.ego.fatigue = min(
                         1.0,
                         self.ego.fatigue
@@ -1236,9 +1265,11 @@ class CognitiveEngine:
                 self.ego.energy = min(1.0, self.ego.energy + 0.01 * dt / 60)
                 # Integrate state-specific metabolism from the residency
                 # ledger. Catch-up after a busy actor must not look like IDLE.
+                # Tốc độ tính theo giờ (IDLE 0.2/h, bận 0.04/h) để ATP thực sự
+                # cạn dần khi thức; hồi phục hoàn toàn diễn ra trong lúc ngủ.
                 atp_recovery = (
-                    (0.05 * idle_dt) + (0.01 * non_idle_dt)
-                ) / 60
+                    (0.2 * idle_dt) + (0.04 * non_idle_dt)
+                ) / 3600
                 self.ego.atp_level = min(1.0, self.ego.atp_level + atp_recovery)
 
                 if reading_dt > 0.0:
@@ -1325,6 +1356,18 @@ class CognitiveEngine:
             )
 
             # 3 & 4. Memory decay + Garbage collection
+            # Both read the whole store. Decay is checkpointed per memory by
+            # wall clock, so a slower cadence loses nothing; a metabolic GC
+            # request from the circadian phase still runs immediately.
+            if not (metabolic_gc_requested or self._memory_maintenance_due()):
+                _set_status(maintenance_status="skipped", phase="dashboard")
+                if _is_cancelled():
+                    _set_status(outcome="cancelled")
+                    return True
+                self._dump_mind_state()
+                _set_status(phase="committed", outcome="succeeded")
+                return True
+
             # MemoryManager methods own memory.lock. Snapshot ego state first so
             # the two subsystem locks are never held at the same time.
             with self.ego.lock:
@@ -1387,6 +1430,7 @@ class CognitiveEngine:
                 self.memory.enforce_garbage_collection()
 
             maintenance_committed = True
+            self._last_memory_maintenance_at = time.monotonic()
             _set_status(maintenance_status="committed", phase="dashboard")
             if _is_cancelled():
                 _set_status(outcome="cancelled")

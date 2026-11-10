@@ -316,8 +316,12 @@ class RuntimeLockingTests(unittest.TestCase):
             )
 
         self.assertTrue(consumed)
-        self.assertAlmostEqual(engine.ego.fatigue, 0.20295)
-        self.assertAlmostEqual(engine.ego.atp_level, 0.4725)
+        # 0.2 + waking rate 0.025/h * 60 s * (1 + 0.5 * 0.2) + thinking 0.001 * 45 / 60
+        self.assertAlmostEqual(
+            engine.ego.fatigue, 0.2 + 0.025 / 3600 * 60 * 1.1 + 0.001 * 45 / 60
+        )
+        # 0.5 + 0.04 * 60 / 3600 (non-idle recovery) - 0.05 * 45 / 60 (thinking)
+        self.assertAlmostEqual(engine.ego.atp_level, 0.5 + 0.04 / 60 - 0.0375)
         self.assertAlmostEqual(engine.ego.energy, 0.50875)
         self.assertAlmostEqual(engine.ego.curiosity, 0.4995)
 
@@ -625,52 +629,11 @@ class RuntimeTimeTests(unittest.TestCase):
         release.set()
         first.join(1.0)
 
-    def test_planner_completes_structured_goal_without_legacy_beliefs(self):
-        goal = {"title": "verify planner", "progress": 0, "status": "active"}
-        ego = object.__new__(SelfModel)
-        ego.lock = threading.Lock()
-        ego.long_term_goals = [goal]
-        ego.atp_level = 1.0
-        ego.dopamine_level = 0.5
-        ego.dopamine_receptors = 1.0
-        ego.mood = 0.0
-        ego.fatigue = 0.0
-        ego.get_bio_state_dict = Mock(return_value={})
-        ego.save_state = Mock()
-
-        llm = SimpleNamespace(
-            generate_json=Mock(return_value=({"thought": "use tool", "action": "safe_tool|payload"}, 0.0)),
-            generate_text=Mock(return_value=("YES", 0.0)),
-        )
-        skills = SimpleNamespace(
-            get_prompt_instructions=Mock(return_value="safe_tool"),
-            execute=Mock(return_value="verified"),
-        )
-        engine = SimpleNamespace(
-            ego=ego,
-            llm=llm,
-            skills=skills,
-            stm_lock=threading.Lock(),
-            short_term_buffer=[],
-            memory_ops=SimpleNamespace(save_short_term_memory=Mock()),
-        )
-        controller = AutonomousController(engine)
-
-        with patch("builtins.print"):
-            controller._execute_planning()
-
-        planning_prompt = llm.generate_json.call_args.args[0]
-        self.assertIn('mục tiêu: "verify planner"', planning_prompt)
-        self.assertNotIn("'title':", planning_prompt)
-        self.assertEqual(goal["status"], "completed")
-        self.assertEqual(goal["progress"], 100)
-        self.assertIn("completed_at", goal)
-        ego.save_state.assert_called_once()
-
     def test_identity_reflection_persists_the_new_insight(self):
         ego = SimpleNamespace(
             lock=threading.Lock(),
-            evolved_insight="old insight",
+            # A revision of the current self, not a wholesale rewrite.
+            evolved_insight="I verify changes.",
             actionable_lessons=[],
         )
         result = {

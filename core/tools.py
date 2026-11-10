@@ -3,6 +3,7 @@ import urllib.parse
 import json
 from bs4 import BeautifulSoup
 from core.skills import Skill, SkillRegistry
+from core.tool_result import ToolFailure
 
 def web_search(query: str) -> str:
     """Tự động tìm kiếm trên DuckDuckGo Lite bằng HTTP truyền thống (không cần API Key)."""
@@ -31,7 +32,7 @@ def web_search(query: str) -> str:
             
         return "\n".join([f"- {r}" for r in results])
     except Exception as e:
-        return f"Lỗi tìm kiếm: {e}"
+        return ToolFailure(f"Lỗi tìm kiếm: {e}")
 
 def read_time() -> str:
     """Trả về thời gian hiện tại."""
@@ -72,7 +73,7 @@ def execute_tool(func_name: str, args: dict) -> str:
         return web_search(args.get("query", ""))
     elif func_name == "read_time":
         return read_time()
-    return f"Unknown tool: {func_name}"
+    return ToolFailure(f"Unknown tool: {func_name}")
 
 def get_skill_registry() -> SkillRegistry:
     """Khởi tạo và trả về SkillRegistry với các kỹ năng mặc định."""

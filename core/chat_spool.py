@@ -502,6 +502,42 @@ class ChatSpool:
             self._atomic_write_envelope(envelope, final_path)
             return PublishResult(message_id=request_id, created=True)
 
+    @_translate_os_errors("proactive publication")
+    def publish_proactive(self, content: str) -> PublishResult:
+        """Publish a message Aura starts herself (no request to answer).
+
+        Uses the response envelope unchanged: it is keyed by a fresh id of its
+        own, so delivery, ACK and expiry work exactly as for replies. Keep
+        proactive messages in their own spool (see
+        ``create_configured_proactive_spool``) so browsers can claim them
+        without knowing the id in advance.
+        """
+        if self.queue_type != "response":
+            raise ChatSpoolError("publish_proactive requires a response spool")
+        content = self._validate_content(content)
+
+        with self._enqueue_lock():
+            if self._active_count_unsafe() >= self.max_count:
+                raise QueueFull("Proactive message queue is full")
+            while True:
+                message_id = self._make_id()
+                if self._find_message_path(message_id) is None:
+                    break
+            envelope = self._validate_envelope(
+                ChatEnvelope(
+                    schema=SCHEMA_VERSION,
+                    id=message_id,
+                    kind=RESPONSE_KIND,
+                    created_at_ns=int(self._clock_ns()),
+                    role="aura",
+                    content=content,
+                    reply_to=message_id,
+                )
+            )
+            final_path = self._state_path(self.pending_dir, f"{message_id}.json")
+            self._atomic_write_envelope(envelope, final_path)
+            return PublishResult(message_id=message_id, created=True)
+
     @_translate_os_errors("staged response promotion")
     def promote_staged(self, limit: int = 100) -> int:
         """Move durable response outbox entries into browser delivery capacity."""
@@ -626,6 +662,26 @@ class ChatSpool:
             self._fsync_directory(self.dead_dir)
             self._prune_directory(self.dead_dir, self.max_dead_count)
             return True
+
+    @_translate_os_errors("peek")
+    def peek_next(self) -> Optional[ChatEnvelope]:
+        """Oldest pending envelope without claiming it (no lease starts).
+
+        Lets a consumer decide to leave a message waiting (e.g. Aura is
+        asleep) without risking lease expiry into the dead-letter queue.
+        """
+        for pending_path in sorted(self.pending_dir.glob("*.json"), key=lambda p: p.name):
+            if not _MESSAGE_ID_RE.fullmatch(pending_path.stem):
+                continue
+            try:
+                envelope = self._deserialize(pending_path.read_bytes())
+            except FileNotFoundError:
+                continue  # claimed concurrently
+            except (ChatSpoolError, ValueError):
+                continue  # claim() quarantines invalid envelopes
+            if envelope.id == pending_path.stem:
+                return envelope
+        return None
 
     @_translate_os_errors("claim")
     def claim(
@@ -845,6 +901,21 @@ def create_configured_chat_spools() -> tuple[ChatSpool, ChatSpool]:
     return requests, responses
 
 
+@_translate_os_errors("configured initialization")
+def create_configured_proactive_spool() -> ChatSpool:
+    """Outbox for messages Aura sends on her own (pings, voiced rumination)."""
+    from config import Config
+
+    return ChatSpool(
+        Config.CHAT_PROACTIVE_SPOOL_DIR,
+        "response",
+        max_payload_bytes=Config.CHAT_RESPONSE_MAX_BYTES,
+        max_count=Config.CHAT_SPOOL_MAX_MESSAGES,
+        lease_seconds=Config.CHAT_SPOOL_LEASE_SECONDS,
+        retention_seconds=Config.CHAT_RESPONSE_RETENTION_SECONDS,
+    )
+
+
 __all__ = [
     "ChatEnvelope",
     "ChatSpool",
@@ -859,4 +930,5 @@ __all__ = [
     "RecoveryReport",
     "SpoolLockTimeout",
     "create_configured_chat_spools",
+    "create_configured_proactive_spool",
 ]

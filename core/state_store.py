@@ -394,6 +394,9 @@ class StateStore:
             except StateStoreIOError as exc:
                 if mutable_current and isinstance(exc.__cause__, (FileNotFoundError, PermissionError)):
                     last_retryable = exc
+                    # Mirror the writer's back-off: an immediate retry can land
+                    # inside the same Windows replacement window every time.
+                    time.sleep(0.001)
                     continue
                 raise
             identity = self._identity(before, path, op)
@@ -402,12 +405,14 @@ class StateStore:
             except FileNotFoundError as exc:
                 if mutable_current:
                     last_missing = exc
+                    time.sleep(0.001)
                     continue
                 self._error(StateStoreIOError, "file open failed", op, path, InspectionIssue.IO_FAILURE, cause=exc)
             except OSError as exc:
                 if mutable_current and isinstance(exc, PermissionError):
                     last_retryable = StateStoreIOError("CURRENT open raced replacement", operation=op, path=path,
                         issue=InspectionIssue.IO_FAILURE)
+                    time.sleep(0.001)
                     continue
                 self._error(StateStoreIOError, "file open failed", op, path, InspectionIssue.IO_FAILURE, cause=exc)
             try:

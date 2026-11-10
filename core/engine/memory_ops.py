@@ -1436,11 +1436,34 @@ class MemoryOperationsController:
             # Mask ngày tháng (DD/MM/YYYY)
             content = re.sub(r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b', '[ngày tháng bị nhòe]', content)
             
-            if fatigue > 0.9:
-                # Mask cả tên riêng (chữ viết hoa ở giữa câu) - Sương mù nặng
-                content = re.sub(r'(?<!^)\b[A-ZÀ-Ỹ][a-zà-ỹ]+\b', '[tên ai đó?]', content)
-        
+        # Tên riêng không còn bị đoán bằng chữ hoa (sai với tiếng Việt); ký ức
+        # mờ được rút gọn thành ý chính ở faint_gist() thay vào đó.
         return content
+
+    # Below this strength a memory is only half there: the gist and the
+    # feeling remain, names and details are gone ("nhớ mang máng").
+    FAINT_STRENGTH = 0.25
+    FAINT_STRENGTH_WHEN_TIRED = 0.5
+    _GIST_CHARS = 70
+
+    def is_faint(self, memory) -> bool:
+        if getattr(memory, "is_flashbulb", False):
+            return False  # khắc sâu, không bao giờ mờ
+        strength = float(getattr(memory, "strength", 1.0) or 0.0)
+        tired = getattr(self.engine.ego, "fatigue", 0.0) > 0.75
+        limit = self.FAINT_STRENGTH_WHEN_TIRED if tired else self.FAINT_STRENGTH
+        return strength < limit
+
+    @classmethod
+    def faint_gist(cls, content: str) -> str:
+        """First clause only, without the specifics a fading memory loses."""
+        import re
+
+        first = re.split(r"(?<=[.!?;])\s|\n", str(content).strip(), maxsplit=1)[0]
+        first = re.sub(r"\d", "…", first)
+        if len(first) > cls._GIST_CHARS:
+            first = first[: cls._GIST_CHARS].rsplit(" ", 1)[0] + "…"
+        return first
 
     def load_short_term_memory(self):
         """Khoi phuc bo nho ngan han tu o cung neu thoi gian chua troi qua qua lau (3 tieng)"""
@@ -1780,13 +1803,14 @@ class MemoryOperationsController:
                     print(f"{Fore.LIGHTYELLOW_EX}🧐 [HYBRID CONFLICT]: {integrity_check['reason']}{Style.RESET_ALL}")
                     internal_thought += f" [MÂU THUẪN: {integrity_check['reason']}]"
                     new_importance = min(1.0, new_importance * integrity_check["impact_multiplier"])
-                    # Gắn flag để LLM supervisor xử lý sau
-                    user_input = f"[Conflict] {user_input}"
+                    # Mâu thuẫn được ghi trong internal_thought; KHÔNG sửa lời
+                    # User, nếu không ký ức sẽ lưu sai nguyên văn câu họ nói.
                 
                 ans, _ = self.engine.llm.generate_text(
                     check_prompt,
                     temperature=0.1,
                     force_local=force_local,
+                    bio_throttle=False,
                 ); ans = ans.strip().upper()
                 # B15: dùng startswith thày 'in' — 'YES, because...' không bị detect lầm
                 if ans.startswith("YES"):
@@ -2772,6 +2796,7 @@ class MemoryOperationsController:
             prompt,
             temperature=0.7,
             model_override=Config.DEEP_MODEL_NAME,
+            bio_throttle=False,
         )
         try:
             insights = _parse_dream_insights(raw_response)
@@ -2971,7 +2996,7 @@ class MemoryOperationsController:
                     "Bạn có nói câu nào vô tâm, có thái độ gắt gỏng, lạnh nhạt không đáng có không? "
                     "Trả lời 'CÓ' hoặc 'KHÔNG'. Nếu CÓ, hãy nêu lý do thành 1 câu ngắn bắt đầu bằng 'Lý do: '."
                 )
-                guilt_res, _ = self.engine.llm.generate_text(guilt_prompt, temperature=0.2); guilt_res = guilt_res.strip()
+                guilt_res, _ = self.engine.llm.generate_text(guilt_prompt, temperature=0.2, bio_throttle=False); guilt_res = guilt_res.strip()
                 # B15: dùng startswith — tránh 'CÓ thể' bị detect lầm
                 if guilt_res.strip().upper().startswith("CÓ") or "LÝ DO" in guilt_res.upper():
                     guilt_reason = guilt_res.replace("CÓ", "").strip(":- ,.\n")
@@ -3658,6 +3683,7 @@ class MemoryOperationsController:
                 raw_response, _ = self.engine.llm.generate_text(
                     prompt,
                     temperature=0.3,
+                    bio_throttle=False,
                 )
                 decision = _parse_reappraisal_decision(raw_response)
                 plan = _build_reappraisal_plan(
@@ -3688,6 +3714,13 @@ class MemoryOperationsController:
 
     def _identity_evolution_phase(self, bio_report: str = None):
         """[Phase 21] Bộ máy Phản tư: Tổng hợp STM trong ngày và đúc kết thành Core Identity & Values."""
+        from core import identity_drift
+
+        last_reflection = float(
+            getattr(self.engine.ego, "last_identity_reflection", 0.0) or 0.0
+        )
+        if time.time() - last_reflection < identity_drift.MIN_REFLECTION_GAP_SECONDS:
+            return  # đã phản tư trong đêm nay; giấc ngủ trưa không đúc kết lại
         with self.engine.stm_lock:
             buffer_snapshot = list(self.engine.short_term_buffer)
         if not buffer_snapshot or len(buffer_snapshot) < 4:
@@ -3695,6 +3728,7 @@ class MemoryOperationsController:
         with self.engine.ego.lock:
             previous_identity = self.engine.ego.evolved_insight
             previous_lessons = list(self.engine.ego.actionable_lessons)
+            previous_pending = getattr(self.engine.ego, "pending_identity_insight", "")
             
         print(f"\n{Fore.LIGHTBLUE_EX}🧠 [IDENTITY EVOLUTION]: Trích xuất bài học về bản thể và hệ giá trị...{Style.RESET_ALL}")
         history_str = "\n".join(buffer_snapshot)
@@ -3703,6 +3737,8 @@ class MemoryOperationsController:
         
         prompt = f"""
         Bạn là Aura. Hãy phản tư về những tương tác trong ngày hôm nay:
+        --- BẢN SẮC HIỆN TẠI CỦA BẠN ---
+        {previous_identity}
         --- LỊCH SỬ TRÒ CHUYỆN ---
         {history_str}
         
@@ -3710,7 +3746,9 @@ class MemoryOperationsController:
         {current_values}
         
         Nhiệm vụ:
-        1. Đúc kết một câu trần thuật về bản sắc (Tôi là ai trong mắt người dùng?).
+        1. Đúc kết một câu trần thuật về bản sắc (Tôi là ai trong mắt người dùng?). Đây là CHỈNH SỬA
+           của "bản sắc hiện tại" ở trên: giữ phần cốt lõi, chỉ điều chỉnh theo những gì hôm nay
+           thật sự làm bạn thay đổi. Một ngày bình thường không làm con người đổi hẳn tính cách.
         2. Rút ra tối đa 3 BÀI HỌC HÀNH ĐỘNG (Actionable Lessons) để cải thiện giao tiếp hoặc tính cách vào ngày mai (Ví dụ: "Tôi nên bớt luyên thuyên khi User đang bận", "Tôi cần thể hiện sự quan tâm nhiều hơn đến sức khỏe của User").
         3. Xác định xem hệ giá trị (Core Values) hoặc nhận thức về giá trị của User (User Values) có thay đổi không.
         
@@ -3724,7 +3762,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.7)
+            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.7, bio_throttle=False)
             import json
             json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(json_str)
@@ -3769,7 +3807,21 @@ class MemoryOperationsController:
                     "type": value_type,
                     "reason": reason,
                 })
+            with self.engine.ego.lock:
+                self.engine.ego.last_identity_reflection = time.time()
+            adopt_insight = False
             if insight and len(insight) > 10:
+                adopt_insight, pending_insight = identity_drift.decide(
+                    previous_identity, insight, previous_pending
+                )
+                with self.engine.ego.lock:
+                    self.engine.ego.pending_identity_insight = pending_insight
+                if not adopt_insight:
+                    print(
+                        f"{Fore.LIGHTBLUE_EX}🌗 [IDENTITY]: Hôm nay khiến Aura nghĩ khác hẳn về bản thân; "
+                        f"cần thêm thời gian trước khi tin vào điều đó.{Style.RESET_ALL}"
+                    )
+            if adopt_insight:
                 identity_memory = MemoryTrace(
                     id=str(uuid.uuid5(
                         uuid.NAMESPACE_URL,
@@ -3816,12 +3868,26 @@ class MemoryOperationsController:
 
             # [Phase 23] Sync to identity.json for permanent personality evolution
             try:
+                # Keep keys this phase does not own (e.g. override_device_id).
+                identity_data = {}
+                try:
+                    with open("identity.json", "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    if isinstance(existing, dict):
+                        identity_data.update(existing)
+                except (OSError, ValueError):
+                    pass
                 with self.engine.ego.lock:
-                    identity_data = {
+                    identity_data.update({
                         "evolved_insight": self.engine.ego.evolved_insight,
                         "actionable_lessons": self.engine.ego.actionable_lessons,
-                        "last_reflected": time.time()
-                    }
+                        "pending_identity_insight": getattr(
+                            self.engine.ego, "pending_identity_insight", ""
+                        ),
+                        "last_reflected": getattr(
+                            self.engine.ego, "last_identity_reflection", time.time()
+                        ),
+                    })
                 from core.utils import atomic_write_json
                 atomic_write_json("identity.json", identity_data)
                 print(f"{Fore.GREEN}💾 [IDENTITY SYNC]: Bản sắc và bài học đã được đồng bộ hóa vĩnh viễn.{Style.RESET_ALL}")
@@ -3839,6 +3905,8 @@ class MemoryOperationsController:
             with self.engine.ego.lock:
                 self.engine.ego.evolved_insight = previous_identity
                 self.engine.ego.actionable_lessons = previous_lessons
+                if hasattr(self.engine.ego, "pending_identity_insight"):
+                    self.engine.ego.pending_identity_insight = previous_pending
             get_logger("memory.ops").error(
                 "Identity evolution persistence failed operation=%s cause_type=%s",
                 exc.operation,
@@ -3850,6 +3918,8 @@ class MemoryOperationsController:
             with self.engine.ego.lock:
                 self.engine.ego.evolved_insight = previous_identity
                 self.engine.ego.actionable_lessons = previous_lessons
+                if hasattr(self.engine.ego, "pending_identity_insight"):
+                    self.engine.ego.pending_identity_insight = previous_pending
             get_logger("memory.ops").error(
                 "Identity evolution failed cause_type=%s",
                 type(exc).__name__,
@@ -3887,7 +3957,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            raw_gap, _ = self.engine.llm.generate_text(gap_prompt, temperature=0.3)
+            raw_gap, _ = self.engine.llm.generate_text(gap_prompt, temperature=0.3, bio_throttle=False)
             gap_data = json.loads(raw_gap.strip().replace("```json", "").replace("```", "").strip())
             
             if not gap_data.get("has_gap"):
@@ -3915,7 +3985,7 @@ class MemoryOperationsController:
             TRẢ VỀ DUY NHẤT MÃ NGUỒN PYTHON. KHÔNG GIẢI THÍCH.
             """
             
-            python_code, _ = self.engine.llm.generate_text(code_prompt, temperature=0.1)
+            python_code, _ = self.engine.llm.generate_text(code_prompt, temperature=0.1, bio_throttle=False)
             python_code = python_code.strip().replace("```python", "").replace("```", "").strip()
             
             source_is_safe, block_reason = dynamic_skills.validate_dynamic_skill_source(python_code)
@@ -4004,7 +4074,7 @@ class MemoryOperationsController:
         }}
         """
         try:
-            generated = self.engine.llm.generate_text(prompt, temperature=0.2)
+            generated = self.engine.llm.generate_text(prompt, temperature=0.2, bio_throttle=False)
             raw_response = generated[0] if isinstance(generated, tuple) else generated
         except Exception as exc:
             raise CalibrationError("inference", exc) from None
@@ -4397,7 +4467,7 @@ class MemoryOperationsController:
         Nếu không có mâu thuẫn, trả về {{"analysis": "Nhất quán", "resolutions": []}}.
         """
         try:
-            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=Config.DEEP_MODEL_NAME)
+            raw_res, _ = self.engine.llm.generate_text(prompt, temperature=0.1, model_override=Config.DEEP_MODEL_NAME, bio_throttle=False)
             json_str = raw_res.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(json_str)
             

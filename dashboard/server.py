@@ -18,6 +18,7 @@ from core.chat_spool import (
     PayloadTooLarge,
     QueueFull,
     create_configured_chat_spools,
+    create_configured_proactive_spool,
 )
 from core.interaction_policy import is_explicit_private_input
 from core.logger import get_logger
@@ -80,6 +81,11 @@ async def dashboard_auth_middleware(request: Request, call_next):
 @lru_cache(maxsize=1)
 def _get_chat_spools():
     return create_configured_chat_spools()
+
+
+@lru_cache(maxsize=1)
+def _get_proactive_spool():
+    return create_configured_proactive_spool()
 
 
 @lru_cache(maxsize=1)
@@ -221,13 +227,36 @@ async def send_chat(request: Request):
     except ChatSpoolError as exc:
         raise HTTPException(status_code=503, detail="Chat queue unavailable") from exc
 
+def _claim_proactive():
+    """Messages Aura started herself; any open dashboard may deliver them."""
+    spool = _get_proactive_spool()
+    spool.recover_stale()
+    spool.expire_stale_deliveries()
+    return spool.claim(limit=Config.CHAT_DELIVERY_BATCH_SIZE)
+
+
+def _claim_view(claim):
+    return {
+        "id": claim.envelope.id,
+        "role": claim.envelope.role,
+        "content": claim.envelope.content,
+        "receipt": claim.receipt,
+    }
+
+
 @app.get("/api/chat")
 def get_chat(request: Request):
     message_ids = list(dict.fromkeys(request.query_params.getlist("id")))
     if len(message_ids) > 100:
         raise HTTPException(status_code=400, detail="Too many chat ids")
+    proactive = []
+    if request.query_params.get("proactive") == "1":
+        try:
+            proactive = [_claim_view(claim) for claim in _claim_proactive()]
+        except ChatSpoolError as exc:
+            raise HTTPException(status_code=503, detail="Chat queue unavailable") from exc
     if not message_ids:
-        return {"messages": [], "terminal": []}
+        return {"messages": proactive, "terminal": []}
     try:
         requests, responses = _get_chat_spools()
         responses.recover_stale()
@@ -264,15 +293,7 @@ def get_chat(request: Request):
     except ChatSpoolError as exc:
         raise HTTPException(status_code=503, detail="Chat queue unavailable") from exc
     return {
-        "messages": [
-            {
-                "id": claim.envelope.id,
-                "role": claim.envelope.role,
-                "content": claim.envelope.content,
-                "receipt": claim.receipt,
-            }
-            for claim in claims
-        ],
+        "messages": proactive + [_claim_view(claim) for claim in claims],
         "terminal": terminal,
     }
 
@@ -293,7 +314,12 @@ async def acknowledge_chat(request: Request):
 
     try:
         _, responses = _get_chat_spools()
-        acked = [receipt for receipt in receipts if responses.ack(receipt)]
+        acked = []
+        for receipt in receipts:
+            # A receipt belongs to either a reply or a proactive message; the
+            # wrong spool simply has no such claim.
+            if responses.ack(receipt) or _get_proactive_spool().ack(receipt):
+                acked.append(receipt)
         _record_delivery_acks(acked)
     except InvalidReceipt as exc:
         raise HTTPException(status_code=400, detail="Invalid chat receipt") from exc

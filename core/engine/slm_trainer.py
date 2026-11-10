@@ -157,7 +157,7 @@ Không dùng markdown, viết liền mạch.
         )
 
     def distill_memories_to_dataset(self):
-        queue_path = os.path.join(Config.OUTPUT_DIR, "slm_finetune_data.txt")
+        queue_path = Config.SLM_FINETUNE_QUEUE_FILE
         if not os.path.exists(queue_path):
             return
 

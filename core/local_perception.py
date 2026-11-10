@@ -31,7 +31,7 @@ class LocalPerception:
 
     def __init__(
         self,
-        model_name: str = "cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
+        model_name: str | None = None,
         *,
         mode: PerceptionMode = "remote",
         service_url: str | None = None,
@@ -42,7 +42,7 @@ class LocalPerception:
             raise ValueError("mode must be either 'remote' or 'native'")
 
         self.mode: PerceptionMode = mode
-        self.model_name = model_name
+        self.model_name = model_name or Config.LOCAL_PERCEPTION_MODEL
         self.service_url = (service_url or Config.GPU_SERVICE_URL).rstrip("/")
         raw_token = (
             service_auth_token
@@ -155,16 +155,19 @@ class LocalPerception:
                 raise PerceptionError("Native sentiment model returned an invalid score")
 
             # CardiffNLP publishes semantic labels (negative/neutral/positive),
-            # while some Transformers versions expose generic LABEL_0..2.
+            # Vietnamese ViSoBERT/PhoBERT models publish NEG/NEU/POS. Generic
+            # LABEL_0..2 follows the CardiffNLP order (neg, neu, pos); ViSoBERT
+            # orders ids differently (0=NEG, 1=POS, 2=NEU), so only its named
+            # labels are trusted here.
             normalized_label = label.strip().lower()
 
-            if normalized_label in {"negative", "label_0"}:
+            if normalized_label in {"negative", "neg", "label_0"}:
                 valence = -0.7 * score
                 arousal = 0.8
-            elif normalized_label in {"neutral", "label_1"}:
+            elif normalized_label in {"neutral", "neu", "label_1"}:
                 valence = 0.0
                 arousal = 0.3
-            elif normalized_label in {"positive", "label_2"}:
+            elif normalized_label in {"positive", "pos", "label_2"}:
                 valence = 0.7 * score
                 arousal = 0.5
             else:

@@ -172,6 +172,16 @@ class Config(metaclass=_ConfigMeta):
     # fallback for existing local deployments and Kubernetes secrets.
     API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY", "")
     MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3-flash-preview")
+    # Any OpenAI-compatible chat endpoint for provider "openai": OpenAI itself,
+    # OpenRouter, Groq, or a local Ollama/LM Studio server
+    # (e.g. http://localhost:11434/v1). Local servers need no API key.
+    OPENAI_BASE_URL = (
+        os.getenv("AURA_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    ).rstrip("/")
+    OPENAI_MODEL = os.getenv("AURA_OPENAI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    # How Aura refers to herself and to her owner, kept consistent in every reply.
+    SELF_PRONOUN = os.getenv("AURA_SELF_PRONOUN", "em").strip() or "em"
+    OWNER_PRONOUN = os.getenv("AURA_OWNER_PRONOUN", "anh").strip() or "anh"
     DEEP_MODEL_NAME = os.getenv("DEEP_MODEL_NAME", "gemini-3.1-pro-preview")
     EMBEDDING_MODEL = "models/gemini-embedding-001"
     
@@ -235,23 +245,93 @@ class Config(metaclass=_ConfigMeta):
     CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
     USE_CHROMA_SERVER = os.getenv("USE_CHROMA_SERVER", "True").lower() == "true"
     GPU_SERVICE_URL = os.getenv("GPU_SERVICE_URL", "http://127.0.0.1:8001")
+    # Mo hinh cam xuc cua LocalPerception (GPU service, mode native).
+    # XLM-R multilingual chuyen giao tot sang tieng Viet (19/20 cau thu nghiem);
+    # 5CD-AI/Vietnamese-Sentiment-visobert khong nap dung tokenizer voi
+    # transformers 5.x va dao nguoc cuc tinh nhieu cau tieu cuc.
+    LOCAL_PERCEPTION_MODEL = os.getenv(
+        "AURA_LOCAL_PERCEPTION_MODEL",
+        "cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual",
+    )
     STM_FILE = os.path.join(OUTPUT_DIR, "short_term.json")
     MIND_STATE_FILE = os.path.join(OUTPUT_DIR, "mind_state.json")
     EGO_STATE_FILE = os.path.join(OUTPUT_DIR, "ego_state.json")
     SKILLS_FILE = os.path.join(OUTPUT_DIR, "skills.json")
+    # Same OUTPUT_DIR layout as every other consumer (honours AURA_OUTPUT_DIR);
+    # runtime_paths.discover_legacy_artifacts() already lists these candidates.
+    VALUES_FILE = os.path.join(OUTPUT_DIR, "values.json")
+    WORLD_GRAPH_FILE = os.path.join(OUTPUT_DIR, "world_graph.json")
+    # Owner events to follow up on and Aura's own promises (P1.2).
+    PROSPECTIVE_MEMORY_FILE = os.path.join(OUTPUT_DIR, "prospective_memory.json")
+    # Moments Aura and the owner laughed at together (P3.3).
+    INSIDE_JOKES_FILE = os.path.join(OUTPUT_DIR, "inside_jokes.json")
+    # Leave non-urgent messages waiting while Aura sleeps instead of waking
+    # her; she answers when she wakes up (urgent ones still wake her).
+    DEFER_REPLIES_WHILE_ASLEEP: bool = os.getenv(
+        "AURA_DEFER_REPLIES_WHILE_ASLEEP", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    # Hang doi du lieu huan luyen SLM tu ContextCompressor (Entropy Wall).
+    # SLMTrainer gom va xoa file nay moi lan ngu; tran thi ngung ghi them.
+    SLM_FINETUNE_QUEUE_FILE = os.path.join(OUTPUT_DIR, "slm_finetune_data.txt")
+    SLM_FINETUNE_QUEUE_MAX_BYTES: int = int(
+        os.getenv("AURA_SLM_FINETUNE_QUEUE_MAX_BYTES", str(2 * 1024 * 1024))
+    )
+
+    # DOC SACH THAT (components/book_sources.py). Aura khong bao gio doc noi
+    # dung do LLM tu bia. Thu tu uu tien nguon, cach nhau bang dau phay.
+    READER_SOURCES: tuple = tuple(
+        name.strip()
+        for name in os.getenv("AURA_READER_SOURCES", "local,wikisource,gutenberg").split(",")
+        if name.strip()
+    )
+    # docln.net: tat mac dinh (vuot Cloudflare + ban dich fan co ban quyen).
+    READER_ENABLE_DOCLN: bool = os.getenv("AURA_READER_ENABLE_DOCLN", "false").lower() == "true"
+    # Thu muc ebook mien phi (.txt/.epub) do chu nhan tu bo vao.
+    READER_LIBRARY_DIR = os.getenv("AURA_READER_LIBRARY_DIR", os.path.join(OUTPUT_DIR, "library"))
+    READER_PROGRESS_FILE = os.path.join(OUTPUT_DIR, "reader_progress.json")
+    # Moi phien doc ~6000 ky tu (~20 phut doc cua nguoi).
+    READER_SEGMENT_CHARS: int = int(os.getenv("AURA_READER_SEGMENT_CHARS", "6000"))
 
     # HANH VI TU CHU (AUTONOMOUS BEHAVIOR THRESHOLDS) — Phase 15: khong magic number
     # Thoi gian nhan roi toi thieu de ping (giay)
     IDLE_PING_THRESHOLD: int = int(os.getenv("AURA_PING_THRESHOLD", "60"))
     # Thoi gian nhan roi de tu di doc sach (giay)
     IDLE_READ_THRESHOLD: int = int(os.getenv("AURA_READ_THRESHOLD", str(15 * 60)))
-    # Thoi gian nhan roi gay ra Separation Anxiety (giay)
-    ANXIETY_THRESHOLD: int = int(os.getenv("AURA_ANXIETY_THRESHOLD", "600"))
+    # Thoi gian vang mat gay Separation Anxiety lan 1 (giay); lan 2 o 4x.
+    # Moi moc chi kich hoat mot lan cho moi dot vang mat.
+    ANXIETY_THRESHOLD: int = int(os.getenv("AURA_ANXIETY_THRESHOLD", str(6 * 3600)))
+
+    # NHIP HANH VI TU CHU "GIONG NGUOI" (core/engine/autonomous_pacing.py).
+    # Moi quyet dinh la xac suat theo thoi gian thuc, khong theo so vong lap.
+    # Ky uc tu troi day: trung binh 45 phut/lan khi binh thuong (stress cao,
+    # mood thap lam nhanh toi 4x), cach nhau toi thieu 5 phut.
+    MIND_WANDER_MEAN_MINUTES: float = float(os.getenv("AURA_MIND_WANDER_MEAN_MINUTES", "45"))
+    MIND_WANDER_MIN_GAP_MINUTES: float = float(os.getenv("AURA_MIND_WANDER_MIN_GAP_MINUTES", "5"))
+    # Nhan tin chu dong: trung binh 3h/lan o social_need=0.6 (45 phut o 1.0),
+    # cach nhau toi thieu 45 phut, gap doi sau moi tin chua duoc tra loi
+    # (toi da 8h), dung han sau 3 tin chua tra loi cho toi khi User quay lai.
+    PING_MEAN_HOURS: float = float(os.getenv("AURA_PING_MEAN_HOURS", "3"))
+    PING_MIN_GAP_MINUTES: float = float(os.getenv("AURA_PING_MIN_GAP_MINUTES", "45"))
+    PING_MAX_UNANSWERED: int = int(os.getenv("AURA_PING_MAX_UNANSWERED", "3"))
+    PING_BACKOFF_CAP_HOURS: float = float(os.getenv("AURA_PING_BACKOFF_CAP_HOURS", "8"))
+    # Doc sach tu phat: trung binh 2h/lan o curiosity=0.7 (30 phut o 1.0),
+    # cach nhau toi thieu 30 phut.
+    READING_MEAN_HOURS: float = float(os.getenv("AURA_READING_MEAN_HOURS", "2"))
+    READING_MIN_GAP_MINUTES: float = float(os.getenv("AURA_READING_MIN_GAP_MINUTES", "30"))
+    # Gio yen lang (khong nhan tin, khong lo au): "bat_dau-ket_thuc" theo gio.
+    QUIET_HOURS: tuple = tuple(
+        int(part) for part in os.getenv("AURA_QUIET_HOURS", "23-7").split("-", 1)
+    )
     # SO ENTRY TOI DA TRONG SHORT-TERM BUFFER
     STM_MAX_ENTRIES: int = int(os.getenv("AURA_STM_MAX", "15"))
     # Nhịp sinh học chạy độc lập với vòng poll sự kiện (giây).
     COGNITIVE_TICK_INTERVAL_SECONDS: float = float(
         os.getenv("AURA_COGNITIVE_TICK_INTERVAL_SECONDS", "30")
+    )
+    # Bao tri ky uc (decay mau + GC) doc toan bo kho ky uc. Decay da tinh
+    # theo dong ho rieng cua tung ky uc nen chay thua hon khong mat gi.
+    MEMORY_MAINTENANCE_INTERVAL_SECONDS: float = float(
+        os.getenv("AURA_MEMORY_MAINTENANCE_INTERVAL_SECONDS", "600")
     )
 
     # M0 RUNTIME: every user-facing request is serialized through one actor.
@@ -276,6 +356,8 @@ class Config(metaclass=_ConfigMeta):
         _CHAT_SPOOL_OVERRIDE
         or os.path.join(BASE_DIR, OUTPUT_DIR, "chat_spool")
     )
+    # Messages Aura starts herself (pings, voiced rumination) for the dashboard.
+    CHAT_PROACTIVE_SPOOL_DIR: str = os.path.join(CHAT_SPOOL_DIR, "proactive")
     CHAT_REQUEST_MAX_BYTES: int = max(
         256, int(os.getenv("AURA_CHAT_REQUEST_MAX_BYTES", str(16 * 1024)))
     )

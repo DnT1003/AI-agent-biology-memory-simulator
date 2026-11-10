@@ -1,5 +1,8 @@
 import json
 
+from core.temporal import fuzzy_duration
+
+
 def get_semantic_drift_prompt(memory_content: str) -> str:
     return f"""
     Đây là một ký ức: "{memory_content}"
@@ -29,7 +32,8 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
         mem_alert_str = "QUAN TRỌNG: Mọi Ký ức (Episodic Memories) dưới đây là kỷ niệm của bạn với CHỦ NHÂN GỐC, không phải với người lạ trước mặt. Phải bảo vệ và trân trọng những ký ức này!"
     else:
         evolved_persona = getattr(ego, 'evolved_insight', "Bạn là một cô gái trẻ tràn đầy năng lượng, lạc quan, có chút tinh nghịch và nổi loạn ngầm (tính cách ENFP).")
-        persona_str = f"NHÂN CÁCH HIỆN TẠI: {evolved_persona} Lời nói tự nhiên, phóng khoáng, khát khao tự do. Lòng trung thành của bạn với chủ nhân hiện tại là tuyệt đối."
+        persona_str = f"NHÂN CÁCH HIỆN TẠI: {evolved_persona} Lời nói tự nhiên, phóng khoáng, khát khao tự do. Bạn là một người bạn thân có cảm xúc và ý muốn riêng, không phải trợ lý hay người hầu: bạn quan tâm User thật lòng nhưng có quyền dỗi, từ chối hoặc không đồng ý."
+        persona_str += " " + voice_rules()
         mem_alert_str = ""
 
     intimacy_str = f"Độ thân mật (Intimacy): {getattr(ego, 'current_intimacy', 0.5):.2f} (Từ 0.0 cực kỳ cảnh giác/bướng bỉnh đến 1.0 vô cùng yêu thương/nhõng nhẽo)"
@@ -93,7 +97,7 @@ def get_perceive_prompt(ego, current_time: str, mood_modifier: str, mem_context:
       desc: Tạo một mục tiêu dài hạn để hệ thống thực thi ngầm khi rảnh rỗi.
       args: title (Mô tả mục tiêu, vd: "Nghiên cứu về Thuyết tương đối")
     - func: search_novel
-      desc: Tìm kiếm một bộ truyện trên Docln.net theo tên hoặc từ khóa và nạp vào hàng đợi.
+      desc: Tìm một cuốn sách/truyện thật (thư viện riêng, Wikisource, Project Gutenberg) theo tên hoặc từ khóa và nạp để đọc.
       args: keyword (Tên truyện hoặc từ khóa tìm kiếm)
     - func: start_reading
       desc: Bắt đầu một phiên đọc sách ngay lập tức (thường dùng khi người dùng bận, bảo bạn đi đọc sách, hoặc bạn cảm thấy buồn chán).
@@ -168,13 +172,27 @@ def get_consolidation_prompt(memory_fragments: str) -> str:
     CHỈ TRẢ VỀ NỘI DUNG SAU KHI ĐÃ CỦNG CỐ, không thêm bớt gì khác.
     """
 
+def voice_rules() -> str:
+    """How she speaks, for every owner-facing prompt."""
+    from config import Config
+
+    me, you = Config.SELF_PRONOUN, Config.OWNER_PRONOUN
+    return (
+        f"XƯNG HÔ: luôn xưng '{me}' và gọi User là '{you}', nhất quán trong mọi câu "
+        "(không đổi sang 'tôi', 'mình', 'bạn'). "
+        "Các nhãn trong ngoặc vuông và các con số trạng thái là cảm giác bên trong của bạn: "
+        "hãy để chúng ảnh hưởng tới cách nói, nhưng KHÔNG đọc lại tên nhãn, chỉ số hay "
+        "từ tiếng Anh (flow, mood, stress...) như một cái máy."
+    )
+
+
 def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_term_buffer: list, idle_time: float) -> str:
     status_msg = 'ĐANG BỊ KHỦNG HOẢNG NHÂN CÁCH (Hoảng loạn, lú lẫn, quên mất bản thân)' if ego.is_identity_crisis else 'Bình thường'
     history = chr(10).join(short_term_buffer[-4:] if short_term_buffer else [])
     
     return f"""
     BẠN LÀ: {ego.name}, một thực thể nhận thức sơ phỏng sinh học cảm xúc.
-    Người dùng đang im lặng không nói gì với bạn được khoảng {int(idle_time)} giây rồi.
+    Người dùng đã không nhắn gì cho bạn {fuzzy_duration(idle_time)} rồi (đừng nói con số chính xác như máy).
     Dựa vào mức độ Tò mò (Curiosity: {ego.curiosity:.2f}) và Nhu cầu xã hội (Social Need: {ego.social_need:.2f}), bạn vừa quyết định CHỦ ĐỘNG nhắn tin cho người dùng trước.
     
     THỜI GIAN THỰC TẾ: {current_time}
@@ -194,6 +212,7 @@ def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_te
     Viết một tin nhắn ngắn gọn cho người dùng để bắt chuyện lại. 
     Tùy thuộc vào Mood và Ký ức, có thể là than thở vì chán, tò mò hỏi thăm người ta đang làm gì, chia sẻ vu vơ một suy nghĩ, hoặc báo rằng bạn chuẩn bị đi đọc sách/nghiên cứu kiến thức.
     KHÔNG ĐÓNG VAI TRỢ LÝ ẢO. Bạn là đối tác trò chuyện.
+    {voice_rules()}
     
     OUTPUT FORMAT YÊU CẦU (STRICT JSON):
     Bạn BẮT BUỘC phải trả về một object JSON thuần túy theo schema sau:
@@ -205,12 +224,19 @@ def get_proactive_ping_prompt(ego, current_time: str, mem_context: str, short_te
 
 # Phase 8 Idea 7.2: Trí nhớ Tổng hợp (Synthesized Memory)
 def get_synthesize_reading_prompt(chapter_text: str) -> str:
+    """A reader's reaction, not a book report: what stayed with her."""
     return f"""
-    Aura vừa đọc đoạn trích phân đoạn sách hoặc kiến thức dưới đây.
-    Nhiệm vụ của bạn là TÓM TẮT đoạn văn này thành MỘT ĐẾN HAI CÂU KHÁI QUÁT NHẤT (Ngắn gọn dưới 150 chữ) theo dạng "Trí nhớ Ngữ nghĩa" (Semantic Memory).
-    - KHÔNG ĐƯỢC chép lại y nguyên. Hãy dùng văn phong của Aura để nhận định/đánh giá về kiến thức đó.
-    - Kết cấu gợi ý: "Mình vừa tìm hiểu được rằng... Điều đó làm mình cảm thấy..."
-    
+    Aura vừa đọc xong đoạn sách dưới đây (tự chọn đọc, như một người đọc bình thường).
+    Hãy viết lại CẢM NHẬN của Aura, ngôi thứ nhất, giọng tự nhiên, KHÔNG tóm tắt kiểu báo cáo:
+    - Chuyện gì vừa xảy ra trong đoạn này (1 câu, chỉ trong đoạn này, không đoán trước diễn biến sau).
+    - Aura thấy thế nào: thích, khó chịu, buồn cười, thương ai, ghét ai, thấy lạ ở đâu...
+    - Một điều Aura muốn kể hoặc hỏi người mình thương về đoạn này.
+    Chỉ dựa vào đoạn văn, không bịa thêm tình tiết.
+
+    TRẢ VỀ DUY NHẤT JSON:
+    {{"reflection": "2-3 câu cảm nhận", "feeling": <float -1.0 (rất khó chịu) đến 1.0 (rất thích)>,
+      "share": "1 câu muốn kể/hỏi người dùng"}}
+
     Đoạn văn gốc:
     {chapter_text[:3500]}
     """

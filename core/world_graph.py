@@ -3,13 +3,9 @@ import json
 import time
 import copy
 import math
+import re
 import threading
 from numbers import Real
-try:
-    import spacy  #type: ignore
-    SPACY_AVAILABLE = True
-except Exception:
-    SPACY_AVAILABLE = False
 from typing import Dict, List, Set
 from colorama import Fore, Style
 from core.logger import get_logger
@@ -32,21 +28,8 @@ class WorldGraph:
         # data: dict { "EntityA": { "Relation": "EntityB", ... } }
         self.nodes = {} 
         self.edges = [] 
-        
-        # Load model NER Transformers (Phase 11)
-        if SPACY_AVAILABLE:
-            try:
-                self.nlp = spacy.load("en_core_web_trf")
-                logger.info("WorldGraph: Loaded en_core_web_trf successfully.")
-            except Exception as exc:
-                logger.error(
-                    "WorldGraph: spaCy model load failed cause_type=%s",
-                    type(exc).__name__,
-                )
-                self.nlp = None
-        else:
-            logger.warning("WorldGraph: spaCy NOT AVAILABLE (Probably Pydantic v1 incompatibility on Python 3.14). Entity extraction disabled.")
-            self.nlp = None
+        # Entities are extracted by the LLM (update_from_text); the former
+        # English spaCy NER model was never called and is not loaded.
 
         self.load()
 
@@ -157,20 +140,6 @@ class WorldGraph:
             # Diagnostics must never change the operation's failure contract.
             pass
 
-    def extract_entities(self, text: str) -> List[Dict]:
-        """Sử dụng spaCy NER để tìm các thực thể quan trọng."""
-        if not self.nlp: return []
-        doc = self.nlp(text)
-        entities = []
-        for ent in doc.ents:
-            # Chỉ lấy các thực thể liên quan đến xã hội/thực thể
-            if ent.label_ in ["PERSON", "ORG", "GPE", "FAC", "PRODUCT"]:
-                entities.append({
-                    "text": ent.text,
-                    "label": ent.label_
-                })
-        return entities
-
     def update_from_text(
         self,
         text: str,
@@ -209,8 +178,17 @@ class WorldGraph:
                 temperature=0.1,
                 model_override=model_override,
                 force_local=force_local,
+                bio_throttle=False,
             )
-            relations = self._validate_extraction(res)
+        except Exception as exc:
+            self._log_failure("extraction", exc)
+            return False
+        return self.apply_extraction(res)
+
+    def apply_extraction(self, payload) -> bool:
+        """Validate and commit an already-extracted {"relations": [...]} payload."""
+        try:
+            relations = self._validate_extraction(payload)
         except Exception as exc:
             self._log_failure("extraction", exc)
             return False
@@ -309,20 +287,67 @@ class WorldGraph:
         if source not in self.nodes: self.nodes[source] = {"type": "Entity"}
         if target not in self.nodes: self.nodes[target] = {"type": "Entity"}
 
-    def query(self, entity_name: str) -> List[str]:
-        """Truy xuất thông tin liên quan đến một Entity kèm theo Valence."""
-        results = []
-        if not isinstance(entity_name, str):
-            return results
+    @staticmethod
+    def _same_entity(a: str, b: str) -> bool:
+        return a.casefold() == b.casefold()
+
+    def relations_for(self, entity_name: str, limit: int | None = None) -> List[Dict]:
+        """Edges whose source or target IS ``entity_name`` (case-insensitive).
+
+        Strongest feelings first, then most recent, so a cap keeps what matters.
+        """
+        if not isinstance(entity_name, str) or not entity_name.strip():
+            return []
         entity_name = entity_name.strip()
         with self.lock:
-            edges = copy.deepcopy(self.edges)
-        for edge in edges:
-            if entity_name in edge['source'] or entity_name in edge['target']:
-                v = edge.get('valence', 0.0)
-                v_str = f" [valence:{v:+.1f}]" if v != 0 else ""
-                results.append(f"{edge['source']} {edge['relation']} {edge['target']}{v_str}")
+            edges = [
+                copy.deepcopy(edge) for edge in self.edges
+                if self._same_entity(edge['source'], entity_name)
+                or self._same_entity(edge['target'], entity_name)
+            ]
+        edges.sort(
+            key=lambda e: (abs(e.get('valence', 0.0)), e.get('timestamp', 0.0)),
+            reverse=True,
+        )
+        return edges if limit is None else edges[:max(0, int(limit))]
+
+    def query(self, entity_name: str, limit: int | None = None) -> List[str]:
+        """Truy xuất thông tin liên quan đến một Entity kèm theo Valence.
+
+        Khớp nguyên tên thực thể: "An" không còn khớp nhầm "Lan" hay "Toàn".
+        """
+        results = []
+        for edge in self.relations_for(entity_name, limit):
+            v = edge.get('valence', 0.0)
+            v_str = f" [valence:{v:+.1f}]" if v != 0 else ""
+            results.append(f"{edge['source']} {edge['relation']} {edge['target']}{v_str}")
         return results
+
+    def find_mentions(self, text: str, limit: int = 5) -> List[str]:
+        """Known entities mentioned as whole words in ``text``.
+
+        Longer names win ("Nguyễn Văn An" before "An") and a name contained in
+        an already-matched longer mention is not reported again.
+        """
+        if not isinstance(text, str) or not text.strip():
+            return []
+        lowered = text.casefold()
+        with self.lock:
+            names = [n for n in self.nodes if n != "User" and len(n) >= 2]
+        names.sort(key=len, reverse=True)
+        found, spans = [], []
+        for name in names:
+            pattern = r"(?<!\w)" + re.escape(name.casefold()) + r"(?!\w)"
+            match = re.search(pattern, lowered)
+            if match is None:
+                continue
+            if any(start <= match.start() and match.end() <= end for start, end in spans):
+                continue
+            spans.append(match.span())
+            found.append(name)
+            if len(found) >= limit:
+                break
+        return found
 
     def _save_unsafe(self) -> None:
         nodes, edges = self._validate_state({

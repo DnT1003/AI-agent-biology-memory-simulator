@@ -659,6 +659,7 @@ class HardLocalRuntimePrivacyTests(unittest.TestCase):
             nodes={},
             query=Mock(return_value=[]),
             update_from_text=Mock(),
+            apply_extraction=Mock(return_value=True),
         )
         engine.value_system = SimpleNamespace(
             get_moral_context=Mock(return_value=""),
@@ -734,7 +735,9 @@ class HardLocalRuntimePrivacyTests(unittest.TestCase):
             self.assertEqual(engine.ego.social_need, 0.5)
             self.assertEqual(engine.ego.mood, 0.0)
             self.assertEqual(engine.ego.stress, 0.0)
-            engine.world_graph.update_from_text.assert_not_called()
+            # The post-commit enrichment extraction never runs for private input.
+            self.assertFalse([c for c in engine.llm.calls if "open_loops" in c[1]])
+            engine.world_graph.apply_extraction.assert_not_called()
             engine.value_system.update_user_value.assert_not_called()
             engine.skills.execute.assert_not_called()
             engine._dump_mind_state.assert_not_called()
@@ -766,8 +769,10 @@ class HardLocalRuntimePrivacyTests(unittest.TestCase):
                 for memory in engine.memory.added
             )
         )
-        graph_inputs = [call.args[0] for call in engine.world_graph.update_from_text.call_args_list]
-        self.assertEqual(graph_inputs, [public_input])
+        enrichment_prompts = [c[1] for c in engine.llm.calls if "open_loops" in c[1]]
+        self.assertEqual(len(enrichment_prompts), 1)
+        self.assertIn(public_input, enrichment_prompts[0])
+        engine.world_graph.apply_extraction.assert_called_once()
         self.assertTrue(
             all(
                 sentinel not in "\n".join(snapshot)
@@ -780,7 +785,7 @@ class HardLocalRuntimePrivacyTests(unittest.TestCase):
         # privacy request. It must still update safe local conversational state.
         engine.llm.calls.clear()
         engine.local_perception.calls.clear()
-        engine.world_graph.update_from_text.reset_mock()
+        engine.world_graph.apply_extraction.reset_mock()
         engine.skills.execute.reset_mock()
         local_only_input = "ordinary persistent local-only turn"
         with patch.object(Config, "USE_LOCAL_ONLY", True), patch.object(
@@ -794,10 +799,10 @@ class HardLocalRuntimePrivacyTests(unittest.TestCase):
         self.assertTrue(all(call[2] for call in engine.llm.calls))
         self.assertEqual(engine.local_perception.calls, [])
         engine.skills.execute.assert_not_called()
-        engine.world_graph.update_from_text.assert_called_once()
-        self.assertTrue(
-            engine.world_graph.update_from_text.call_args.kwargs["force_local"]
-        )
+        engine.world_graph.apply_extraction.assert_called_once()
+        enrichment_calls = [c for c in engine.llm.calls if "open_loops" in c[1]]
+        self.assertEqual(len(enrichment_calls), 1)
+        self.assertTrue(enrichment_calls[0][2])  # extraction stayed local too
 
 
 class InteractionPrecommitTransactionTests(unittest.TestCase):
@@ -997,8 +1002,43 @@ class InteractionPrecommitTransactionTests(unittest.TestCase):
         engine.memory_ops.update_or_add_memory.assert_called_once()
         engine.memory_ops.save_short_term_memory.assert_called_once()
         self.assertIn("User: transaction enrichment", engine.short_term_buffer)
-        primary_prompt = engine.llm.generate_json.call_args.args[0]
+        primary_prompt = engine.llm.generate_json.call_args_list[0].args[0]
         self.assertIn("stable recalled memory", primary_prompt)
+
+    def test_sensory_valence_comes_from_local_perception(self):
+        controller, engine, _recall_plan = self._controller()
+        engine.llm.generate_text.side_effect = [("0.8", 0.0), ("[]", 0.0)]
+
+        with patch.object(Config, "USE_LOCAL_ONLY", False), patch.object(
+            Config, "FORCE_LOCAL_COMMANDS", ["/local"]
+        ), patch("random.random", return_value=1.0), patch("builtins.print"):
+            controller.interaction_loop("transaction enrichment")
+
+        engine.local_perception.analyze.assert_called_once_with(
+            "transaction enrichment"
+        )
+        controller.sensory_preprocessor.evaluate_input.assert_called_once_with(
+            "transaction enrichment", {"valence": 0.8}
+        )
+
+    def test_sleep_reflex_answers_first_then_requests_sleep(self):
+        controller, engine, _recall_plan = self._controller()
+        engine.llm.generate_text.side_effect = [("0.8", 0.0), ("[]", 0.0)]
+        controller.reflex_gate.evaluate_reflexes.return_value = {
+            "triggered": True, "action": "sleep", "reason": "exhausted",
+        }
+        engine.autonomous = SimpleNamespace(request_sleep=Mock())
+        controller._run_sleep_maintenance = Mock()
+
+        with patch.object(Config, "USE_LOCAL_ONLY", False), patch.object(
+            Config, "FORCE_LOCAL_COMMANDS", ["/local"]
+        ), patch("random.random", return_value=1.0), patch("builtins.print"):
+            result = controller.interaction_loop("transaction enrichment")
+
+        self.assertEqual(result["response"], "committed reply")
+        controller._run_sleep_maintenance.assert_not_called()
+        engine.autonomous.request_sleep.assert_called_once_with()
+        self.assertIn("PHẢN XẠ NGỦ", engine.llm.generate_json.call_args_list[0].args[0])
 
     def test_postcommit_baseexception_cannot_hide_reply(self):
         controller, engine, _ = self._controller()
@@ -1122,16 +1162,32 @@ class InteractionPrecommitTransactionTests(unittest.TestCase):
         self.assertEqual(caught.exception.request_id, "tool-cancel-id")
         engine.skills.execute.assert_not_called()
 
+    @staticmethod
+    def _enrichment_returns(engine, values):
+        # Primary reply first, then the single post-commit enrichment call.
+        primary = engine.llm.generate_json.return_value
+        engine.llm.generate_json.side_effect = [
+            primary,
+            ({"relations": [], "values": values, "open_loops": [], "user_busy": None}, 0.0),
+        ]
+
+    def test_valid_material_value_is_committed(self):
+        controller, engine, _ = self._controller()
+        self._enrichment_returns(engine, [{"value": "Honesty", "sentiment": 0.8}])
+
+        with patch.object(Config, "USE_LOCAL_ONLY", False), patch.object(
+            Config, "FORCE_LOCAL_COMMANDS", ["/local"]
+        ), patch("random.random", return_value=1.0), patch("builtins.print"):
+            controller.interaction_loop("value extraction transaction")
+
+        engine.value_system.update_user_values_batch.assert_called_once()
+
     def test_malformed_second_value_item_causes_zero_value_mutation(self):
         controller, engine, _ = self._controller()
-        engine.llm.generate_text.side_effect = [
-            ("0.2", 0.0),
-            (
-                '[{"value":"Honesty","sentiment":0.8},'
-                '{"value":"Broken","sentiment":true}]',
-                0.0,
-            ),
-        ]
+        self._enrichment_returns(engine, [
+            {"value": "Honesty", "sentiment": 0.8},
+            {"value": "Broken", "sentiment": True},
+        ])
 
         with patch.object(Config, "USE_LOCAL_ONLY", False), patch.object(
             Config, "FORCE_LOCAL_COMMANDS", ["/local"]
@@ -1144,14 +1200,10 @@ class InteractionPrecommitTransactionTests(unittest.TestCase):
 
     def test_low_signal_invalid_value_is_rejected_before_material_filter(self):
         controller, engine, _ = self._controller()
-        engine.llm.generate_text.side_effect = [
-            ("0.2", 0.0),
-            (
-                '[{"value":"Honesty","sentiment":0.8},'
-                '{"value":"Broken\\nName","sentiment":0.1}]',
-                0.0,
-            ),
-        ]
+        self._enrichment_returns(engine, [
+            {"value": "Honesty", "sentiment": 0.8},
+            {"value": "Broken\nName", "sentiment": 0.1},
+        ])
 
         with patch.object(Config, "USE_LOCAL_ONLY", False), patch.object(
             Config, "FORCE_LOCAL_COMMANDS", ["/local"]

@@ -319,8 +319,13 @@ class OperationLedgerTests(unittest.TestCase):
 
     def test_purge_removes_old_terminal_rows_but_never_active_rows(self):
         ledger = self.open_ledger()
-        for op_id in ("planned", "applying", "committed", "quarantined"):
-            ledger.create_or_get_plan(op_id, "test", {"id": op_id})
+        # Distinct creation times: on coarse clocks (Windows) the rows would
+        # tie and recovery order would fall back to op_id ("applying" first).
+        for created_at_ns, op_id in enumerate(
+            ("planned", "applying", "committed", "quarantined"), start=1
+        ):
+            with patch("core.operation_ledger.time.time_ns", return_value=created_at_ns):
+                ledger.create_or_get_plan(op_id, "test", {"id": op_id})
         ledger.compare_and_swap(
             "applying",
             expected_revision=0,

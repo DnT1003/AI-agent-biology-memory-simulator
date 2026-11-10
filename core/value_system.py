@@ -16,6 +16,9 @@ class ValueSystem:
     _MAX_VALUE_NAME_LENGTH = 256
     _MAX_VALUES = 2_000
     _MAX_STATE_BYTES = 2 * 1024 * 1024
+    # Only the strongest values reach the prompt; the rest stay on disk.
+    _MAX_PROMPT_VALUES = 8
+    _NAME_PREFIXES = ("sự ", "tính ", "lòng ", "việc ")
 
     def __init__(self, filepath="outputs/values.json"):
         self.filepath = filepath
@@ -42,6 +45,24 @@ class ValueSystem:
             raise ValueError("value name has invalid length")
         if any(ord(character) < 32 for character in value_name):
             raise ValueError("value name contains control characters")
+        return value_name
+
+    @classmethod
+    def _canonical_key(cls, value_name: str) -> str:
+        """"Sự Trung thực", "trung  thực", "Tính trung thực" -> one key."""
+        key = " ".join(value_name.casefold().split())
+        for prefix in cls._NAME_PREFIXES:
+            if key.startswith(prefix) and len(key) > len(prefix):
+                return key[len(prefix):]
+        return key
+
+    @classmethod
+    def _resolve_name(cls, values: Dict[str, float], value_name: str) -> str:
+        """Reuse the existing spelling of a value instead of adding a near-duplicate."""
+        key = cls._canonical_key(value_name)
+        for existing in values:
+            if cls._canonical_key(existing) == key:
+                return existing
         return value_name
 
     @staticmethod
@@ -124,6 +145,7 @@ class ValueSystem:
         )
 
         with self.lock:
+            value_name = self._resolve_name(values, value_name)
             if value_name not in values and len(values) >= self._MAX_VALUES:
                 raise ValueError("value limit reached")
             snapshot = dict(values)
@@ -181,9 +203,9 @@ class ValueSystem:
             if type(update) not in (list, tuple) or len(update) != 2:
                 raise ValueError("value update must contain name and sentiment")
             name = cls._validated_name(update[0])
-            if name in names:
+            if cls._canonical_key(name) in names:
                 raise ValueError("value update batch contains a duplicate name")
-            names.add(name)
+            names.add(cls._canonical_key(name))
             sentiment = cls._validated_number(
                 update[1],
                 "sentiment",
@@ -213,6 +235,10 @@ class ValueSystem:
             return {}
 
         with self.lock:
+            normalized = [
+                (self._resolve_name(self.user_values, name), sentiment)
+                for name, sentiment in normalized
+            ]
             new_names = sum(name not in self.user_values for name, _ in normalized)
             if len(self.user_values) + new_names > self._MAX_VALUES:
                 raise ValueError("value limit reached")
@@ -258,16 +284,21 @@ class ValueSystem:
             if val > -0.8: return "Thấy phản cảm/Ghét"
             return "Căm thù/Cực lực lên án"
 
+        def strongest(values):
+            # Chỉ những giá trị rõ ràng nhất; không đưa cả nghìn mục vào prompt.
+            clear = [(k, v) for k, v in values.items() if abs(v) >= 0.4]
+            clear.sort(key=lambda item: abs(item[1]), reverse=True)
+            return clear[:self._MAX_PROMPT_VALUES]
+
         context.append("- NHỮNG GIÁ TRỊ CỐT LÕI MÀ BẠN SỐNG CHẾT BẢO VỆ (MORAL COMPASS):")
-        for k, v in core_values.items():
-            if abs(v) >= 0.4: # Chỉ hiển thị những cái rõ ràng
-                context.append(f"  + {k}: {float_to_desc(v)} ({v:.2f})")
-                
-        if user_values:
+        for k, v in strongest(core_values):
+            context.append(f"  + {k}: {float_to_desc(v)} ({v:.2f})")
+
+        user_lines = strongest(user_values)
+        if user_lines:
             context.append("\n- NHỮNG GÌ BẠN QUAN SÁT THẤY USER QUAN TÂM:")
-            for k, v in user_values.items():
-                if abs(v) >= 0.4:
-                    context.append(f"  + {k}: {float_to_desc(v)} ({v:.2f})")
+            for k, v in user_lines:
+                context.append(f"  + {k}: {float_to_desc(v)} ({v:.2f})")
                     
         return "\n".join(context)
 

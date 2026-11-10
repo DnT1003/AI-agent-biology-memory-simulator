@@ -30,8 +30,7 @@ class WorldGraphTransactionTests(unittest.TestCase):
         self.path = Path(self.temp_dir.name) / "world_graph.json"
 
     def _graph(self):
-        with patch.object(graph_module, "SPACY_AVAILABLE", False):
-            return graph_module.WorldGraph(str(self.path))
+        return graph_module.WorldGraph(str(self.path))
 
     @staticmethod
     def _relation(source="User", relation="trusts", target="Alice", valence=0.5):

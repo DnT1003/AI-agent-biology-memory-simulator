@@ -24,6 +24,7 @@ import uuid
 import threading
 from typing import Optional
 from colorama import Fore, Style
+from core.tool_result import ToolFailure
 
 # ─── Config (đọc từ .env) ──────────────────────────────────────────────────
 
@@ -46,12 +47,12 @@ def _send_via_gateway(channel: str, to: str, text: str) -> str:
     Timeout 5 giây — nếu lỗi, trả về chuỗi lỗi thay vì raise.
     """
     if not _GATEWAY_URL:
-        return "[OpenClaw] OPENCLAW_GATEWAY_URL chưa được cấu hình trong .env"
+        return ToolFailure("[OpenClaw] OPENCLAW_GATEWAY_URL chưa được cấu hình trong .env")
 
     try:
         import websocket  # pip install websocket-client
     except ImportError:
-        return "[OpenClaw] Thiếu thư viện 'websocket-client'. Chạy: pip install websocket-client"
+        return ToolFailure("[OpenClaw] Thiếu thư viện 'websocket-client'. Chạy: pip install websocket-client")
 
     try:
         ws = websocket.create_connection(_GATEWAY_URL, timeout=5)
@@ -98,7 +99,7 @@ def _send_via_gateway(channel: str, to: str, text: str) -> str:
     except Exception as e:
         msg = f"[OpenClaw] Lỗi kết nối gateway: {e}"
         print(f"{Fore.RED}{msg}{Style.RESET_ALL}")
-        return msg
+        return ToolFailure(msg)
 
 
 def _parse_args(args: str, expect_to: bool = True):
@@ -124,7 +125,7 @@ def send_telegram(args: str) -> str:
     """
     to, msg = _parse_args(args)
     if not to:
-        return "[OpenClaw] Chưa có số điện thoại/username người nhận. Thêm OPENCLAW_DEFAULT_TO vào .env hoặc truyền trực tiếp."
+        return ToolFailure("[OpenClaw] Chưa có số điện thoại/username người nhận. Thêm OPENCLAW_DEFAULT_TO vào .env hoặc truyền trực tiếp.")
     return _send_via_gateway("telegram", to, msg)
 
 
@@ -135,7 +136,7 @@ def send_whatsapp(args: str) -> str:
     """
     to, msg = _parse_args(args)
     if not to:
-        return "[OpenClaw] Thiếu số điện thoại người nhận WhatsApp."
+        return ToolFailure("[OpenClaw] Thiếu số điện thoại người nhận WhatsApp.")
     return _send_via_gateway("whatsapp", to, msg)
 
 
@@ -162,7 +163,7 @@ def send_message(args: str) -> str:
     else:
         channel, to = _DEFAULT_CHANNEL, to_raw or _DEFAULT_TO
     if not to:
-        return "[OpenClaw] Thiếu thông tin người nhận."
+        return ToolFailure("[OpenClaw] Thiếu thông tin người nhận.")
     return _send_via_gateway(channel.strip(), to.strip(), msg)
 
 
@@ -175,7 +176,7 @@ def openclaw_ask(args: str) -> str:
     args: "<prompt>"
     """
     if not _GEMINI_API_KEY:
-        return "[OpenClaw] API_KEY chưa được cấu hình trong .env"
+        return ToolFailure("[OpenClaw] API_KEY chưa được cấu hình trong .env")
     try:
         from google import genai
         client = genai.Client(api_key=_GEMINI_API_KEY)
@@ -187,7 +188,7 @@ def openclaw_ask(args: str) -> str:
         print(f"{Fore.CYAN}🤖 [OPENCLAW_ASK → Gemini]: {answer[:80]}...{Style.RESET_ALL}")
         return answer
     except Exception as e:
-        return f"[OpenClaw LLM] Lỗi gọi Gemini: {e}"
+        return ToolFailure(f"[OpenClaw LLM] Lỗi gọi Gemini: {e}")
 
 
 # ─── Register vào SkillRegistry ────────────────────────────────────────────

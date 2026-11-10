@@ -13,6 +13,7 @@ from pathlib import Path
 
 from config import Config
 from core.event_journal import record_current_event
+from core.tool_result import ToolFailure
 
 
 DYNAMIC_SKILLS_DIR = Path(__file__).resolve().parent / "dynamic_skills"
@@ -208,24 +209,24 @@ class SkillRegistry:
         self._skill_decay_checkpoint_at = None
 
     def _ego_action(self, arg, action_type):
-        if not self.engine: return "Engine not connected."
+        if not self.engine: return ToolFailure("Engine not connected.")
         if action_type == "add_goal":
             self.engine.ego.add_goal(arg)
             return f"Mục tiêu '{arg}' đã được thiết lập."
-        return "Unknown ego action."
+        return ToolFailure("Unknown ego action.")
 
     def _reader_action(self, arg, action_type):
-        if not self.engine: return "Engine not connected."
+        if not self.engine: return ToolFailure("Engine not connected.")
         if action_type == "search_novel":
             # The interaction actor owns this call. Returning only after the
             # reader mutation finishes prevents a detached thread from racing
             # the next request or reporting success before failure is known.
             result = self.engine.reader.search_and_set_novel(arg)
-            return str(result or f"Không tìm thấy truyện '{arg}'.")
-        return "Unknown reader action."
+            return result or ToolFailure(f"Không tìm thấy truyện '{arg}'.")
+        return ToolFailure("Unknown reader action.")
 
     def _autonomous_action(self, arg, action_type):
-        if not self.engine: return "Engine not connected."
+        if not self.engine: return ToolFailure("Engine not connected.")
         if action_type == "start_reading":
             actor = getattr(self.engine, "interaction_actor", None)
             if actor is not None and actor.is_owner_thread:
@@ -233,8 +234,8 @@ class SkillRegistry:
                 return "Đã hoàn tất phiên đọc theo yêu cầu."
             if self.engine.autonomous.start_reading_task("User request"):
                 return "Đã hoàn tất phiên đọc theo yêu cầu."
-            return "Không thể bắt đầu đọc vì runtime đang bận."
-        return "Unknown autonomous action."
+            return ToolFailure("Không thể bắt đầu đọc vì runtime đang bận.")
+        return ToolFailure("Unknown autonomous action.")
 
     def register(self, skill: Skill):
         self.skills[skill.name] = skill
@@ -300,6 +301,21 @@ class SkillRegistry:
                     outcome="started",
                 )
                 result = skill.func(args)
+                if isinstance(result, ToolFailure):
+                    # Reported failure: no mastery gain, no rust reset, no reward.
+                    _record_skill_event(
+                        "tool.finished",
+                        {
+                            "call_id": call_id,
+                            "tool_name": name,
+                            "duration_ms": max(
+                                0.0, (time.monotonic() - tool_started_at) * 1000.0
+                            ),
+                            "error_type": "ToolFailure",
+                        },
+                        outcome="failed",
+                    )
+                    return result
 
                 accounting_error = None
                 with self.lock:
@@ -324,6 +340,14 @@ class SkillRegistry:
                         error=accounting_error,
                         call_id=call_id,
                     )
+
+                register_reward = getattr(ego, "register_reward", None)
+                if callable(register_reward):
+                    # Dopamine: a user-requested tool that worked is rewarding.
+                    try:
+                        register_reward("tool_success", 0.3)
+                    except Exception:
+                        pass
 
                 _record_skill_event(
                     "tool.finished",

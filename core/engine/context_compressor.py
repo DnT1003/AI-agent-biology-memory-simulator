@@ -13,8 +13,13 @@ class ContextCompressor:
     Ứng dụng cơ chế Bộ lọc Kép (Entropy + Cảm xúc) và Hàng Rào Động (Dynamic Budgeting)
     để nén ngữ cảnh dài xuống dung lượng cho phép của LLM.
     """
+    # Remember which rejected chunks were already queued so the same memory
+    # is not appended again on every message (bounded, process-local).
+    _MAX_ROUTED_DIGESTS = 10_000
+
     def __init__(self):
         self.sensory = SensoryPreprocessor() if SensoryPreprocessor else None
+        self._routed_digests = set()
         
     def calculate_pseudo_entropy(self, text: str) -> float:
         """
@@ -155,14 +160,30 @@ class ContextCompressor:
         """
         Đẩy văn bản quá cứng rớt lưới lọc vào hàng đợi (Training Queue).
         """
+        import hashlib
         import os
         try:
             from config import Config
-            queue_path = os.path.join(Config.BASE_DIR, "outputs", "slm_finetune_data.txt")
-            os.makedirs(os.path.dirname(queue_path), exist_ok=True)
+            # Same path SLMTrainer.distill_memories_to_dataset() consumes.
+            queue_path = Config.SLM_FINETUNE_QUEUE_FILE
+            fresh = []
+            for chunk in chunks:
+                text = chunk.strip()
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if text and digest not in self._routed_digests:
+                    fresh.append((digest, text))
+            if not fresh:
+                return
+            payload = "".join(text + "\n\n" for _, text in fresh)
+            current_size = os.path.getsize(queue_path) if os.path.exists(queue_path) else 0
+            if current_size + len(payload.encode("utf-8")) > Config.SLM_FINETUNE_QUEUE_MAX_BYTES:
+                return  # queue full until the next sleep drains it
+            os.makedirs(os.path.dirname(queue_path) or ".", exist_ok=True)
             with open(queue_path, "a", encoding="utf-8") as f:
-                for chunk in chunks:
-                    f.write(chunk.strip() + "\n\n")
+                f.write(payload)
+            if len(self._routed_digests) > self._MAX_ROUTED_DIGESTS:
+                self._routed_digests.clear()
+            self._routed_digests.update(digest for digest, _ in fresh)
             # print(f"[\u26a0\ufe0f ENTROPY WALL]: Đã định tuyến {len(chunks)} đoạn text quá dày đặc vào hàng chờ Training.")
         except Exception:
             pass
